@@ -1,0 +1,115 @@
+{
+  // JSON5 spec: https://json5.org/
+  // Renovate docs: https://docs.renovatebot.com/configuration-options/
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended", // Use recommended settings
+    "docker:pinDigests", // Pin container digests
+    "helpers:pinGitHubActionDigests", // Pin GitHub action digests
+    ":enablePreCommit", // Enable updates to pre-commit repos
+    ":gitSignOff", // Add Signed-off-by line to commit messages
+    ":pinDependencies", // Pin dependencies
+    ":pinDevDependencies" // Pin dev dependencies also
+  ],
+  // Files to ignore
+  "ignorePaths": [
+    ".venv",
+  ],
+  "labels": [
+    "dependencies",
+  ],
+  "lockFileMaintenance": {
+    "enabled": true,
+  },
+  "minimumReleaseAge": "10 days",
+  "rangeStrategy": "pin",
+  "packageRules": [
+    {
+      "description": "Update golang tag in dockerfile & golang version in workflows in a single PR",
+      "groupName": "golang version",
+      "matchDepNames": [
+        "go",
+        "golang",
+      ],
+    },
+    {
+      "description": "Pin devcontainer image digests",
+      "matchManagers": [
+        "devcontainer",
+      ],
+      "matchDepTypes": [
+        "image",
+      ],
+      "pinDigests": true,
+    },
+    {
+      // Features can be pinned, but they don't support the standard :tag@sha256
+      // syntax. It's just one or the other.
+      // See: https://github.com/devcontainers/cli/issues/825
+      "description": "Devcontainer 'features' don't support digest pinning",
+      "matchManagers": [
+        "devcontainer",
+      ],
+      "matchDepTypes": [
+        "feature",
+      ],
+      "pinDigests": false,
+    },
+    {
+      "description": "Update renovatebot/pre-commit-hooks weekly to decrease noise",
+      "matchPackageNames": [
+        "renovatebot/pre-commit-hooks",
+      ],
+      "schedule": [
+        "before 9am on monday",
+      ],
+    },
+    {
+      // Container registries often lack releaseTimestamp metadata, which
+      // causes the default timestamp-required behaviour to mark every digest
+      // pin as permanently pending. Allow updates to proceed even if the
+      // timestamp is missing.
+      "description": "Use image creation date for container age checks",
+      "matchCategories": [
+        "docker",
+      ],
+      "minimumReleaseAgeBehaviour": "timestamp-optional",
+    },
+    {
+      "description": "Keep overrides as ranges — they are security/compat floors",
+      "matchDepTypes": [
+        "overrides",
+      ],
+      "rangeStrategy": "replace",
+    },
+  ],
+  "prConcurrentLimit": 5,
+  "prHourlyLimit": 0,
+  "rebaseWhen": "auto",
+  // "schedule": ["before 7am on Tuesday"],
+  "semanticCommits": "disabled",
+  "timezone": "America/New_York",
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/\\.sh$/"],
+      "matchStrings": [
+        "#\\s*renovate:\\s*datasource=(?<datasource>[a-z-]+)\\s+depName=(?<depName>[a-zA-Z0-9/@_-]+)(?:\\s+versioning=(?<versioning>[a-z-]+))?\\s+[A-Z0-9_]+_VERSION=\"(?<currentValue>[^\"]+)\""
+      ]
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/\\.sh$/"],
+      "matchStrings": [
+        "#\\s*renovate:\\s*datasource=(?<datasource>[a-z-]+)\\s+depName=(?<depName>[a-zA-Z0-9/@_-]+)(?:\\s+versioning=(?<versioning>[a-z-]+))?\\s+[^#\\n]*?@(?<currentValue>[a-zA-Z0-9.-]+)"
+      ]
+    }
+  ],
+  "vulnerabilityAlerts": {
+    "minimumReleaseAge": "0 days",
+    "labels": [
+      "dependencies",
+      "security",
+    ],
+  },
+}

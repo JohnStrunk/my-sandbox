@@ -1,0 +1,29 @@
+---
+# https://docs.mergify.com/
+merge_queue:
+  max_parallel_checks: 1
+
+pull_request_rules:
+  - name: default
+    conditions: []
+    actions:
+      queue:
+
+queue_rules:
+  - name: default
+    batch_size: 1  # Don't combine PRs into draft multi-merge PRs
+    merge_conditions: []
+    merge_method: merge
+    queue_conditions:
+      - or:
+          # Auto merge from these users
+          - author=JohnStrunk
+          - author=renovate-bot
+          # Everyone else requires a review
+          - "#approved-reviews-by>=1"
+      - "#changes-requested-reviews-by=0"
+      - label!=do-not-merge
+      - check-success="CI Workflow - Success"
+
+merge_protections_settings:
+  reporting_method: check-runs

@@ -1,0 +1,15 @@
+#! /bin/bash
+
+set -e -o pipefail
+
+# Disable GPG signing for commits by Antigravity
+export GIT_CONFIG_KEY_0=commit.gpgsign
+export GIT_CONFIG_VALUE_0=false
+export GIT_CONFIG_KEY_1=tag.gpgsign
+export GIT_CONFIG_VALUE_1=false
+export GIT_CONFIG_COUNT=2
+
+if [ $# -eq 0 ]; then
+    exec agy --dangerously-skip-permissions
+fi
+exec agy "$@"

@@ -1,0 +1,104 @@
+---
+# yamllint disable rule:line-length
+name: "CI Workflow"
+
+on:  # yamllint disable-line rule:truthy
+  push:
+    branches:
+      - main
+    tags: ["*"]
+  pull_request:
+    # The branches below must be a subset of the branches above
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pre-commit:
+    name: "Pre-commit checks"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        # https://github.com/actions/checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: "recursive"
+
+      - name: Install uv
+        # https://github.com/astral-sh/setup-uv
+        # zizmor: ignore[cache-poisoning]
+        uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install pre-commit
+        run: uv tool install pre-commit
+
+      - name: Enable cache for pre-commit hooks
+        # https://github.com/actions/cache
+        # zizmor: ignore[cache-poisoning]
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/pre-commit
+          # yamllint disable-line rule:line-length
+          key: pre-commit|${{ hashFiles('.pre-commit-config.yaml') }}
+          restore-keys: |
+            pre-commit|
+
+      - name: Run pre-commit checks
+        run: pre-commit run -a
+
+      - name: Run pre-commit gc
+        run: pre-commit gc
+
+  # This job builds the devcontainer image, but doesn't do anything with it.
+  # It's just here to make sure the image builds successfully.
+  devcontainer:
+    name: "Build devcontainer image"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        # https://github.com/actions/checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: "recursive"
+
+      - name: Set up Docker Buildx
+        # https://github.com/docker/setup-buildx-action
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        id: setup-buildx
+
+      - name: Expose variables required for actions cache
+        # https://github.com/crazy-max/ghaction-github-runtime
+        uses: crazy-max/ghaction-github-runtime@04d248b84655b509d8c44dc1d6f990c879747487 # v4.0.0
+
+      - name: Build devcontainer
+        run: npx -- @devcontainers/cli build --workspace-folder . --cache-from type=gha,scope=devcontainer --cache-to type=gha,mode=min,scope=devcontainer
+
+  # This is a dummy job to determine success of the CI workflow
+  ci-success:
+    name: CI Workflow - Success
+    if: always()
+    needs:
+      - devcontainer
+      - pre-commit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check all jobs
+        env:
+          RESULTS: "${{ join(needs.*.result, ' ') }}"
+        run: |
+          for r in $RESULTS; do
+            if [[ "$r" != "success" ]]; then
+              echo "::error::❌ One or more required jobs failed, were cancelled, or were skipped ❌"
+              exit 1
+            fi
+          done
+          echo "✅ All required jobs succeeded ✅"
