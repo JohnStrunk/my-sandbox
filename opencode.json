@@ -1,0 +1,10 @@
+{
+  "disabled_providers": [
+    "github-copilot",
+    "google-vertex-anthropic",
+    "opencode"
+  ],
+  "formatter": true,
+  "model": "google-vertex/claude-sonnet-5@default",
+  "small_model": "google-vertex/claude-haiku-4-5@20251001"
+}

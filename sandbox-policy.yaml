@@ -1,0 +1,137 @@
+---
+# Sandbox policy for agent coding sessions.
+#
+# The filesystem/landlock/process sections are static: OpenShell reads
+# them once, at sandbox creation. network_policies is dynamic/hot-reloadable.
+
+# yamllint disable rule:line-length
+
+version: 1
+
+# ── Static (locked at sandbox creation) ──────────────────────────
+
+filesystem_policy:
+  include_workdir: true
+  read_only:
+    - /usr
+    - /lib
+    - /proc
+    - /dev/urandom
+    - /app
+    - /etc
+    - /var/log
+  read_write:
+    - /sandbox
+    - /tmp
+    - /dev/null
+
+landlock:
+  compatibility: best_effort
+
+process:
+  run_as_user: sandbox
+  run_as_group: sandbox
+
+# ── Dynamic (hot-reloadable) ─────────────────────────────────────
+
+network_policies:
+
+  # Claude Code / OpenCode -> real Vertex AI, direct. Credentials come
+  # from the `gcloud` provider's GCE metadata emulator; the agent process
+  # never holds a real GCP token, only an opaque placeholder the proxy resolves.
+  vertex_ai:
+    name: vertex-ai
+    endpoints:
+      - {host: aiplatform.googleapis.com, port: 443, protocol: rest, enforcement: enforce, access: read-write}
+      - {host: "*-aiplatform.googleapis.com", port: 443, protocol: rest, enforcement: enforce, access: read-write}
+    binaries:
+      - {path: /usr/lib/node_modules/opencode-ai/bin/.opencode}
+      - {path: /usr/local/bin/claude}
+      - {path: /usr/bin/node}
+      - {path: /usr/bin/opencode}
+
+  # Allow OpenCode to access the LiteMaaS endpoint for model inference. This
+  # works with the `litemaas` provider.
+  litemaas:
+    name: litemaas
+    endpoints:
+      - {host: litellm-litemaas.apps.prod.rhoai.rh-aiservices-bu.com, port: 443, protocol: rest, enforcement: enforce, access: read-write}
+    binaries:
+      - {path: /usr/lib/node_modules/opencode-ai/bin/.opencode}
+      - {path: /usr/bin/opencode}
+
+  # OpenCode's own model catalog fetch (models.dev).
+  # opencode_catalog:
+  #   name: opencode-catalog
+  #   endpoints:
+  #     - {host: models.dev, port: 443}
+  #   binaries:
+  #     - {path: /usr/lib/node_modules/opencode-ai/bin/.opencode}
+
+  # # Claude Code telemetry / auxiliary endpoints
+  # claude_code_aux:
+  #   name: claude-code-aux
+  #   endpoints:
+  #     - {host: statsig.anthropic.com, port: 443}
+  #     - {host: sentry.io, port: 443}
+  #     - {host: raw.githubusercontent.com, port: 443}
+  #     - {host: platform.claude.com, port: 443}
+  #   binaries:
+  #     - {path: /usr/local/bin/claude}
+
+  # GitHub: git operations + REST/GraphQL API (read/write)
+  github-rw:
+    name: github
+    endpoints:
+      - {host: github.com, port: 443, protocol: rest, enforcement: enforce, access: full}
+      - {host: api.github.com, port: 443, protocol: rest, enforcement: enforce, access: full}
+      - {host: raw.githubusercontent.com, port: 443}
+      - {host: objects.githubusercontent.com, port: 443}
+    binaries:
+      - {path: /usr/bin/git}
+      - {path: /usr/bin/gh}
+      - {path: /usr/local/bin/claude}
+      - {path: /usr/lib/node_modules/opencode-ai/bin/.opencode}
+      - {path: /usr/bin/curl}
+
+  # # gws: Google Workspace API calls
+  # google_workspace:
+  #   name: google-workspace
+  #   endpoints:
+  #     - {host: "*.googleapis.com", port: 443, protocol: rest, enforcement: enforce, access: full}
+  #     - {host: oauth2.googleapis.com, port: 443}
+  #     - {host: accounts.google.com, port: 443}
+  #   binaries:
+  #     - {path: /usr/local/bin/gws}
+
+  # # acli: Jira/Confluence
+  # atlassian:
+  #   name: atlassian
+  #   endpoints:
+  #     - {host: redhat.atlassian.net, port: 443, protocol: rest, enforcement: enforce, access: full}
+  #     - {host: id.atlassian.com, port: 443}
+  #   binaries:
+  #     - {path: /usr/local/bin/acli}
+
+  # Package registries needed to install/build project dependencies
+  package_registries:
+    name: package-registries
+    endpoints:
+      - {host: pypi.org, port: 443}
+      - {host: files.pythonhosted.org, port: 443}
+      - {host: registry.npmjs.org, port: 443}
+      - {host: proxy.golang.org, port: 443}
+      - {host: sum.golang.org, port: 443}
+      - {host: github.com, port: 443}
+      - {host: objects.githubusercontent.com, port: 443}
+      - {host: api.github.com, port: 443}
+    binaries:
+      - {path: /sandbox/.venv/bin/python}
+      - {path: /sandbox/.venv/bin/python3}
+      - {path: /sandbox/.venv/bin/pip}
+      - {path: "/sandbox/.uv/python/**/python*"}
+      - {path: /usr/local/bin/uv}
+      - {path: /usr/local/bin/npm}
+      - {path: /usr/local/bin/npx}
+      - {path: /usr/local/go/bin/go}
+      - {path: /usr/bin/node}
