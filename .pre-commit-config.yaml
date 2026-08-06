@@ -21,7 +21,6 @@ repos:
     rev: v6.0.0
     hooks:
       - id: check-added-large-files  # Prevents giant files from being committed
-      - id: check-docstring-first    # Prevent code before docstring
       - id: check-json               # Check that JSON files are valid
         exclude: |
           (?x)^(
@@ -45,10 +44,6 @@ repos:
   - repo: https://github.com/pre-commit/pygrep-hooks
     rev: v1.10.0
     hooks:
-      # Lint restructuredText files
-      - id: rst-backticks
-      - id: rst-directive-colons
-      - id: rst-inline-touching-normal
       # Forbid UTF-8 replacement character
       - id: text-unicode-replacement-char
 
@@ -66,11 +61,6 @@ repos:
       - id: ruff-check
       # args: [ --fix ]
       - id: ruff-format
-
-  - repo: https://github.com/astral-sh/uv-pre-commit
-    rev: "0.11.32"
-    hooks:
-      - id: uv-lock
 
   - repo: https://github.com/DavidAnson/markdownlint-cli2
     rev: "v0.23.0"
@@ -124,18 +114,3 @@ repos:
     rev: v1.28.0
     hooks:
       - id: zizmor
-
-# # Local hooks
-# - repo: local
-#   hooks:
-#     - id: pyright
-#       name: Type check Python code with Pyright
-#       entry: uv run pyright
-#       language: system
-#       types: [python]
-#     - id: pytest
-#       name: Run Python unit tests with pytest
-#       entry: uv run pytest
-#       language: system
-#       pass_filenames: false
-#       types: [python]
