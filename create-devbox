@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# Single-command launcher: OpenShell replacement for devcontainer launch.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NAME="devbox"
+
+docker build \
+  --file "$HERE/sandbox/Dockerfile" \
+  --tag "devbox:latest" \
+  --target devbox \
+  "$HERE/sandbox"
+
+PARAMS=()
+
+# Atlassian CLI (acli) configuration
+if [ -d "$HOME/.config/acli" ]; then
+  PARAMS+=(
+    --volume "$HOME/.config/acli:/sandbox/.config/acli" \
+  )
+fi
+
+# GitHub CLI (gh) configuration
+if [ -n "${GITHUB_TOKEN:-}" ] || command -v gh >/dev/null 2>&1; then
+  PARAMS+=(
+    --env "GITHUB_TOKEN=${GITHUB_TOKEN:-$(gh auth token 2>/dev/null || true)}" \
+  )
+fi
+
+# Google Workspace CLI (gws) configuration
+if [ -d "$HOME/.config/gws" ]; then
+  PARAMS+=(
+    --volume "$HOME/.config/gws:/sandbox/.config/gws" \
+  )
+fi
+
+# LiteMaaS configuration
+if [ -n "${LITEMAAS_API_KEY:-}" ]; then
+  PARAMS+=(
+    --env "LITEMAAS_API_KEY=${LITEMAAS_API_KEY:-}" \
+  )
+fi
+
+# OpenCode configuration
+if [ -d "$HOME/.config/opencode" ]; then
+  PARAMS+=(
+    --volume "$HOME/.config/opencode:/sandbox/.config/opencode" \
+  )
+fi
+if [ -f "$HOME/.local/state/opencode/model.json" ]; then
+  PARAMS+=(
+    --volume "$HOME/.local/state/opencode/model.json:/sandbox/.local/state/opencode/model.json" \
+  )
+fi
+if [ -f "$HERE/opencode.json" ]; then
+  PARAMS+=(
+    --volume "$HERE/opencode.json:/sandbox/opencode.json" \
+  )
+fi
+
+# Vertex AI configuration
+if [ -n "${GOOGLE_CLOUD_PROJECT:-}" ] && [ -n "${VERTEX_LOCATION:-}" ]; then
+  PARAMS+=(
+    --env "GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT:-}" \
+    --env "VERTEX_LOCATION=${VERTEX_LOCATION:-global}" \
+  )
+fi
+if [ -f "$HOME/.config/gcloud/application_default_credentials.json" ]; then
+  PARAMS+=(
+    --volume "$HOME/.config/gcloud/application_default_credentials.json:/sandbox/.config/gcloud/application_default_credentials.json" \
+  )
+fi
+
+echo "Parameters for docker run: ${PARAMS[*]}"
+
+echo "==> Creating container '$NAME'"
+docker run -d \
+  --user "$(id -u):$(id -g)" \
+  --name "$NAME" \
+  --hostname "$NAME" \
+  --stop-timeout 0 \
+  "${PARAMS[@]}" \
+  "devbox:latest"
+
+# Remap the sandbox user and group IDs to match the current user and group IDs
+echo "==> Remapping sandbox user and group IDs to $(id -u):$(id -g)"
+docker exec -it -u 0:0 "$NAME" /usr/local/bin/switch-uid-gid.sh "$(id -u)" "$(id -g)"
+
+# Change ownership of all files in /sandbox to the sandbox user and group, but
+# don't traverse into mounted volumes. This is to handle the case where
+# host-mounted files are mounted into deep directories, and the parents were
+# created by the container as root.
+echo "==> Changing ownership of files in /sandbox to sandbox user and group"
+docker exec -it -u 0:0 "$NAME" find /sandbox -xdev -exec chown -h sandbox:sandbox {} \; 2>/dev/null
+
+echo "==> Entering container '$NAME'"
+exec docker exec -it "$NAME" /bin/bash

@@ -1,10 +1,30 @@
 {
+  "$schema": "https://opencode.ai/config.json",
   "disabled_providers": [
     "github-copilot",
+    "gitlab",
     "google-vertex-anthropic",
     "opencode"
   ],
   "formatter": true,
   "model": "google-vertex/claude-sonnet-5@default",
-  "small_model": "google-vertex/claude-haiku-4-5@20251001"
+  "small_model": "google-vertex/claude-haiku-4-5@20251001",
+  "provider": {
+    "litemaas": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "LiteMaaS (internal)",
+      "options": {
+        "baseURL": "https://litellm-litemaas.apps.prod.rhoai.rh-aiservices-bu.com/v1"
+      },
+      "models": {
+        "Qwen3.6-35B-A3B": {
+          "name": "Qwen3.6-35B-A3B",
+          "limit": {
+            "context": 262144,
+            "output": 65536
+          }
+        }
+      }
+    }
+  }
 }
