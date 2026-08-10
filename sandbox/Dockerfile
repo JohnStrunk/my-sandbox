@@ -61,6 +61,7 @@ RUN apt-get update -q && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     gnupg \
+    passwd \
     sudo \
     && rm -rf /var/lib/apt/lists/*
 
@@ -87,7 +88,7 @@ RUN npm install -g --no-fund \
 # Docker Engine (for Docker-in-Docker support)
 RUN curl -fsSL https://get.docker.com | sh \
     && rm -rf /var/lib/apt/lists/* \
-    && usermod -aG docker sandbox
+    && /usr/sbin/usermod -aG docker sandbox
 
 COPY switch-uid-gid.sh /usr/local/bin/
 COPY devbox-entry.sh /usr/local/bin/
