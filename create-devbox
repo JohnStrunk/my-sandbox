@@ -85,13 +85,19 @@ if [ -f "$HOME/.config/gcloud/application_default_credentials.json" ]; then
 fi
 
 docker stop "$NAME" >/dev/null 2>&1 || true
-docker rm "$NAME" >/dev/null 2>&1 || true
+# -v also removes the anonymous volumes (e.g. /var/lib/docker) created for the
+# previous instance of this container.
+docker rm -v "$NAME" >/dev/null 2>&1 || true
 echo "==> Creating container '$NAME'"
 docker run -d \
   --user "$(id -u):$(id -g)" \
   --name "$NAME" \
   --hostname "$NAME" \
   --stop-timeout 0 \
+  --privileged \
+  --env "DOCKER_BUILDKIT=1" \
+  --volume "/var/lib/docker" \
+  --volume "/var/lib/containerd" \
   "${PARAMS[@]}" \
   "devbox:latest"
 
@@ -105,6 +111,11 @@ docker exec -it -u 0:0 "$NAME" /usr/local/bin/switch-uid-gid.sh "$(id -u)" "$(id
 # created by the container as root.
 echo "==> Changing ownership of files in /sandbox to sandbox user and group"
 docker exec -it -u 0:0 "$NAME" find /sandbox -xdev -exec chown -h sandbox:sandbox {} \; 2>/dev/null
+
+# Start the Docker daemon inside the container (requires --privileged, above)
+# to provide Docker-in-Docker support.
+echo "==> Starting Docker-in-Docker daemon"
+docker exec -u 0:0 "$NAME" /usr/local/bin/start-dockerd.sh
 
 echo "==> Entering container '$NAME'"
 exec docker exec -it -w "$WORKDIR" "$NAME" /bin/bash

@@ -84,8 +84,14 @@ RUN curl -L "https://acli.atlassian.com/linux/latest/acli_linux_${TARGETARCH}.ta
 RUN npm install -g --no-fund \
     @googleworkspace/cli
 
+# Docker Engine (for Docker-in-Docker support)
+RUN curl -fsSL https://get.docker.com | sh \
+    && rm -rf /var/lib/apt/lists/* \
+    && usermod -aG docker sandbox
+
 COPY switch-uid-gid.sh /usr/local/bin/
 COPY devbox-entry.sh /usr/local/bin/
+COPY start-dockerd.sh /usr/local/bin/
 RUN echo "sandbox ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 
 ENTRYPOINT []
