@@ -39,6 +39,20 @@ jobs:
       - name: Install pre-commit
         run: uv tool install pre-commit
 
+      - name: Install hadolint
+        # Version must match the hadolint rev in .pre-commit-config.yaml
+        env:
+          HADOLINT_VERSION: "v2.14.0"
+        run: |
+          set -euo pipefail
+          asset="hadolint-linux-x86_64"
+          base_url="https://github.com/hadolint/hadolint/releases/download/${HADOLINT_VERSION}"
+          curl -sSfL -o "$asset" "${base_url}/${asset}"
+          curl -sSfL -o "${asset}.sha256" "${base_url}/${asset}.sha256"
+          sha256sum -c "${asset}.sha256"
+          chmod +x "$asset"
+          sudo mv "$asset" /usr/local/bin/hadolint
+
       - name: Enable cache for pre-commit hooks
         # https://github.com/actions/cache
         # zizmor: ignore[cache-poisoning]
