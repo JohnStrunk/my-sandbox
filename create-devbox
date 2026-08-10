@@ -92,6 +92,8 @@ docker run -d \
   --name "$NAME" \
   --hostname "$NAME" \
   --stop-timeout 0 \
+  --privileged \
+  --volume "$NAME-docker-lib:/var/lib/docker" \
   "${PARAMS[@]}" \
   "devbox:latest"
 
@@ -105,6 +107,11 @@ docker exec -it -u 0:0 "$NAME" /usr/local/bin/switch-uid-gid.sh "$(id -u)" "$(id
 # created by the container as root.
 echo "==> Changing ownership of files in /sandbox to sandbox user and group"
 docker exec -it -u 0:0 "$NAME" find /sandbox -xdev -exec chown -h sandbox:sandbox {} \; 2>/dev/null
+
+# Start the Docker daemon inside the container (requires --privileged, above)
+# to provide Docker-in-Docker support.
+echo "==> Starting Docker-in-Docker daemon"
+docker exec -u 0:0 "$NAME" /usr/local/bin/start-dockerd.sh
 
 echo "==> Entering container '$NAME'"
 exec docker exec -it -w "$WORKDIR" "$NAME" /bin/bash
