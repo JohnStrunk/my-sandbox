@@ -85,7 +85,9 @@ if [ -f "$HOME/.config/gcloud/application_default_credentials.json" ]; then
 fi
 
 docker stop "$NAME" >/dev/null 2>&1 || true
-docker rm "$NAME" >/dev/null 2>&1 || true
+# -v also removes the anonymous volumes (e.g. /var/lib/docker) created for the
+# previous instance of this container.
+docker rm -v "$NAME" >/dev/null 2>&1 || true
 echo "==> Creating container '$NAME'"
 docker run -d \
   --user "$(id -u):$(id -g)" \
