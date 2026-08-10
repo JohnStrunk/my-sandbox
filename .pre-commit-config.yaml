@@ -66,6 +66,15 @@ repos:
     rev: "v0.23.0"
     hooks:
       - id: markdownlint-cli2
+        # Use the system-installed binary instead of the hook's default
+        # `language: node`. Pre-commit installs node-language hooks via
+        # `npm install --allow-git=root -g git+file://...`, but npm's
+        # `allow-git` config only permits git dependencies declared in an
+        # existing package.json, not an ad-hoc git spec passed directly to
+        # `npm install -g`. That makes npm reject the install with
+        # `EALLOWGIT`. The binary is installed globally in
+        # sandbox/Dockerfile and .github/workflows/ci-workflow.yaml instead.
+        language: system
         args: ["--config", ".github/markdownlint-cli2.yaml"]
         exclude: |
           (?x)^(

@@ -12,6 +12,7 @@ RUN apt-get update -q && apt-get install -y --no-install-recommends \
     ffmpeg \
     gh \
     glab \
+    jq \
     ripgrep \
     shellcheck \
     && rm -rf /var/lib/apt/lists/*
@@ -34,9 +35,11 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
     && mv /root/.local/bin/uv /root/.local/bin/uvx /usr/local/bin/
 ENV UV_CACHE_DIR=/sandbox/.uv_cache
 
+# markdownlint-cli2 version must match the rev in .pre-commit-config.yaml -
+# its pre-commit hook uses `language: system` and runs this binary directly.
 # hadolint ignore=DL3016
 RUN npm install -g --no-fund \
-    markdownlint-cli2 \
+    markdownlint-cli2@0.23.0 \
     @playwright/cli \
     && npx -y playwright install --with-deps
 
