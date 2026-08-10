@@ -53,6 +53,16 @@ jobs:
           chmod +x "$asset"
           sudo mv "$asset" /usr/local/bin/hadolint
 
+      - name: Install markdownlint-cli2
+        # Version must match the markdownlint-cli2 rev in
+        # .pre-commit-config.yaml. Its pre-commit hook uses
+        # `language: system` and runs this binary directly, since npm's
+        # `allow-git` config rejects the hook's default `language: node`
+        # install command (`npm install --allow-git=root -g
+        # git+file://...`) with EALLOWGIT.
+        # zizmor: ignore[adhoc-packages]
+        run: npm install -g markdownlint-cli2@0.23.0
+
       - name: Enable cache for pre-commit hooks
         # https://github.com/actions/cache
         # zizmor: ignore[cache-poisoning]
