@@ -4,6 +4,13 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NAME="devbox"
+WORKDIR="/sandbox"
+
+if [ -n "${1:-}" ]; then
+  BIND_DIR="$(realpath "$1")"
+  NAME="devbox-$(basename "$BIND_DIR")"
+  WORKDIR+="/$(basename "$BIND_DIR")"
+fi
 
 docker build \
   --file "$HERE/sandbox/Dockerfile" \
@@ -12,6 +19,12 @@ docker build \
   "$HERE/sandbox"
 
 PARAMS=()
+
+if [ -n "${BIND_DIR:-}" ]; then
+  PARAMS+=(
+    --volume "$BIND_DIR:$WORKDIR" \
+  )
+fi
 
 # Atlassian CLI (acli) configuration
 if [ -d "$HOME/.config/acli" ]; then
@@ -71,8 +84,8 @@ if [ -f "$HOME/.config/gcloud/application_default_credentials.json" ]; then
   )
 fi
 
-echo "Parameters for docker run: ${PARAMS[*]}"
-
+docker stop "$NAME" >/dev/null 2>&1 || true
+docker rm "$NAME" >/dev/null 2>&1 || true
 echo "==> Creating container '$NAME'"
 docker run -d \
   --user "$(id -u):$(id -g)" \
@@ -94,4 +107,4 @@ echo "==> Changing ownership of files in /sandbox to sandbox user and group"
 docker exec -it -u 0:0 "$NAME" find /sandbox -xdev -exec chown -h sandbox:sandbox {} \; 2>/dev/null
 
 echo "==> Entering container '$NAME'"
-exec docker exec -it "$NAME" /bin/bash
+exec docker exec -it -w "$WORKDIR" "$NAME" /bin/bash
