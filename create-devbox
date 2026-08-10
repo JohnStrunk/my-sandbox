@@ -93,7 +93,9 @@ docker run -d \
   --hostname "$NAME" \
   --stop-timeout 0 \
   --privileged \
-  --volume "$NAME-docker-lib:/var/lib/docker" \
+  --env "DOCKER_BUILDKIT=1" \
+  --volume "/var/lib/docker" \
+  --volume "/var/lib/containerd" \
   "${PARAMS[@]}" \
   "devbox:latest"
 
