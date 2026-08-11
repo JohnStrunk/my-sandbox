@@ -98,9 +98,19 @@ RUN npm install -g --no-fund \
 # https://www.redhat.com/en/blog/podman-inside-container ("Rootless Podman
 # running rootless Podman") and podman's own reference image at
 # https://github.com/containers/podman/tree/main/contrib/podmanimage/stable
+#
+# netavark/aardvark-dns aren't pulled in automatically by Ubuntu's podman
+# package. Without them, nested Podman silently falls back to the older CNI
+# network backend on its first run (this choice is then cached on-disk and
+# "sticks" even if the packages are installed later), which lacks
+# aardvark-dns's container-name DNS resolution: containers on a
+# user-defined network can't reach each other by name, breaking anything
+# that looks like a multi-container dev workflow (e.g. an app + DB pod).
 # hadolint ignore=DL3008
 RUN apt-get update -q && apt-get install -y --no-install-recommends \
+    aardvark-dns \
     fuse-overlayfs \
+    netavark \
     podman \
     slirp4netns \
     uidmap \
@@ -136,6 +146,17 @@ RUN /usr/sbin/setcap cap_setuid+eip /usr/bin/newuidmap \
 # overlay filesystem inside another overlay mount is normally rejected, but
 # fuse-overlayfs runs in userspace and isn't subject to that restriction.
 #
+# storage.conf's mountopt, matching the "nodev,fsync=0" used by podman's own
+# reference image
+# (https://github.com/containers/image_build/blob/main/podman/Containerfile):
+#   - nodev: hardening parity with that reference config; nested containers
+#     don't need to create device nodes on the overlay layers.
+#   - fsync=0: fuse-overlayfs round-trips every write through userspace, so
+#     fsync-ing on every layer write (the default) makes image pulls/builds
+#     inside the nested Podman noticeably slower. This is safe here because
+#     the whole point of this storage is disposable, nested container
+#     layers, not data that needs durability guarantees.
+#
 # containers.conf settings, and why each is needed for nested `podman run`
 # as the non-root "sandbox" user in this outer rootless container:
 #   - cgroups = "disabled": the outer container has no delegated, writable
@@ -164,11 +185,25 @@ RUN /usr/sbin/setcap cap_setuid+eip /usr/bin/newuidmap \
 # create-devbox's dynamic subordinate ID setup) follows the pattern
 # documented by Podman's own maintainers, cited above.
 RUN mkdir -p /sandbox/.config/containers \
-    && printf '[storage]\ndriver = "overlay"\n\n[storage.options]\nmount_program = "/usr/bin/fuse-overlayfs"\n' \
+    && printf '[storage]\ndriver = "overlay"\n\n[storage.options]\nmount_program = "/usr/bin/fuse-overlayfs"\nmountopt = "nodev,fsync=0"\n' \
         > /sandbox/.config/containers/storage.conf \
     && printf '[containers]\ncgroups = "disabled"\nvolumes = ["/proc:/proc"]\ndefault_sysctls = []\nutsns = "host"\n\n[network]\ndefault_rootless_network_cmd = "slirp4netns"\n' \
         > /sandbox/.config/containers/containers.conf \
     && chown -R sandbox:sandbox /sandbox/.config
+
+# Two more settings from podman's own reference Podman-in-Podman image
+# (https://github.com/containers/image_build/blob/main/podman/Containerfile),
+# defensive for nested `podman build`/`buildah` in this doubly-rootless
+# setup even though they weren't observed to be strictly required here:
+#   - BUILDAH_ISOLATION=chroot: avoids buildah's default namespace-based
+#     RUN-step isolation, which needs more namespace nesting than may be
+#     available depending on the host's own subuid/subgid allocation (see
+#     create-devbox).
+#   - _CONTAINERS_USERNS_CONFIGURED="": tells Podman/Buildah that the user
+#     namespace/subordinate ID setup is already handled (by create-devbox),
+#     so they shouldn't try to auto-configure or re-exec into one themselves.
+ENV BUILDAH_ISOLATION=chroot \
+    _CONTAINERS_USERNS_CONFIGURED=""
 
 COPY devbox-entry.sh /usr/local/bin/
 RUN echo "sandbox ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
