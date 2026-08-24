@@ -186,9 +186,9 @@ RUN /usr/sbin/setcap cap_setuid+eip /usr/bin/newuidmap \
 # documented by Podman's own maintainers, cited above.
 RUN mkdir -p /sandbox/.config/containers \
     && printf '[storage]\ndriver = "overlay"\n\n[storage.options]\nmount_program = "/usr/bin/fuse-overlayfs"\nmountopt = "nodev,fsync=0"\n' \
-        > /sandbox/.config/containers/storage.conf \
+    > /sandbox/.config/containers/storage.conf \
     && printf '[containers]\ncgroups = "disabled"\nvolumes = ["/proc:/proc"]\ndefault_sysctls = []\nutsns = "host"\n\n[network]\ndefault_rootless_network_cmd = "slirp4netns"\n' \
-        > /sandbox/.config/containers/containers.conf \
+    > /sandbox/.config/containers/containers.conf \
     && chown -R sandbox:sandbox /sandbox/.config
 
 # Two more settings from podman's own reference Podman-in-Podman image

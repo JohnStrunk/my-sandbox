@@ -21,10 +21,10 @@ if [ -n "${1:-}" ]; then
 fi
 
 podman build \
-  --file "$HERE/sandbox/Dockerfile" \
+  --file "$HERE/devbox/Dockerfile" \
   --tag "devbox:latest" \
   --target devbox \
-  "$HERE/sandbox"
+  "$HERE/devbox"
 
 # Look up the sandbox account's UID/GID from the image instead of hardcoding
 # them, so this keeps working if the base image ever changes them.
