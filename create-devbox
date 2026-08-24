@@ -10,7 +10,7 @@
 # --privileged or any added Linux capabilities.
 set -euo pipefail
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 NAME="devbox"
 WORKDIR="/sandbox"
 
