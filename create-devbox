@@ -33,6 +33,19 @@ SANDBOX_GID="$(podman run --rm "devbox:latest" id -g sandbox)"
 
 PARAMS=()
 
+# Local LLM inference server (see local-llm/start-llm-server.sh). If it has
+# been started on this host, allow this devbox to reach the host's loopback
+# interface (where the server publishes its port) at the fixed rootless
+# slirp4netns address 10.0.2.2 -- see opencode.json's "local-llm" provider
+# and local-llm/README.md for details. Harmless no-op if the server was
+# never started.
+LLM_CONTAINER_NAME="${LLM_CONTAINER_NAME:-opencode-local-llm}"
+if podman container exists "$LLM_CONTAINER_NAME" 2>/dev/null; then
+  PARAMS+=(
+    --network slirp4netns:allow_host_loopback=true \
+  )
+fi
+
 if [ -n "${BIND_DIR:-}" ]; then
   PARAMS+=(
     --volume "$BIND_DIR:$WORKDIR" \
