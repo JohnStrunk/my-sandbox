@@ -80,12 +80,40 @@ jobs:
       - name: Run pre-commit gc
         run: pre-commit gc
 
+  test:
+    name: "Automated Tests"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        # https://github.com/actions/checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: "recursive"
+
+      - name: Install uv
+        # https://github.com/astral-sh/setup-uv
+        # zizmor: ignore[cache-poisoning]
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install Podman
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends podman
+
+      - name: Run test suite
+        run: uv run --extra test pytest -m "not e2e_inference"
+
   # This is a dummy job to determine success of the CI workflow
   ci-success:
     name: CI Workflow - Success
     if: always()
     needs:
       - pre-commit
+      - test
     runs-on: ubuntu-latest
     steps:
       - name: Check all jobs
