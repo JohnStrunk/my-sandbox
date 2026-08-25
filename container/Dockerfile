@@ -2,13 +2,14 @@
 # hadolint ignore=DL3007
 FROM ghcr.io/nvidia/openshell-community/sandboxes/base:latest@sha256:aeef1c63f00e2913ea002ccb3aaf925f338b5c5d70e63576f0d95c16a138044e AS base
 
-# hadolint ignore=DL3002
+# hadolint ignore=DL3002,DL3066
 USER root
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # Install system utilities matching devcontainer
 # hadolint ignore=DL3008
 RUN apt-get update -q && apt-get install -y --no-install-recommends \
+    ca-certificates \
     ffmpeg \
     gh \
     glab \
@@ -16,6 +17,13 @@ RUN apt-get update -q && apt-get install -y --no-install-recommends \
     ripgrep \
     shellcheck \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Red Hat internal CA certificates
+COPY certs/ /usr/local/share/ca-certificates/redhat/
+RUN /usr/sbin/update-ca-certificates
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+    REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+    NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
 
 # Install Hadolint
 # renovate: datasource=github-releases depName=hadolint/hadolint
@@ -230,5 +238,6 @@ CMD ["/usr/local/bin/devbox-entry.sh"]
 ##################################################
 # Last stage is picked up by OpenShell to create the sandbox image.
 FROM base AS final
+# hadolint ignore=DL3066
 USER sandbox
 WORKDIR /sandbox
