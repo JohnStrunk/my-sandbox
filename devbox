@@ -16,8 +16,8 @@
 #   - If the container for that directory doesn't already exist, it's
 #     created (building the image first, if needed) with the current
 #     directory bind-mounted in.
-#   - If it already exists, this just execs a shell into it (starting it
-#     first if it's currently stopped).
+#   - If it already exists, this just execs a shell or the provided command
+#     into it (starting it first if it's currently stopped).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
@@ -27,11 +27,11 @@ WORKDIR="/sandbox/$(basename "$BIND_DIR")"
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") [-r|--remove] [--recreate|--new] [-h|--help]
+Usage: $(basename "$0") [-r|--remove] [--recreate|--new] [-h|--help] [--] [command [arg ...]]
 
 Bind-mounts the current directory ($BIND_DIR) into a devbox container
-named '$NAME': creating it if it doesn't exist, or exec'ing a shell into
-it if it does.
+named '$NAME': creating it if it doesn't exist, or exec'ing a command/shell
+into it if it does.
 
 Options:
   -r, --remove        Stop and remove the container for this directory
@@ -39,10 +39,14 @@ Options:
       --new           Remove the container (if it exists) and create a
                        fresh one
   -h, --help          Show this help message
+
+Arguments:
+  command [arg ...]   Command to run in the container (default: /bin/bash)
 EOF
 }
 
 ACTION="run"
+COMMAND=()
 while [ $# -gt 0 ]; do
   case "$1" in
     -r | --remove)
@@ -57,10 +61,19 @@ while [ $# -gt 0 ]; do
       usage
       exit 0
       ;;
-    *)
+    --)
+      shift
+      COMMAND=("$@")
+      break
+      ;;
+    -*)
       echo "Unknown option: $1" >&2
       usage >&2
       exit 1
+      ;;
+    *)
+      COMMAND=("$@")
+      break
       ;;
   esac
 done
@@ -246,7 +259,11 @@ enter_container() {
   if [ -t 0 ] && [ -t 1 ]; then
     exec_opts+=("-t")
   fi
-  exec podman exec "${exec_opts[@]}" -w "$WORKDIR" "$NAME" /bin/bash
+  if [ $# -eq 0 ]; then
+    exec podman exec "${exec_opts[@]}" -w "$WORKDIR" "$NAME" /bin/bash
+  else
+    exec podman exec "${exec_opts[@]}" -w "$WORKDIR" "$NAME" "$@"
+  fi
 }
 
 case "$ACTION" in
@@ -256,12 +273,12 @@ case "$ACTION" in
   recreate)
     remove_container
     create_container
-    enter_container
+    enter_container "${COMMAND[@]}"
     ;;
   run)
     if ! podman container exists "$NAME" 2>/dev/null; then
       create_container
     fi
-    enter_container
+    enter_container "${COMMAND[@]}"
     ;;
 esac
