@@ -104,6 +104,9 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -y --no-install-recommends podman
 
+      - name: Build devbox image
+        run: podman build --file container/Dockerfile --tag devbox:latest --target devbox container/
+
       - name: Run test suite
         run: uv run --extra test pytest -m "not e2e_inference"
 

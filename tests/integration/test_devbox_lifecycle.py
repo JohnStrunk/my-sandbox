@@ -23,7 +23,7 @@ def test_devbox_lifecycle_create_exec_recreate_remove(
             devbox_path,
             ["bash", "-c", "echo 'hello from container' > test_output.txt"],
             cwd=test_dir,
-            timeout=60,
+            timeout=300,
         )
         assert res_create.returncode == 0, (
             f"Failed to create/run devbox:\n{res_create.stdout}\n{res_create.stderr}"
@@ -40,7 +40,7 @@ def test_devbox_lifecycle_create_exec_recreate_remove(
             devbox_path,
             ["cat", "test_output.txt"],
             cwd=test_dir,
-            timeout=30,
+            timeout=60,
         )
         assert res_exec.returncode == 0
         assert "Creating container" not in res_exec.stdout
@@ -52,7 +52,7 @@ def test_devbox_lifecycle_create_exec_recreate_remove(
             devbox_path,
             ["--recreate", "echo", "recreated"],
             cwd=test_dir,
-            timeout=60,
+            timeout=300,
         )
         assert res_recreate.returncode == 0
         assert "Removing container" in res_recreate.stdout
