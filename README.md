@@ -78,6 +78,14 @@ just `devbox` from any project directory:
 ln -s /path/to/this/repo/devbox ~/bin/devbox
 ```
 
+You can also pass a command directly to execute it inside the container instead
+of opening an interactive shell:
+
+```shell
+devbox opencode
+devbox ls -al
+```
+
 Additional flags let you manage the container's lifecycle:
 
 ```shell
