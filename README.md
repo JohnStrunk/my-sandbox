@@ -5,10 +5,10 @@ AI-assisted coding and modern software development workflows.
 
 This repository provides:
 
-- **`create-devbox`**: A single-command launcher that starts an interactive,
-  fully rootless development container with nested container support
+- **`devbox`**: A single-command launcher that starts an interactive, fully
+  rootless development container with nested container support
   (Podman-in-Podman) and automatic credential passthrough.
-- **`devbox/`**: A container image definition bundling modern language
+- **`container/`**: A container image definition bundling modern language
   toolchains, cloud CLIs, code linters, and AI coding assistants like
   [OpenCode](https://opencode.ai).
 - **`local-llm/`**: A self-contained local LLM inference server based on
@@ -33,8 +33,8 @@ This repository provides:
     (`acli`), Google Antigravity (`agy`), and OpenCode (`opencode`).
   - **Linters & Utilities**: `ripgrep`, `jq`, `shellcheck`, `hadolint`,
     `markdownlint-cli2`, and `ffmpeg`.
-- **Automatic Host Credential & Config Passthrough**: `create-devbox` detects
-  and bind-mounts existing host configurations (GitHub tokens, Google Cloud ADC,
+- **Automatic Host Credential & Config Passthrough**: `devbox` detects and
+  bind-mounts existing host configurations (GitHub tokens, Google Cloud ADC,
   Atlassian CLI, Google Workspace, LiteMaaS API keys, and OpenCode state).
 - **Local LLM Integration**: Devboxes automatically detect running local
   inference containers and configure slirp4netns loopback routing to connect to
@@ -55,21 +55,35 @@ This repository provides:
 
 ### Launching a Devbox
 
-To launch a devbox mounted to the current directory:
+`devbox` always bind-mounts the _current working directory_, so `cd` into
+whatever project you want to work on and run it from there:
 
 ```shell
-./create-devbox
+cd /path/to/project
+/path/to/this/repo/devbox
 ```
 
-To bind-mount a specific project workspace into the devbox:
+The container is named after the current directory (`devbox-<dirname>`), so
+each project directory gets its own persistent container. The first run
+builds the `devbox:latest` image (if not already built), configures user
+namespace delegations, passes relevant host configuration and environment
+variables, and opens an interactive bash shell in the bind-mounted directory.
+Subsequent runs from the same directory just exec a new shell into the
+existing container (starting it first if it's stopped).
+
+For convenience, symlink the script onto your `PATH` so it can be run as
+just `devbox` from any project directory:
 
 ```shell
-./create-devbox /path/to/project
+ln -s /path/to/this/repo/devbox ~/bin/devbox
 ```
 
-The script builds the `devbox:latest` container image (if not already built),
-configures user namespace delegations, passes relevant host configuration and
-environment variables, and opens an interactive bash shell in `/sandbox`.
+Additional flags let you manage the container's lifecycle:
+
+```shell
+devbox --remove    # or -r: stop and remove this directory's container
+devbox --recreate  # or --new: remove then re-create the container
+```
 
 ### Working Inside the Devbox
 
@@ -129,7 +143,7 @@ guidelines, see the [Local LLM README](local-llm/README.md).
 │   ├── markdownlint-cli2.yaml # Markdown lint configuration
 │   ├── mergify.yml            # Mergify PR automation rules
 │   └── renovate.json5         # Renovate dependency updates
-├── devbox/
+├── container/
 │   ├── Dockerfile             # Multi-stage container definition
 │   └── devbox-entry.sh        # Devbox container entrypoint
 ├── local-llm/
@@ -137,7 +151,7 @@ guidelines, see the [Local LLM README](local-llm/README.md).
 │   ├── start-llm-server.sh    # Script to start local Ollama server
 │   ├── status-llm-server.sh   # Script to check Ollama status
 │   └── stop-llm-server.sh     # Script to stop Ollama server
-├── create-devbox              # Main launcher script
+├── devbox                     # Main launcher script
 ├── opencode.json              # OpenCode model and provider configuration
 └── .pre-commit-config.yaml    # Pre-commit hook definitions
 ```

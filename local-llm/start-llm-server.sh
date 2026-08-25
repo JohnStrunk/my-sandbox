@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run once on the local machine (the Podman host, NOT inside a devbox) to
 # start a local LLM inference server that every devbox instance created
-# from this repo can connect to (see ../create-devbox and ../opencode.json).
+# from this repo can connect to (see ../devbox and ../opencode.json).
 #
 # Uses Ollama (https://ollama.com) as the inference server:
 #   - Single container serves multiple models via an OpenAI-compatible API.
@@ -15,7 +15,7 @@
 # networking always makes the host's own loopback interface reachable from
 # inside a container at the fixed address 10.0.2.2, as long as the
 # container opts in with `--network slirp4netns:allow_host_loopback=true`
-# (see ../create-devbox, which adds this automatically once this script has
+# (see ../devbox, which adds this automatically once this script has
 # been run). This avoids relying on a shared Podman bridge network, which
 # needs kernel network sysctls that aren't writable in every environment
 # (e.g. some hardened/nested containers).
@@ -90,7 +90,7 @@ cat <<EOF
 
 ==> Local LLM server is up.
     - OpenAI-compatible API: http://localhost:${PORT}/v1  (from this machine)
-    - From devbox containers created via '$HERE/../create-devbox':
+    - From devbox containers created via '$HERE/../devbox':
       http://10.0.2.2:${PORT}/v1
     - Models available: ${MODELS[*]}
 
