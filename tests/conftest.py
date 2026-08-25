@@ -72,8 +72,6 @@ def devbox_image(
             str(dockerfile_path),
             "--tag",
             "devbox:latest",
-            "--target",
-            "devbox",
             str(dockerfile_path.parent),
         ],
         capture_output=True,

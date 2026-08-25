@@ -1,6 +1,6 @@
 # Custom OpenShell sandbox image mirroring the devcontainer environment.
 # hadolint ignore=DL3007
-FROM ghcr.io/nvidia/openshell-community/sandboxes/base:latest@sha256:aeef1c63f00e2913ea002ccb3aaf925f338b5c5d70e63576f0d95c16a138044e AS base
+FROM ghcr.io/nvidia/openshell-community/sandboxes/base:latest@sha256:aeef1c63f00e2913ea002ccb3aaf925f338b5c5d70e63576f0d95c16a138044e
 
 # hadolint ignore=DL3002,DL3066
 USER root
@@ -70,12 +70,6 @@ ARG OPENCODE_VERSION=1.18.23
 RUN curl -fsSL https://opencode.ai/install | bash -s -- --version "${OPENCODE_VERSION}" && \
     mv /root/.opencode/bin/opencode /usr/bin/ && \
     chmod +x /usr/bin/opencode
-
-
-##################################################
-FROM base AS devbox
-ARG TARGETARCH=amd64
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # hadolint ignore=DL3008
 RUN apt-get update -q && apt-get install -y --no-install-recommends \
@@ -233,11 +227,3 @@ RUN chmod +rx /usr/local/bin/devbox-entry.sh \
 
 ENTRYPOINT []
 CMD ["/usr/local/bin/devbox-entry.sh"]
-
-
-##################################################
-# Last stage is picked up by OpenShell to create the sandbox image.
-FROM base AS final
-# hadolint ignore=DL3066
-USER sandbox
-WORKDIR /sandbox
