@@ -89,21 +89,39 @@
   // "schedule": ["before 7am on Tuesday"],
   "semanticCommits": "disabled",
   "timezone": "America/New_York",
+  "customDatasources": {
+    "acli": {
+      "defaultRegistryUrlTemplate": "https://raw.githubusercontent.com/atlassian/homebrew-acli/main/Formula/acli.rb",
+      "format": "plain",
+      "transformTemplates": [
+        "{\"releases\": [releases[$contains(version, \"version \")].{\"version\": $replace(version, /.*version \"([^\"]+)\".*/, \"$1\")}]}",
+      ],
+    },
+  },
   "customManagers": [
     {
       "customType": "regex",
-      "managerFilePatterns": ["/\\.sh$/"],
+      "managerFilePatterns": ["/(?:^|/)Dockerfile$/", "/\\.sh$/"],
       "matchStrings": [
-        "#\\s*renovate:\\s*datasource=(?<datasource>[a-z-]+)\\s+depName=(?<depName>[a-zA-Z0-9/@_-]+)(?:\\s+versioning=(?<versioning>[a-z-]+))?\\s+[A-Z0-9_]+_VERSION=\"(?<currentValue>[^\"]+)\""
-      ]
+        "#\\s*renovate:\\s*datasource=(?<datasource>[a-z-.]+)\\s+depName=(?<depName>[a-zA-Z0-9/@_.:-]+)(?:\\s+versioning=(?<versioning>[a-z-]+))?(?:\\s+extractVersion=(?<extractVersion>[^\\s]+))?\\s+(?:ARG\\s+)?[A-Z0-9_]+_VERSION=[\"']?(?<currentValue>[^\"'\\s]+)[\"']?",
+      ],
     },
     {
       "customType": "regex",
       "managerFilePatterns": ["/\\.sh$/"],
       "matchStrings": [
-        "#\\s*renovate:\\s*datasource=(?<datasource>[a-z-]+)\\s+depName=(?<depName>[a-zA-Z0-9/@_-]+)(?:\\s+versioning=(?<versioning>[a-z-]+))?\\s+[^#\\n]*?@(?<currentValue>[a-zA-Z0-9.-]+)"
-      ]
-    }
+        "#\\s*renovate:\\s*datasource=(?<datasource>[a-z-.]+)\\s+depName=(?<depName>[a-zA-Z0-9/@_.:-]+)(?:\\s+versioning=(?<versioning>[a-z-]+))?\\s+[^#\\n]*?@(?<currentValue>[a-zA-Z0-9.-]+)",
+      ],
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/(?:^|/)Dockerfile$/"],
+      "matchStrings": [
+        "(?<depName>(?:@[a-zA-Z0-9_.-]+/)?[a-zA-Z0-9_.-]+)@(?<currentValue>[0-9]+\\.[0-9]+[a-zA-Z0-9.-]*)",
+      ],
+      "datasourceTemplate": "npm",
+      "versioningTemplate": "npm",
+    },
   ],
   "vulnerabilityAlerts": {
     "minimumReleaseAge": "0 days",
