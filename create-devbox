@@ -86,7 +86,11 @@ if [ -d "$HOME/.config/opencode" ]; then
     --volume "$HOME/.config/opencode:/sandbox/.config/opencode" \
   )
 fi
-if [ -f "$HOME/.local/state/opencode/model.json" ]; then
+if [ -d "$HOME/.local/state/opencode" ]; then
+  PARAMS+=(
+    --volume "$HOME/.local/state/opencode:/sandbox/.local/state/opencode" \
+  )
+elif [ -f "$HOME/.local/state/opencode/model.json" ]; then
   PARAMS+=(
     --volume "$HOME/.local/state/opencode/model.json:/sandbox/.local/state/opencode/model.json" \
   )
@@ -117,7 +121,6 @@ podman run -d \
   --user sandbox \
   --userns "keep-id:uid=$SANDBOX_UID,gid=$SANDBOX_GID" \
   --name "$NAME" \
-  --hostname "$NAME" \
   --stop-timeout 0 \
   --device /dev/fuse \
   --device /dev/net/tun \
@@ -169,4 +172,8 @@ podman exec -u 0:0 "$NAME" \
   -exec chown -h "$SANDBOX_UID:$SANDBOX_GID" {} + 2>/dev/null || true
 
 echo "==> Entering container '$NAME'"
-exec podman exec -it -w "$WORKDIR" "$NAME" /bin/bash
+EXEC_OPTS=("-i")
+if [ -t 0 ] && [ -t 1 ]; then
+  EXEC_OPTS+=("-t")
+fi
+exec podman exec "${EXEC_OPTS[@]}" -w "$WORKDIR" "$NAME" /bin/bash

@@ -189,7 +189,9 @@ RUN mkdir -p /sandbox/.config/containers \
     > /sandbox/.config/containers/storage.conf \
     && printf '[containers]\ncgroups = "disabled"\nvolumes = ["/proc:/proc"]\ndefault_sysctls = []\nutsns = "host"\n\n[network]\ndefault_rootless_network_cmd = "slirp4netns"\n' \
     > /sandbox/.config/containers/containers.conf \
-    && chown -R sandbox:sandbox /sandbox/.config
+    && mkdir -p /sandbox/.config/acli /sandbox/.config/gcloud /sandbox/.config/gws /sandbox/.config/opencode /sandbox/.local/state/opencode \
+    && touch /sandbox/.local/state/opencode/model.json /sandbox/.config/gcloud/application_default_credentials.json \
+    && chown -R sandbox:sandbox /sandbox/.config /sandbox/.local
 
 # Two more settings from podman's own reference Podman-in-Podman image
 # (https://github.com/containers/image_build/blob/main/podman/Containerfile),
@@ -206,7 +208,8 @@ ENV BUILDAH_ISOLATION=chroot \
     _CONTAINERS_USERNS_CONFIGURED=""
 
 COPY devbox-entry.sh /usr/local/bin/
-RUN echo "sandbox ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+RUN chmod +rx /usr/local/bin/devbox-entry.sh \
+    && echo "sandbox ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
 
 ENTRYPOINT []
 CMD ["/usr/local/bin/devbox-entry.sh"]

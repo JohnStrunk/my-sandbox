@@ -14,7 +14,8 @@
       "npm": "@ai-sdk/openai-compatible",
       "name": "LiteMaaS (internal)",
       "options": {
-        "baseURL": "https://litellm-litemaas.apps.prod.rhoai.rh-aiservices-bu.com/v1"
+        "baseURL": "https://litemaas.rhoai.rh-aiservices-bu.com/v1",
+        "apiKey": "{env:LITEMAAS_API_KEY}"
       },
       "models": {
         "Qwen3.6-35B-A3B": {
