@@ -152,7 +152,7 @@ guidelines, see the [Local LLM README](local-llm/README.md).
 │   ├── mergify.yml            # Mergify PR automation rules
 │   └── renovate.json5         # Renovate dependency updates
 ├── container/
-│   ├── Dockerfile             # Multi-stage container definition
+│   ├── Dockerfile             # Container definition
 │   └── devbox-entry.sh        # Devbox container entrypoint
 ├── local-llm/
 │   ├── README.md              # Local LLM documentation
