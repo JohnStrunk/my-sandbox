@@ -77,3 +77,36 @@ def test_buildah_env_variables(devbox_image: str):
     )
     assert res.returncode == 0
     assert "BUILDAH=chroot" in res.stdout
+
+
+@pytest.mark.container
+def test_redhat_ca_certificates_installed(devbox_image: str):
+    res = run_in_devbox(
+        devbox_image,
+        [
+            "openssl",
+            "verify",
+            "-CAfile",
+            "/etc/ssl/certs/ca-certificates.crt",
+            "/usr/local/share/ca-certificates/redhat/redhat-rhcsv2-ca.crt",
+        ],
+        user="sandbox",
+    )
+    assert res.returncode == 0
+    assert "OK" in res.stdout
+
+
+@pytest.mark.container
+def test_ca_environment_variables(devbox_image: str):
+    cmd = (
+        "echo SSL=$SSL_CERT_FILE REQUESTS=$REQUESTS_CA_BUNDLE NODE=$NODE_EXTRA_CA_CERTS"
+    )
+    res = run_in_devbox(
+        devbox_image,
+        ["bash", "-c", cmd],
+        user="sandbox",
+    )
+    assert res.returncode == 0
+    assert "SSL=/etc/ssl/certs/ca-certificates.crt" in res.stdout
+    assert "REQUESTS=/etc/ssl/certs/ca-certificates.crt" in res.stdout
+    assert "NODE=/etc/ssl/certs/ca-certificates.crt" in res.stdout
