@@ -26,8 +26,8 @@ This repository provides:
   without host root permissions. Uses `fuse-overlayfs` and dynamic subordinate
   UID/GID delegation (`/etc/subuid` and `/etc/subgid`).
 - **Comprehensive Toolchain**:
-  - **Languages & Runtimes**: Go, Python packaging via `uv` and `uvx`, Node.js,
-    and Playwright with full browser dependencies.
+  - **Languages & Runtimes**: Go, Rust, Python packaging via `uv` and `uvx`,
+    Node.js, and Playwright with full browser dependencies.
   - **Cloud & Productivity CLIs**: GitHub CLI (`gh`), GitLab CLI (`glab`),
     Google Cloud SDK (`gcloud`), Google Workspace CLI (`gws`), Atlassian CLI
     (`acli`), Google Antigravity (`agy`), and OpenCode (`opencode`).
