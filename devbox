@@ -1,0 +1,267 @@
+#!/usr/bin/env bash
+# Single-command launcher: OpenShell replacement for devcontainer launch.
+#
+# Runs as a fully rootless Podman container: the main process keeps the
+# image's built-in "sandbox" account (via `--userns=keep-id`), so files
+# created in the container land on the host owned by the invoking user,
+# with no runtime UID/GID remapping or ownership fix-up required. The image
+# also bundles a rootless, nested Podman (Podman-in-Podman) so the sandbox
+# can build/run its own containers without the outer container needing
+# --privileged or any added Linux capabilities.
+#
+# Bind-mounts the *current working directory* into a per-directory
+# container (named "devbox-<dirname>"). This is meant to be symlinked onto
+# $PATH (e.g. `ln -s /path/to/this/repo/devbox ~/bin/devbox`), so a user can
+# simply `cd` into whatever project they want to work on and run `devbox`:
+#   - If the container for that directory doesn't already exist, it's
+#     created (building the image first, if needed) with the current
+#     directory bind-mounted in.
+#   - If it already exists, this just execs a shell into it (starting it
+#     first if it's currently stopped).
+set -euo pipefail
+
+HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+BIND_DIR="$(realpath "$PWD")"
+NAME="devbox-$(basename "$BIND_DIR")"
+WORKDIR="/sandbox/$(basename "$BIND_DIR")"
+
+usage() {
+  cat <<EOF
+Usage: $(basename "$0") [-r|--remove] [--recreate|--new] [-h|--help]
+
+Bind-mounts the current directory ($BIND_DIR) into a devbox container
+named '$NAME': creating it if it doesn't exist, or exec'ing a shell into
+it if it does.
+
+Options:
+  -r, --remove        Stop and remove the container for this directory
+      --recreate,
+      --new           Remove the container (if it exists) and create a
+                       fresh one
+  -h, --help          Show this help message
+EOF
+}
+
+ACTION="run"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -r | --remove)
+      ACTION="remove"
+      shift
+      ;;
+    --recreate | --new)
+      ACTION="recreate"
+      shift
+      ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
+
+remove_container() {
+  if podman container exists "$NAME" 2>/dev/null; then
+    echo "==> Removing container '$NAME'"
+    podman stop "$NAME" >/dev/null 2>&1 || true
+    podman rm "$NAME" >/dev/null 2>&1 || true
+  else
+    echo "==> Container '$NAME' does not exist; nothing to remove"
+  fi
+}
+
+create_container() {
+  podman build \
+    --file "$HERE/container/Dockerfile" \
+    --tag "devbox:latest" \
+    --target devbox \
+    "$HERE/container"
+
+  # Look up the sandbox account's UID/GID from the image instead of
+  # hardcoding them, so this keeps working if the base image ever changes
+  # them.
+  local sandbox_uid sandbox_gid
+  sandbox_uid="$(podman run --rm "devbox:latest" id -u sandbox)"
+  sandbox_gid="$(podman run --rm "devbox:latest" id -g sandbox)"
+
+  local params=()
+
+  # Local LLM inference server (see local-llm/start-llm-server.sh). If it
+  # has been started on this host, allow this devbox to reach the host's
+  # loopback interface (where the server publishes its port) at the fixed
+  # rootless slirp4netns address 10.0.2.2 -- see opencode.json's
+  # "local-llm" provider and local-llm/README.md for details. Harmless
+  # no-op if the server was never started.
+  local llm_container_name="${LLM_CONTAINER_NAME:-opencode-local-llm}"
+  if podman container exists "$llm_container_name" 2>/dev/null; then
+    params+=(
+      --network slirp4netns:allow_host_loopback=true \
+    )
+  fi
+
+  params+=(
+    --volume "$BIND_DIR:$WORKDIR" \
+  )
+
+  # Atlassian CLI (acli) configuration
+  if [ -d "$HOME/.config/acli" ]; then
+    params+=(
+      --volume "$HOME/.config/acli:/sandbox/.config/acli" \
+    )
+  fi
+
+  # Gemini API
+  if [ -n "${GEMINI_API_KEY:-}" ]; then
+    params+=(
+      --env "GEMINI_API_KEY=${GEMINI_API_KEY:-}" \
+      --env "GOOGLE_GENERATIVE_AI_API_KEY=${GEMINI_API_KEY:-}" \
+    )
+  fi
+
+  # GitHub CLI (gh) configuration
+  if [ -n "${GITHUB_TOKEN:-}" ] || command -v gh >/dev/null 2>&1; then
+    params+=(
+      --env "GITHUB_TOKEN=${GITHUB_TOKEN:-$(gh auth token 2>/dev/null || true)}" \
+    )
+  fi
+
+  # Google Workspace CLI (gws) configuration
+  if [ -d "$HOME/.config/gws" ]; then
+    params+=(
+      --volume "$HOME/.config/gws:/sandbox/.config/gws" \
+    )
+  fi
+
+  # LiteMaaS configuration
+  if [ -n "${LITEMAAS_API_KEY:-}" ]; then
+    params+=(
+      --env "LITEMAAS_API_KEY=${LITEMAAS_API_KEY:-}" \
+    )
+  fi
+
+  # OpenCode configuration
+  if [ -d "$HOME/.config/opencode" ]; then
+    params+=(
+      --volume "$HOME/.config/opencode:/sandbox/.config/opencode" \
+    )
+  fi
+  if [ -d "$HOME/.local/state/opencode" ]; then
+    params+=(
+      --volume "$HOME/.local/state/opencode:/sandbox/.local/state/opencode" \
+    )
+  elif [ -f "$HOME/.local/state/opencode/model.json" ]; then
+    params+=(
+      --volume "$HOME/.local/state/opencode/model.json:/sandbox/.local/state/opencode/model.json" \
+    )
+  fi
+  if [ -f "$HERE/opencode.json" ]; then
+    params+=(
+      --volume "$HERE/opencode.json:/sandbox/opencode.json" \
+    )
+  fi
+
+  # Vertex AI configuration
+  if [ -n "${GOOGLE_CLOUD_PROJECT:-}" ] && [ -n "${VERTEX_LOCATION:-}" ]; then
+    params+=(
+      --env "GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT:-}" \
+      --env "VERTEX_LOCATION=${VERTEX_LOCATION:-global}" \
+    )
+  fi
+  if [ -f "$HOME/.config/gcloud/application_default_credentials.json" ]; then
+    params+=(
+      --volume "$HOME/.config/gcloud/application_default_credentials.json:/sandbox/.config/gcloud/application_default_credentials.json" \
+    )
+  fi
+
+  echo "==> Creating container '$NAME'"
+  podman run -d \
+    --user sandbox \
+    --userns "keep-id:uid=$sandbox_uid,gid=$sandbox_gid" \
+    --name "$NAME" \
+    --stop-timeout 0 \
+    --device /dev/fuse \
+    --device /dev/net/tun \
+    --security-opt label=disable \
+    "${params[@]}" \
+    "devbox:latest"
+
+  # --userns=keep-id gives this container's own user namespace a limited
+  # range of usable IDs (0..N, where N is determined by the invoking host
+  # user's own /etc/subuid/subgid allocation -- it can't be known at image
+  # build time). Nested Podman's subordinate ID delegation (/etc/subuid,
+  # /etc/subgid, consumed by its own newuidmap/newgidmap when it builds a
+  # user namespace for the containers *it* runs) must fit entirely within
+  # that range: per user_namespaces(7), "the mapped user IDs must in turn
+  # have a mapping in the parent user namespace." A range outside it (e.g.
+  # a fixed build-time guess) makes nested `podman run` fail with
+  # "newuidmap: write to uid_map failed: Operation not permitted".
+  #
+  # Compute the actual available range from the running container's own
+  # uid_map/gid_map, and split the delegation into the two chunks before
+  # and after sandbox's own ID (skipping it, and skipping ID 0 -- mapping a
+  # nested ID to the parent's UID/GID 0 additionally requires CAP_SETFCAP,
+  # which sandbox doesn't have; see user_namespaces(7)) to make full use of
+  # the available range. This mirrors podman's own reference image, whose
+  # /etc/subuid delegates "podman:1:999" plus "podman:1001:64535" around
+  # its "podman" user's identity of 1000:
+  # https://github.com/containers/podman/blob/main/contrib/podmanimage/stable/Dockerfile
+  echo "==> Configuring nested Podman's subordinate UID/GID delegation"
+  local max_uid max_gid
+  max_uid="$(podman exec "$NAME" awk '{ if ($1 + $3 - 1 > max) max = $1 + $3 - 1 } END { print max }' /proc/self/uid_map)"
+  max_gid="$(podman exec "$NAME" awk '{ if ($1 + $3 - 1 > max) max = $1 + $3 - 1 } END { print max }' /proc/self/gid_map)"
+  subid_ranges() { # id max -> "sandbox:..." subuid/subgid lines around $id
+    local id="$1" max="$2"
+    [ "$id" -gt 1 ] && echo "sandbox:1:$((id - 1))"
+    [ "$max" -gt "$id" ] && echo "sandbox:$((id + 1)):$((max - id))"
+  }
+  podman exec -u 0:0 "$NAME" sed -i '/^sandbox:/d' /etc/subuid /etc/subgid
+  subid_ranges "$sandbox_uid" "$max_uid" | podman exec -i -u 0:0 "$NAME" tee -a /etc/subuid >/dev/null
+  subid_ranges "$sandbox_gid" "$max_gid" | podman exec -i -u 0:0 "$NAME" tee -a /etc/subgid >/dev/null
+
+  # Podman auto-creates missing parent directories for bind-mounted
+  # files/dirs (e.g. the opencode model.json mount above) as root, ignoring
+  # --userns=keep-id's UID mapping for the container's "sandbox" user. Fix
+  # up any such root-owned directories under /sandbox, without recursing
+  # into the actual bind-mounted content (-xdev stops at the mount
+  # boundary, so this only touches the container's own filesystem, never
+  # files on the host).
+  echo "==> Fixing ownership of any root-owned bind-mount parent directories"
+  podman exec -u 0:0 "$NAME" \
+    find /sandbox -xdev \( ! -uid "$sandbox_uid" -o ! -gid "$sandbox_gid" \) \
+    -exec chown -h "$sandbox_uid:$sandbox_gid" {} + 2>/dev/null || true
+}
+
+enter_container() {
+  if [ "$(podman inspect -f '{{.State.Running}}' "$NAME" 2>/dev/null)" != "true" ]; then
+    echo "==> Starting container '$NAME'"
+    podman start "$NAME" >/dev/null
+  fi
+  echo "==> Entering container '$NAME'"
+  local exec_opts=("-i")
+  if [ -t 0 ] && [ -t 1 ]; then
+    exec_opts+=("-t")
+  fi
+  exec podman exec "${exec_opts[@]}" -w "$WORKDIR" "$NAME" /bin/bash
+}
+
+case "$ACTION" in
+  remove)
+    remove_container
+    ;;
+  recreate)
+    remove_container
+    create_container
+    enter_container
+    ;;
+  run)
+    if ! podman container exists "$NAME" 2>/dev/null; then
+      create_container
+    fi
+    enter_container
+    ;;
+esac

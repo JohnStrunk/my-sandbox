@@ -2,7 +2,7 @@
 
 Runs a local, CPU-based LLM inference server (via [Ollama](https://ollama.com))
 in a Podman container on your local machine, so that every devbox created
-from this repo (via [`../create-devbox`](../create-devbox)) can use it as an
+from this repo (via [`../devbox`](../devbox)) can use it as an
 OpenCode model provider without needing internet access or API keys.
 
 This is meant to be started **once, directly on your local machine** (the
@@ -57,7 +57,7 @@ Stop it:
 
 ### Connecting from a devbox
 
-`../create-devbox` automatically detects the running `opencode-local-llm`
+`../devbox` automatically detects the running `opencode-local-llm`
 container and, if found, starts new devboxes with
 `--network slirp4netns:allow_host_loopback=true`. This is rootless Podman's
 standard way to let a container reach services bound to the _host's own_
@@ -100,7 +100,7 @@ LLM_CONTEXT_LENGTH=65536 ./start-llm-server.sh
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `LLM_IMAGE` | pinned `ollama/ollama` | Ollama server image |
-| `LLM_CONTAINER_NAME` | `opencode-local-llm` | Container name; also what `create-devbox` looks for |
+| `LLM_CONTAINER_NAME` | `opencode-local-llm` | Container name; also what `devbox` looks for |
 | `LLM_VOLUME_NAME` | `opencode-local-llm-data` | Named volume holding downloaded model weights |
 | `LLM_PORT` | `11434` | Host port (127.0.0.1) the API is published on |
 | `LLM_CONTEXT_LENGTH` | `131072` | Context window (tokens) applied to served models |
@@ -108,7 +108,7 @@ LLM_CONTEXT_LENGTH=65536 ./start-llm-server.sh
 
 If you change `LLM_PORT` or `LLM_CONTAINER_NAME`, update
 [`../opencode.json`](../opencode.json)'s `local-llm.options.baseURL` (and
-`create-devbox`'s `LLM_CONTAINER_NAME` default) to match.
+`devbox`'s `LLM_CONTAINER_NAME` default) to match.
 
 Lower `LLM_CONTEXT_LENGTH` (e.g. to `32768`) if you hit out-of-memory
 errors; both models also support smaller contexts fine.

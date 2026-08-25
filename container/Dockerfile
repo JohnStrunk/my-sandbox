@@ -92,7 +92,7 @@ RUN npm install -g --no-fund \
 # containers). This runs fully rootless, nested inside the also-rootless
 # outer devbox container: no --privileged and no added Linux capabilities
 # are needed on the outer container, just /dev/fuse, /dev/net/tun, and (on
-# SELinux hosts) a disabled security label -- see create-devbox. This setup
+# SELinux hosts) a disabled security label -- see devbox. This setup
 # follows the pattern documented by Podman's own maintainers for rootless
 # Podman-in-Podman:
 # https://www.redhat.com/en/blog/podman-inside-container ("Rootless Podman
@@ -133,13 +133,13 @@ RUN /usr/sbin/setcap cap_setuid+eip /usr/bin/newuidmap \
 # sandbox's /etc/subuid and /etc/subgid entries, needed so its own nested
 # Podman can build a further user namespace for the containers *it* runs,
 # are NOT set here at build time: the only subordinate ID range actually
-# usable is whatever range keep-id's remapping (see create-devbox) leaves
+# usable is whatever range keep-id's remapping (see devbox) leaves
 # available inside *this* container's own user namespace, which depends on
 # the invoking host user's own /etc/subuid allocation and isn't known until
 # the container is started. A build-time guess here (e.g. "100000:65536")
 # would almost always point outside that available range and fail with
 # EPERM from newuidmap ("the mapped user IDs must have a mapping in the
-# parent user namespace" -- see user_namespaces(7)). create-devbox computes
+# parent user namespace" -- see user_namespaces(7)). devbox computes
 # and writes the correct entries after starting the container.
 
 # Rootless Podman-in-Podman needs fuse-overlayfs: nesting the kernel's own
@@ -182,7 +182,7 @@ RUN /usr/sbin/setcap cap_setuid+eip /usr/bin/newuidmap \
 #     bridge plugin, which needs bridge-creation privileges the outer
 #     rootless container doesn't have.
 # This combination (together with the newuidmap/newgidmap fix above and
-# create-devbox's dynamic subordinate ID setup) follows the pattern
+# devbox's dynamic subordinate ID setup) follows the pattern
 # documented by Podman's own maintainers, cited above.
 RUN mkdir -p /sandbox/.config/containers \
     && printf '[storage]\ndriver = "overlay"\n\n[storage.options]\nmount_program = "/usr/bin/fuse-overlayfs"\nmountopt = "nodev,fsync=0"\n' \
@@ -200,9 +200,9 @@ RUN mkdir -p /sandbox/.config/containers \
 #   - BUILDAH_ISOLATION=chroot: avoids buildah's default namespace-based
 #     RUN-step isolation, which needs more namespace nesting than may be
 #     available depending on the host's own subuid/subgid allocation (see
-#     create-devbox).
+#     devbox).
 #   - _CONTAINERS_USERNS_CONFIGURED="": tells Podman/Buildah that the user
-#     namespace/subordinate ID setup is already handled (by create-devbox),
+#     namespace/subordinate ID setup is already handled (by devbox),
 #     so they shouldn't try to auto-configure or re-exec into one themselves.
 ENV BUILDAH_ISOLATION=chroot \
     _CONTAINERS_USERNS_CONFIGURED=""
