@@ -40,6 +40,13 @@ RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${TARGETARCH}.tar.gz" -o
     && rm /tmp/go.tgz
 ENV PATH="/usr/local/go/bin:${PATH}"
 
+# Rust toolchain
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH="/usr/local/cargo/bin:${PATH}"
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path \
+    && chmod -R a+w "${RUSTUP_HOME}" "${CARGO_HOME}"
+
 # uv (Python packaging)
 # renovate: datasource=github-releases depName=astral-sh/uv
 ARG UV_VERSION=0.12.5
