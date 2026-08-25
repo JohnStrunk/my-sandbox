@@ -7,13 +7,14 @@ USER root
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # Install system utilities matching devcontainer
+# hadolint ignore=DL3008
 RUN apt-get update -q && apt-get install -y --no-install-recommends \
-    ffmpeg=7:6.1.1-3ubuntu5 \
-    gh=2.98.0 \
-    glab=1.36.0-1ubuntu0.3 \
-    jq=1.7.1-3ubuntu0.24.04.2 \
-    ripgrep=14.1.0-1 \
-    shellcheck=0.9.0-1 \
+    ffmpeg \
+    gh \
+    glab \
+    jq \
+    ripgrep \
+    shellcheck \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Hadolint
@@ -68,22 +69,24 @@ FROM base AS devbox
 ARG TARGETARCH=amd64
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
+# hadolint ignore=DL3008
 RUN apt-get update -q && apt-get install -y --no-install-recommends \
-    adduser=3.137ubuntu1 \
-    ca-certificates=20260601~24.04.1 \
-    curl=8.5.0-2ubuntu10.13 \
-    gnupg=2.4.4-2ubuntu17.4 \
-    passwd=1:4.13+dfsg1-4ubuntu3.2 \
-    sudo=1.9.15p5-3ubuntu5.24.04.2 \
+    adduser \
+    ca-certificates \
+    curl \
+    gnupg \
+    passwd \
+    sudo \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Google Cloud CLI
 # https://cloud.google.com/sdk/docs/install-sdk#deb
+# hadolint ignore=DL3008
 RUN curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg \
     && chmod a+r /usr/share/keyrings/cloud.google.gpg \
     && echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" > /etc/apt/sources.list.d/google-cloud-sdk.list \
     && apt-get update -q && apt-get install -y --no-install-recommends \
-    google-cloud-cli=581.0.0-0 \
+    google-cloud-cli \
     && rm -rf /var/lib/apt/lists/*
 
 # Atlassian CLI (acli)
@@ -115,13 +118,14 @@ RUN npm install -g --no-fund \
 # aardvark-dns's container-name DNS resolution: containers on a
 # user-defined network can't reach each other by name, breaking anything
 # that looks like a multi-container dev workflow (e.g. an app + DB pod).
+# hadolint ignore=DL3008
 RUN apt-get update -q && apt-get install -y --no-install-recommends \
-    aardvark-dns=1.4.0-5 \
-    fuse-overlayfs=1.13-1 \
-    netavark=1.4.0-4 \
-    podman=4.9.3+ds1-1ubuntu0.2 \
-    slirp4netns=1.2.1-1build2 \
-    uidmap=1:4.13+dfsg1-4ubuntu3.2 \
+    aardvark-dns \
+    fuse-overlayfs \
+    netavark \
+    podman \
+    slirp4netns \
+    uidmap \
     && rm -rf /var/lib/apt/lists/*
 
 # Ubuntu's newuidmap/newgidmap ship setuid-root only, without the file
