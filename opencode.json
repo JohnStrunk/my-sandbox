@@ -58,7 +58,9 @@
   },
   "permission": {
     "external_directory": {
-      "/tmp/**": "allow"
+      "/tmp/**": "allow",
+      "/sandbox/**": "allow",
+      "/sandbox/.*": "ask"
     }
   }
 }
