@@ -4,6 +4,9 @@ from tests.conftest import run_in_devbox
 
 BINARIES = [
     ("go", ["go", "version"]),
+    ("rustc", ["rustc", "--version"]),
+    ("cargo", ["cargo", "--version"]),
+    ("rustup", ["rustup", "--version"]),
     ("uv", ["uv", "--version"]),
     ("uvx", ["uvx", "--version"]),
     ("node", ["node", "--version"]),
