@@ -18,11 +18,13 @@ RUN apt-get update -q && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Hadolint
+# renovate: datasource=github-releases depName=hadolint/hadolint
 ARG HADOLINT_VERSION=2.12.0
 RUN curl -sSL "https://github.com/hadolint/hadolint/releases/download/v${HADOLINT_VERSION}/hadolint-Linux-x86_64" -o /usr/local/bin/hadolint \
     && chmod +x /usr/local/bin/hadolint
 
 # Go toolchain
+# renovate: datasource=golang-version depName=golang
 ARG GO_VERSION=1.23.4
 ARG TARGETARCH=amd64
 RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${TARGETARCH}.tar.gz" -o /tmp/go.tgz \
@@ -31,7 +33,9 @@ RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${TARGETARCH}.tar.gz" -o
 ENV PATH="/usr/local/go/bin:${PATH}"
 
 # uv (Python packaging)
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
+# renovate: datasource=github-releases depName=astral-sh/uv
+ARG UV_VERSION=0.12.5
+RUN curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | sh \
     && mv /root/.local/bin/uv /root/.local/bin/uvx /usr/local/bin/
 ENV UV_CACHE_DIR=/sandbox/.uv_cache
 
@@ -40,15 +44,23 @@ ENV UV_CACHE_DIR=/sandbox/.uv_cache
 # hadolint ignore=DL3016
 RUN npm install -g --no-fund \
     markdownlint-cli2@0.23.0 \
-    @playwright/cli \
+    @playwright/cli@0.1.18 \
     && npx -y playwright install --with-deps
 
 # Install Google Antigravity CLI
-RUN curl -fsSL https://antigravity.google/cli/install.sh | bash \
-    && mv /root/.local/bin/agy /usr/local/bin/
+# renovate: datasource=github-releases depName=google-antigravity/antigravity-cli
+ARG AGY_VERSION=1.1.20
+RUN arch="${TARGETARCH}" && [ "$arch" = "amd64" ] && arch="x64" \
+    && curl -fsSL "https://github.com/google-antigravity/antigravity-cli/releases/download/${AGY_VERSION}/agy_cli_linux_${arch}.tar.gz" -o /tmp/agy.tgz \
+    && tar -C /tmp -xzf /tmp/agy.tgz antigravity \
+    && mv /tmp/antigravity /usr/local/bin/agy \
+    && chmod +x /usr/local/bin/agy \
+    && rm /tmp/agy.tgz
 
 # Install OpenCode (overwrites the outdated version in the base image)
-RUN curl -fsSL https://opencode.ai/install | bash && \
+# renovate: datasource=github-releases depName=anomalyco/opencode
+ARG OPENCODE_VERSION=1.18.23
+RUN curl -fsSL https://opencode.ai/install | bash -s -- --version "${OPENCODE_VERSION}" && \
     mv /root/.opencode/bin/opencode /usr/bin/ && \
     chmod +x /usr/bin/opencode
 
@@ -79,14 +91,16 @@ RUN curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dea
     && rm -rf /var/lib/apt/lists/*
 
 # Atlassian CLI (acli)
-RUN curl -L "https://acli.atlassian.com/linux/latest/acli_linux_${TARGETARCH}.tar.gz" -o /tmp/acli.tar.gz \
+# renovate: datasource=custom.acli depName=acli
+ARG ACLI_VERSION=1.3.29-stable
+RUN curl -L "https://acli.atlassian.com/linux/${ACLI_VERSION}/acli_${ACLI_VERSION}_linux_${TARGETARCH}.tar.gz" -o /tmp/acli.tar.gz \
     && tar xzf /tmp/acli.tar.gz -C /tmp/ \
     && mv /tmp/acli_*_linux_${TARGETARCH}/acli /usr/local/bin/acli \
     && rm -rf /tmp/acli.tar.gz /tmp/acli_*_linux_${TARGETARCH}
 
 # hadolint ignore=DL3016
 RUN npm install -g --no-fund \
-    @googleworkspace/cli
+    @googleworkspace/cli@0.22.5
 
 # Podman (for Podman-in-Podman support, so the sandbox can build/run its own
 # containers). This runs fully rootless, nested inside the also-rootless
