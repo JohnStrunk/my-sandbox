@@ -7,8 +7,13 @@
     "opencode"
   ],
   "formatter": true,
-  "model": "google-vertex/claude-sonnet-5@default",
-  "small_model": "google-vertex/claude-haiku-4-5@20251001",
+  "model": "google-vertex/gemini-3.7-flash",
+  "small_model": "google-vertex/gemini-3.7-flash",
+  "agent": {
+    "title": {
+      "variant": "low"
+    }
+  },
   "provider": {
     "litemaas": {
       "npm": "@ai-sdk/openai-compatible",
@@ -49,6 +54,11 @@
           }
         }
       }
+    }
+  },
+  "permission": {
+    "external_directory": {
+      "/tmp/**": "allow"
     }
   }
 }
