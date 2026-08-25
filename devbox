@@ -229,8 +229,12 @@ create_container() {
   max_gid="$(podman exec "$NAME" awk '{ if ($1 + $3 - 1 > max) max = $1 + $3 - 1 } END { print max }' /proc/self/gid_map)"
   subid_ranges() { # id max -> "sandbox:..." subuid/subgid lines around $id
     local id="$1" max="$2"
-    [ "$id" -gt 1 ] && echo "sandbox:1:$((id - 1))"
-    [ "$max" -gt "$id" ] && echo "sandbox:$((id + 1)):$((max - id))"
+    if [ "$id" -gt 1 ]; then
+      echo "sandbox:1:$((id - 1))"
+    fi
+    if [ "$max" -gt "$id" ]; then
+      echo "sandbox:$((id + 1)):$((max - id))"
+    fi
   }
   podman exec -u 0:0 "$NAME" sed -i '/^sandbox:/d' /etc/subuid /etc/subgid
   subid_ranges "$sandbox_uid" "$max_uid" | podman exec -i -u 0:0 "$NAME" tee -a /etc/subuid >/dev/null

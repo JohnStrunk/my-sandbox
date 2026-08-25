@@ -1,3 +1,7 @@
 .env
 /.ruff_cache/
 /.uv_cache/
+/.venv/
+/.pytest_cache/
+/__pycache__/
+*.pyc
