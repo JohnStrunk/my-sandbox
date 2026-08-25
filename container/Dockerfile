@@ -42,7 +42,7 @@ ENV UV_CACHE_DIR=/sandbox/.uv_cache
 # markdownlint-cli2 version must match the rev in .pre-commit-config.yaml -
 # its pre-commit hook uses `language: system` and runs this binary directly.
 RUN npm install -g --no-fund \
-    markdownlint-cli2@0.23.0 \
+    markdownlint-cli2@0.23.2 \
     @playwright/cli@0.1.18 \
     && npx -y playwright install --with-deps
 
