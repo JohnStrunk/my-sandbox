@@ -31,6 +31,15 @@ def test_opencode_providers_configuration(opencode_json_path: Path):
     assert "gpt-oss:20b" in models
     assert "qwen3.8:27b" in models
 
+    # Check Switchyard proxy provider configuration
+    assert "switchyard-proxy" in providers
+    switchyard = providers["switchyard-proxy"]
+    assert switchyard.get("options", {}).get("baseURL") == "http://10.0.2.2:4000/v1"
+    sy_models = switchyard.get("models", {})
+    assert "switchyard-auto" in sy_models
+    assert "switchyard-stage" in sy_models
+    assert "switchyard-random" in sy_models
+
 
 @pytest.mark.container
 def test_opencode_permissions(opencode_json_path: Path):

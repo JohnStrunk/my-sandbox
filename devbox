@@ -103,14 +103,16 @@ create_container() {
 
   local params=()
 
-  # Local LLM inference server (see local-llm/start-llm-server.sh). If it
-  # has been started on this host, allow this devbox to reach the host's
-  # loopback interface (where the server publishes its port) at the fixed
-  # rootless slirp4netns address 10.0.2.2 -- see opencode.json's
-  # "local-llm" provider and local-llm/README.md for details. Harmless
-  # no-op if the server was never started.
+  # Local LLM inference server (see local-llm/start-llm-server.sh) and
+  # Switchyard proxy (see switchyard-proxy/start-switchyard-proxy.sh). If
+  # either has been started on this host, allow this devbox to reach the host's
+  # loopback interface (where the servers publish their ports) at the fixed
+  # rootless slirp4netns address 10.0.2.2 -- see opencode.json's "local-llm"
+  # and "switchyard-proxy" providers for details. Harmless no-op if neither
+  # server was started.
   local llm_container_name="${LLM_CONTAINER_NAME:-opencode-local-llm}"
-  if podman container exists "$llm_container_name" 2>/dev/null; then
+  local switchyard_container_name="${SWITCHYARD_CONTAINER_NAME:-opencode-switchyard-proxy}"
+  if podman container exists "$llm_container_name" 2>/dev/null || podman container exists "$switchyard_container_name" 2>/dev/null; then
     params+=(
       --network slirp4netns:allow_host_loopback=true \
     )

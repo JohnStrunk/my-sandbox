@@ -1,0 +1,52 @@
+schema_version = 1
+
+[llm_clients.gemini]
+format = "openai_chat"
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+api_key_env = "GEMINI_API_KEY"  # pragma: allowlist secret
+
+[llm_clients.litemaas]
+format = "openai_chat"
+base_url = "https://litemaas.rhoai.rh-aiservices-bu.com/v1"
+api_key_env = "LITEMAAS_API_KEY"  # pragma: allowlist secret
+
+[targets.gemini_flash]
+id = "gemini-2.5-flash"
+llm_client = "gemini"
+
+[targets.qwen]
+id = "Qwen3.6-35B-A3B"
+llm_client = "litemaas"
+
+[routes.auto]
+id = "switchyard-auto"
+type = "llm_classifier"
+mode = "capability"
+classifier_target = "gemini_flash"
+weak_target = "qwen"
+strong_target = "gemini_flash"
+base_threshold = 0.5
+
+[routes.stage]
+id = "switchyard-stage"
+type = "stage_router"
+capable_target = "gemini_flash"
+efficient_target = "qwen"
+picker = "efficient_first"
+confidence_threshold = 0.5
+
+[routes.random]
+id = "switchyard-random"
+type = "random"
+targets = ["gemini_flash", "qwen"]
+weights = [1, 1]
+
+[routes.direct_gemini]
+id = "switchyard-gemini"
+type = "passthrough"
+target = "gemini_flash"
+
+[routes.direct_qwen]
+id = "switchyard-qwen"
+type = "passthrough"
+target = "qwen"
