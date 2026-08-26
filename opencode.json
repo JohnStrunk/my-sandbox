@@ -70,6 +70,36 @@
           }
         }
       }
+    },
+    "switchyard-proxy": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Switchyard Proxy (autorouting)",
+      "options": {
+        "baseURL": "http://10.0.2.2:4000/v1"
+      },
+      "models": {
+        "switchyard-auto": {
+          "name": "Switchyard Auto-router (Capability Classifier)",
+          "limit": {
+            "context": 131072,
+            "output": 32768
+          }
+        },
+        "switchyard-stage": {
+          "name": "Switchyard Stage-router (Signals & Progress)",
+          "limit": {
+            "context": 131072,
+            "output": 32768
+          }
+        },
+        "switchyard-random": {
+          "name": "Switchyard Random-router (A/B Split)",
+          "limit": {
+            "context": 131072,
+            "output": 32768
+          }
+        }
+      }
     }
   },
   "permission": {

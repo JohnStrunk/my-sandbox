@@ -8,6 +8,7 @@ dependencies = []
 
 [project.optional-dependencies]
 test = [
+    "nemo-switchyard==0.2.0",
     "pytest==9.1.1",
     "pytest-testinfra==10.2.2",
     "pytest-mock==3.15.1",

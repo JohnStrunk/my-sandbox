@@ -17,6 +17,9 @@ This repository provides:
 - **`litellm-proxy/`**: An LLM autorouting proxy server based on
   [LiteLLM](https://docs.litellm.ai/docs/proxy/auto_routing), enabling dynamic
   complexity-based model routing across multiple model tiers.
+- **`switchyard-proxy/`**: An LLM autorouting proxy server based on
+  [Switchyard](https://github.com/NVIDIA-NeMo/Switchyard), providing protocol
+  translation and dynamic model routing across providers.
 
 ---
 
@@ -168,6 +171,14 @@ guidelines, see the [Local LLM README](local-llm/README.md).
 │   ├── start-proxy-server.sh  # Script to start LiteLLM autorouting proxy
 │   ├── status-proxy-server.sh # Script to check proxy status
 │   └── stop-proxy-server.sh   # Script to stop proxy server
+├── switchyard-proxy/
+│   ├── README.md              # Switchyard proxy documentation
+│   ├── Dockerfile             # Switchyard proxy container definition
+│   ├── routes.toml            # Switchyard routing configuration
+│   ├── server.py              # Switchyard server runner script
+│   ├── start-switchyard-proxy.sh # Script to start Switchyard proxy container
+│   ├── status-switchyard-proxy.sh # Script to check Switchyard proxy status
+│   └── stop-switchyard-proxy.sh # Script to stop Switchyard proxy container
 ├── devbox                     # Main launcher script
 ├── opencode.json              # OpenCode model and provider configuration
 └── .pre-commit-config.yaml    # Pre-commit hook definitions

@@ -28,6 +28,11 @@ def litellm_proxy_dir(repo_root: Path) -> Path:
 
 
 @pytest.fixture(scope="session")
+def switchyard_proxy_dir(repo_root: Path) -> Path:
+    return repo_root / "switchyard-proxy"
+
+
+@pytest.fixture(scope="session")
 def opencode_json_path(repo_root: Path) -> Path:
     return repo_root / "opencode.json"
 
