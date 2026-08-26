@@ -34,7 +34,7 @@ if [ "$1" = "run" ] && [ "$2" = "--rm" ]; then
 fi
 
 if [ "$1" = "container" ] && [ "$2" = "exists" ]; then
-    if [ "$3" = "mock-llm-running" ]; then
+    if [ "$3" = "mock-llm-running" ] || [ "$3" = "mock-proxy-running" ]; then
         exit 0
     fi
     # Default container does not exist
@@ -118,6 +118,23 @@ def test_devbox_litemaas_env(devbox_path: Path, mock_podman_env, tmp_path: Path)
 
 
 @pytest.mark.unit
+def test_devbox_litellm_env(devbox_path: Path, mock_podman_env, tmp_path: Path):
+    env, log_file = mock_podman_env
+    env["LITELLM_API_KEY"] = "mock-litellm-token"  # pragma: allowlist secret
+
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0
+
+    calls = parse_podman_calls(log_file)
+    run_call = next((c for c in calls if c and c[0] == "run" and "-d" in c), None)
+    assert run_call is not None
+    assert "LITELLM_API_KEY=mock-litellm-token" in run_call
+
+
+@pytest.mark.unit
 def test_devbox_vertex_env(devbox_path: Path, mock_podman_env, tmp_path: Path):
     env, log_file = mock_podman_env
     env["GOOGLE_CLOUD_PROJECT"] = "my-gcp-project"
@@ -142,6 +159,26 @@ def test_devbox_llm_loopback_network(
 ):
     env, log_file = mock_podman_env
     env["LLM_CONTAINER_NAME"] = "mock-llm-running"
+
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0
+
+    calls = parse_podman_calls(log_file)
+    run_call = next((c for c in calls if c and c[0] == "run" and "-d" in c), None)
+    assert run_call is not None
+    assert "--network" in run_call
+    assert "slirp4netns:allow_host_loopback=true" in run_call
+
+
+@pytest.mark.unit
+def test_devbox_proxy_loopback_network(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, log_file = mock_podman_env
+    env["PROXY_CONTAINER_NAME"] = "mock-proxy-running"
 
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()

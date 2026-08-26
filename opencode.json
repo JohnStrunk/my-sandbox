@@ -54,6 +54,22 @@
           }
         }
       }
+    },
+    "litellm-proxy": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "LiteLLM Proxy (Auto Routing)",
+      "options": {
+        "baseURL": "http://10.0.2.2:4000/v1"
+      },
+      "models": {
+        "smart-router": {
+          "name": "Smart Router (Auto-routed)",
+          "limit": {
+            "context": 131072,
+            "output": 32768
+          }
+        }
+      }
     }
   },
   "permission": {

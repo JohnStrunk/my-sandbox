@@ -14,6 +14,9 @@ This repository provides:
 - **`local-llm/`**: A self-contained local LLM inference server based on
   [Ollama](https://ollama.com), enabling offline or local AI model execution
   with zero cloud API dependencies.
+- **`litellm-proxy/`**: An LLM autorouting proxy server based on
+  [LiteLLM](https://docs.litellm.ai/docs/proxy/auto_routing), enabling dynamic
+  complexity-based model routing across multiple model tiers.
 
 ---
 
@@ -159,6 +162,12 @@ guidelines, see the [Local LLM README](local-llm/README.md).
 │   ├── start-llm-server.sh    # Script to start local Ollama server
 │   ├── status-llm-server.sh   # Script to check Ollama status
 │   └── stop-llm-server.sh     # Script to stop Ollama server
+├── litellm-proxy/
+│   ├── config.yaml            # LiteLLM routing and model configuration
+│   ├── README.md              # LiteLLM proxy documentation
+│   ├── start-proxy-server.sh  # Script to start LiteLLM autorouting proxy
+│   ├── status-proxy-server.sh # Script to check proxy status
+│   └── stop-proxy-server.sh   # Script to stop proxy server
 ├── devbox                     # Main launcher script
 ├── opencode.json              # OpenCode model and provider configuration
 └── .pre-commit-config.yaml    # Pre-commit hook definitions

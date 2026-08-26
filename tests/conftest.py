@@ -23,6 +23,11 @@ def local_llm_dir(repo_root: Path) -> Path:
 
 
 @pytest.fixture(scope="session")
+def litellm_proxy_dir(repo_root: Path) -> Path:
+    return repo_root / "litellm-proxy"
+
+
+@pytest.fixture(scope="session")
 def opencode_json_path(repo_root: Path) -> Path:
     return repo_root / "opencode.json"
 

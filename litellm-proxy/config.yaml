@@ -1,0 +1,44 @@
+---
+model_list:
+  - model_name: gemini-flash
+    litellm_params:
+      model: gemini/gemini-2.5-flash
+      api_key: os.environ/GEMINI_API_KEY  # pragma: allowlist secret
+  - model_name: litemaas-qwen
+    litellm_params:
+      model: openai/Qwen3.6-35B-A3B
+      api_base: https://litemaas.rhoai.rh-aiservices-bu.com/v1
+      api_key: os.environ/LITEMAAS_API_KEY  # pragma: allowlist secret
+  - model_name: local-gpt-oss
+    litellm_params:
+      model: openai/gpt-oss:20b
+      api_base: http://10.0.2.2:11434/v1
+      api_key: "ollama"  # pragma: allowlist secret
+  - model_name: local-qwen
+    litellm_params:
+      model: openai/qwen3.8:27b
+      api_base: http://10.0.2.2:11434/v1
+      api_key: "ollama"  # pragma: allowlist secret
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY  # pragma: allowlist secret
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY  # pragma: allowlist secret
+  - model_name: claude-sonnet-4-6
+    litellm_params:
+      model: anthropic/claude-sonnet-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY  # pragma: allowlist secret
+  - model_name: smart-router
+    litellm_params:
+      model: auto_router/complexity_router
+      drop_params: true
+      complexity_router_config:
+        tiers:
+          SIMPLE: gemini-flash
+          MEDIUM: litemaas-qwen
+          COMPLEX: litemaas-qwen
+          REASONING: litemaas-qwen
+      complexity_router_default_model: gemini-flash
