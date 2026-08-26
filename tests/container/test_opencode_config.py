@@ -31,6 +31,13 @@ def test_opencode_providers_configuration(opencode_json_path: Path):
     assert "gpt-oss:20b" in models
     assert "qwen3.8:27b" in models
 
+    # Check LiteLLM proxy provider configuration
+    assert "litellm-proxy" in providers
+    litellm_proxy = providers["litellm-proxy"]
+    assert litellm_proxy.get("options", {}).get("baseURL") == "http://10.0.2.2:4000/v1"
+    proxy_models = litellm_proxy.get("models", {})
+    assert "smart-router" in proxy_models
+
     # Check Switchyard proxy provider configuration
     assert "switchyard-proxy" in providers
     switchyard = providers["switchyard-proxy"]
