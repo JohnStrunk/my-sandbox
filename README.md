@@ -41,7 +41,8 @@ This repository provides:
     `markdownlint-cli2`, and `ffmpeg`.
 - **Automatic Host Credential & Config Passthrough**: `devbox` detects and
   bind-mounts existing host configurations (GitHub tokens, Google Cloud ADC,
-  Atlassian CLI, Google Workspace, LiteMaaS API keys, and OpenCode state).
+  Atlassian CLI, Google Workspace, LiteMaaS API keys, and OpenCode
+  configuration, state, and session data).
 - **Local LLM Integration**: Devboxes automatically detect running local
   inference containers and configure slirp4netns loopback routing to connect to
   local Ollama models via `10.0.2.2:11434`.

@@ -180,7 +180,12 @@ create_container() {
     )
   fi
 
-  # OpenCode configuration
+  # OpenCode session data and configuration
+  local opencode_data_dir="${XDG_DATA_HOME:-$HOME/.local/share}/opencode"
+  mkdir -p "$opencode_data_dir"
+  params+=(
+    --volume "$opencode_data_dir:/sandbox/.local/share/opencode" \
+  )
   if [ -d "$HOME/.config/opencode" ]; then
     params+=(
       --volume "$HOME/.config/opencode:/sandbox/.config/opencode" \
