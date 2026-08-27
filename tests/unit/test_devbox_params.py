@@ -194,6 +194,25 @@ def test_devbox_does_not_add_github_mcp_without_credentials(
 
 
 @pytest.mark.unit
+def test_devbox_gitlab_env(devbox_path: Path, mock_podman_env, tmp_path: Path):
+    env, log_file = mock_podman_env
+    env["GITLAB_HOST"] = "gitlab.example.com"
+    env["GITLAB_TOKEN"] = "mock-gitlab-token"  # pragma: allowlist secret
+
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0
+
+    calls = parse_podman_calls(log_file)
+    run_call = next((c for c in calls if c and c[0] == "run" and "-d" in c), None)
+    assert run_call is not None
+    assert "GITLAB_HOST=gitlab.example.com" in run_call
+    assert "GITLAB_TOKEN=mock-gitlab-token" in run_call  # pragma: allowlist secret
+
+
+@pytest.mark.unit
 def test_devbox_litellm_env(devbox_path: Path, mock_podman_env, tmp_path: Path):
     env, log_file = mock_podman_env
     env["LITELLM_API_KEY"] = "mock-litellm-token"  # pragma: allowlist secret
