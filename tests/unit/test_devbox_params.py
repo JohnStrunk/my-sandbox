@@ -223,6 +223,7 @@ def test_devbox_config_volume_mounts(
     fake_home = tmp_path / "fakehome"
     fake_home.mkdir()
     env["HOME"] = str(fake_home)
+    env.pop("XDG_DATA_HOME", None)
 
     (fake_home / ".config" / "acli").mkdir(parents=True)
     (fake_home / ".config" / "gws").mkdir(parents=True)
@@ -241,3 +242,35 @@ def test_devbox_config_volume_mounts(
     assert any(":/sandbox/.config/acli" in v for v in volumes)
     assert any(":/sandbox/.config/gws" in v for v in volumes)
     assert any(":/sandbox/.config/opencode" in v for v in volumes)
+    expected_data_dir = fake_home / ".local" / "share" / "opencode"
+    assert expected_data_dir.is_dir()
+    assert any(
+        f"{expected_data_dir}:/sandbox/.local/share/opencode" in v for v in volumes
+    )
+
+
+@pytest.mark.unit
+def test_devbox_opencode_data_volume_honors_xdg_data_home(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, log_file = mock_podman_env
+    fake_home = tmp_path / "fakehome"
+    fake_home.mkdir()
+    xdg_data_home = tmp_path / "xdg-data"
+    env["HOME"] = str(fake_home)
+    env["XDG_DATA_HOME"] = str(xdg_data_home)
+
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0
+
+    calls = parse_podman_calls(log_file)
+    run_call = next((c for c in calls if c and c[0] == "run" and "-d" in c), None)
+    assert run_call is not None
+    expected_data_dir = xdg_data_home / "opencode"
+    assert expected_data_dir.is_dir()
+    assert any(
+        f"{expected_data_dir}:/sandbox/.local/share/opencode" in v for v in run_call
+    )
