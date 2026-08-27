@@ -173,6 +173,13 @@ create_container() {
     )
   fi
 
+  # OpenAI configuration
+  if [ -n "${OPENAI_API_KEY:-}" ]; then
+    params+=(
+      --env "OPENAI_API_KEY=${OPENAI_API_KEY:-}" \
+    )
+  fi
+
   # OpenCode configuration
   if [ -d "$HOME/.config/opencode" ]; then
     params+=(
