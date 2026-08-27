@@ -148,6 +148,14 @@ create_container() {
     )
   fi
 
+  # GitLab CLI (glab) configuration
+  if [ -n "${GITLAB_TOKEN:-}" ]; then
+    params+=(
+      --env "GITLAB_HOST=${GITLAB_HOST:-gitlab.com}" \
+      --env "GITLAB_TOKEN=${GITLAB_TOKEN:-}" \
+    )
+  fi
+
   # Google Workspace CLI (gws) configuration
   if [ -d "$HOME/.config/gws" ]; then
     params+=(
