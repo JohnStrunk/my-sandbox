@@ -120,6 +120,80 @@ def test_devbox_litemaas_env(devbox_path: Path, mock_podman_env, tmp_path: Path)
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("token_name", ["GH_TOKEN", "GITHUB_TOKEN"])
+def test_devbox_github_mcp_config_from_token(
+    devbox_path: Path, mock_podman_env, tmp_path: Path, token_name: str
+):
+    env, log_file = mock_podman_env
+    env.pop("GH_TOKEN", None)
+    env.pop("GITHUB_TOKEN", None)
+    env[token_name] = "mock-github-token"  # pragma: allowlist secret
+
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0
+
+    calls = parse_podman_calls(log_file)
+    run_call = next((c for c in calls if c and c[0] == "run" and "-d" in c), None)
+    assert run_call is not None
+    assert "GH_TOKEN=mock-github-token" in run_call
+    assert "GITHUB_TOKEN=mock-github-token" in run_call  # pragma: allowlist secret
+
+    env_values = [
+        run_call[index + 1] for index, arg in enumerate(run_call[:-1]) if arg == "--env"
+    ]
+    config_value = next(
+        value for value in env_values if value.startswith("OPENCODE_CONFIG_CONTENT=")
+    )
+    config = json.loads(config_value.split("=", 1)[1])
+    assert config == {
+        "$schema": "https://opencode.ai/config.json",
+        "mcp": {
+            "devbox-github": {
+                "type": "remote",
+                "url": "https://api.githubcopilot.com/mcp/",
+                "enabled": True,
+                "oauth": False,
+                "headers": {
+                    "Authorization": "Bearer {env:GH_TOKEN}",
+                },
+            },
+        },
+    }
+    assert "mock-github-token" not in config_value
+
+
+@pytest.mark.unit
+def test_devbox_does_not_add_github_mcp_without_credentials(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, log_file = mock_podman_env
+    env.pop("GH_TOKEN", None)
+    env.pop("GITHUB_TOKEN", None)
+
+    # Keep the test independent from any host gh login.
+    fake_gh = Path(env["PATH"].split(":", 1)[0]) / "gh"
+    fake_gh.write_text("#!/usr/bin/env bash\nexit 1\n")
+    fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IEXEC)
+
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0
+
+    calls = parse_podman_calls(log_file)
+    run_call = next((c for c in calls if c and c[0] == "run" and "-d" in c), None)
+    assert run_call is not None
+    env_values = [
+        run_call[index + 1] for index, arg in enumerate(run_call[:-1]) if arg == "--env"
+    ]
+    assert not any(value.startswith("OPENCODE_CONFIG_CONTENT=") for value in env_values)
+
+
+@pytest.mark.unit
 def test_devbox_gitlab_env(devbox_path: Path, mock_podman_env, tmp_path: Path):
     env, log_file = mock_podman_env
     env["GITLAB_HOST"] = "gitlab.example.com"

@@ -42,7 +42,9 @@ This repository provides:
 - **Automatic Host Credential & Config Passthrough**: `devbox` detects and
   bind-mounts existing host configurations (GitHub tokens, Google Cloud ADC,
   Atlassian CLI, Google Workspace, LiteMaaS API keys, and OpenCode
-  configuration, state, and session data).
+  configuration, state, and session data). When a GitHub token is available,
+  it also enables the OpenCode GitHub MCP server without modifying any mounted
+  OpenCode configuration file.
 - **Local LLM Integration**: Devboxes automatically detect running local
   inference containers and configure slirp4netns loopback routing to connect to
   local Ollama models via `10.0.2.2:11434`.
@@ -112,6 +114,20 @@ podman run --rm alpine uname -a
 # Run OpenCode with configured models
 opencode
 ```
+
+### Automatic OpenCode Integrations
+
+When `GH_TOKEN`, `GITHUB_TOKEN`, or an authenticated host `gh` CLI is
+available while a devbox container is created, `devbox` passes the token into
+the container and adds the remote GitHub MCP server to OpenCode's effective
+configuration. The generated server is named `devbox-github` so it does not
+replace a project-local `github` server.
+
+The token is referenced through OpenCode's `{env:GH_TOKEN}` substitution and
+is not embedded in the generated configuration. The user's global
+`~/.config/opencode` configuration and the project's `opencode.json` remain
+unchanged. Since the container is persistent, use `devbox --recreate` after
+changing the host credentials or integration triggers.
 
 ---
 
