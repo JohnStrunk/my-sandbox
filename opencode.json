@@ -7,8 +7,6 @@
     "opencode"
   ],
   "formatter": true,
-  "model": "google-vertex/gemini-3.7-flash",
-  "small_model": "google-vertex/gemini-3.7-flash",
   "agent": {
     "title": {
       "variant": "low"
