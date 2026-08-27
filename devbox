@@ -141,10 +141,16 @@ create_container() {
     )
   fi
 
-  # GitHub CLI (gh) configuration
-  if [ -n "${GITHUB_TOKEN:-}" ] || command -v gh >/dev/null 2>&1; then
+  # GitHub CLI (gh) configuration and OpenCode GitHub MCP integration
+  local github_token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+  if [ -z "$github_token" ] && command -v gh >/dev/null 2>&1; then
+    github_token="$(gh auth token 2>/dev/null || true)"
+  fi
+  if [ -n "$github_token" ]; then
     params+=(
-      --env "GITHUB_TOKEN=${GITHUB_TOKEN:-$(gh auth token 2>/dev/null || true)}" \
+      --env "GH_TOKEN=$github_token" \
+      --env "GITHUB_TOKEN=$github_token" \
+      --env "OPENCODE_CONFIG_CONTENT={\"\$schema\":\"https://opencode.ai/config.json\",\"mcp\":{\"devbox-github\":{\"type\":\"remote\",\"url\":\"https://api.githubcopilot.com/mcp/\",\"enabled\":true,\"oauth\":false,\"headers\":{\"Authorization\":\"Bearer {env:GH_TOKEN}\"}}}}" \
     )
   fi
 
