@@ -33,7 +33,7 @@ RUN curl -sSL "https://github.com/hadolint/hadolint/releases/download/v${HADOLIN
 
 # Go toolchain
 # renovate: datasource=golang-version depName=golang
-ARG GO_VERSION=1.26.6
+ARG GO_VERSION=1.27.0
 ARG TARGETARCH=amd64
 RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${TARGETARCH}.tar.gz" -o /tmp/go.tgz \
     && tar -C /usr/local -xzf /tmp/go.tgz \
