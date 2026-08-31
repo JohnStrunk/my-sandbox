@@ -1,6 +1,6 @@
 # Custom OpenShell sandbox image mirroring the devcontainer environment.
 # hadolint ignore=DL3007
-FROM docker.io/fedora:latest
+FROM docker.io/fedora:latest@sha256:43b29f65a41eb9c35e1cd5323e3bdf3b655c2357a9f4f1ff2f9c2798e5045d80
 
 # hadolint ignore=DL3002,DL3066
 USER root
