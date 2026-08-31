@@ -1,26 +1,38 @@
 # Custom OpenShell sandbox image mirroring the devcontainer environment.
 # hadolint ignore=DL3007
-FROM ghcr.io/nvidia/openshell-community/sandboxes/base:latest@sha256:aeef1c63f00e2913ea002ccb3aaf925f338b5c5d70e63576f0d95c16a138044e
+FROM docker.io/fedora:latest
 
 # hadolint ignore=DL3002,DL3066
 USER root
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # Install system utilities matching devcontainer
-# hadolint ignore=DL3008
-RUN apt-get update -q && apt-get install -y --no-install-recommends \
+# hadolint ignore=DL3041
+RUN dnf install -y --setopt=install_weak_deps=False \
     ca-certificates \
-    ffmpeg \
+    curl \
+    ffmpeg-free \
     gh \
     glab \
+    gnupg2 \
     jq \
+    libcap \
+    nodejs \
+    npm \
+    openssl \
     ripgrep \
-    shellcheck \
-    && rm -rf /var/lib/apt/lists/*
+    ShellCheck \
+    shadow-utils \
+    sudo \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf
 
 # Install Red Hat internal CA certificates
-COPY certs/ /usr/local/share/ca-certificates/redhat/
-RUN /usr/sbin/update-ca-certificates
+COPY certs/ /etc/pki/ca-trust/source/anchors/
+RUN update-ca-trust \
+    && mkdir -p /usr/local/share/ca-certificates/redhat /etc/ssl/certs \
+    && cp /etc/pki/ca-trust/source/anchors/*.crt /usr/local/share/ca-certificates/redhat/ \
+    && ln -sf /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem /etc/ssl/certs/ca-certificates.crt
 ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
     REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
     NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
@@ -59,7 +71,7 @@ ENV UV_CACHE_DIR=/sandbox/.uv_cache
 RUN npm install -g --no-fund \
     markdownlint-cli2@0.23.2 \
     @playwright/cli@0.1.18 \
-    && npx -y playwright install --with-deps
+    && npx -y playwright install
 
 # Install Google Antigravity CLI
 # renovate: datasource=github-releases depName=google-antigravity/antigravity-cli
@@ -71,32 +83,35 @@ RUN arch="${TARGETARCH}" && [ "$arch" = "amd64" ] && arch="x64" \
     && chmod +x /usr/local/bin/agy \
     && rm /tmp/agy.tgz
 
-# Install OpenCode (overwrites the outdated version in the base image)
+# Install OpenCode
 # renovate: datasource=github-releases depName=anomalyco/opencode
 ARG OPENCODE_VERSION=1.18.23
 RUN curl -fsSL https://opencode.ai/install | bash -s -- --version "${OPENCODE_VERSION}" && \
     mv /root/.opencode/bin/opencode /usr/bin/ && \
     chmod +x /usr/bin/opencode
 
-# hadolint ignore=DL3008
-RUN apt-get update -q && apt-get install -y --no-install-recommends \
-    adduser \
-    ca-certificates \
-    curl \
-    gnupg \
-    passwd \
-    sudo \
-    && rm -rf /var/lib/apt/lists/*
-
 # Install Google Cloud CLI
-# https://cloud.google.com/sdk/docs/install-sdk#deb
-# hadolint ignore=DL3008
-RUN curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg \
-    && chmod a+r /usr/share/keyrings/cloud.google.gpg \
-    && echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" > /etc/apt/sources.list.d/google-cloud-sdk.list \
-    && apt-get update -q && apt-get install -y --no-install-recommends \
-    google-cloud-cli \
-    && rm -rf /var/lib/apt/lists/*
+# https://cloud.google.com/sdk/docs/install-sdk#linux
+# hadolint ignore=DL3041
+RUN case "${TARGETARCH}" in \
+      amd64) gcloud_arch=x86_64 ;; \
+      arm64) gcloud_arch=aarch64 ;; \
+      *) echo "Unsupported architecture for Google Cloud CLI: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+    && printf '%s\n' \
+      '[google-cloud-cli]' \
+      'name=Google Cloud CLI' \
+      "baseurl=https://packages.cloud.google.com/yum/repos/cloud-sdk-el9-${gcloud_arch}" \
+      'enabled=1' \
+      'gpgcheck=1' \
+      'repo_gpgcheck=0' \
+      'gpgkey=https://packages.cloud.google.com/yum/doc/yum-key.gpg' \
+      '       https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg' \
+      > /etc/yum.repos.d/google-cloud-sdk.repo \
+    && dnf install -y --setopt=install_weak_deps=False google-cloud-cli \
+    && rm -f /etc/yum.repos.d/google-cloud-sdk.repo \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf
 
 # Atlassian CLI (acli)
 # renovate: datasource=custom.acli depName=acli
@@ -120,36 +135,25 @@ RUN npm install -g --no-fund \
 # running rootless Podman") and podman's own reference image at
 # https://github.com/containers/podman/tree/main/contrib/podmanimage/stable
 #
-# netavark/aardvark-dns aren't pulled in automatically by Ubuntu's podman
-# package. Without them, nested Podman silently falls back to the older CNI
-# network backend on its first run (this choice is then cached on-disk and
-# "sticks" even if the packages are installed later), which lacks
-# aardvark-dns's container-name DNS resolution: containers on a
-# user-defined network can't reach each other by name, breaking anything
-# that looks like a multi-container dev workflow (e.g. an app + DB pod).
-# hadolint ignore=DL3008
-RUN apt-get update -q && apt-get install -y --no-install-recommends \
+# netavark/aardvark-dns are installed explicitly so nested Podman always uses
+# the current network backend with container-name DNS resolution.
+# hadolint ignore=DL3041
+RUN dnf install -y --setopt=install_weak_deps=False \
     aardvark-dns \
     fuse-overlayfs \
     netavark \
     podman \
     slirp4netns \
-    uidmap \
-    && rm -rf /var/lib/apt/lists/*
+    shadow-utils-subid \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf
 
-# Ubuntu's newuidmap/newgidmap ship setuid-root only, without the file
-# capabilities (cap_setuid/cap_setgid) that make the traditional
-# "transition to euid 0 grants full capabilities" fallback actually work
-# for a non-root container user -- the same known packaging gap the above
-# Red Hat blog post documents for Fedora ("there is a known issue... where
-# the filecaps on newuidmap and newgidmap are not set"; Fedora's fix is
-# reinstalling shadow-utils, which isn't available/applicable here).
-# Without this, nested `podman run` as the non-root "sandbox" user fails
-# with "newuidmap: write to uid_map failed: Operation not permitted", even
-# though the setuid bit alone looks like it should work.
+# Ensure nested Podman can create user namespaces as the non-root sandbox user.
 RUN /usr/sbin/setcap cap_setuid+eip /usr/bin/newuidmap \
     && /usr/sbin/setcap cap_setgid+eip /usr/bin/newgidmap \
     && chmod u-s,g-s /usr/bin/newuidmap /usr/bin/newgidmap
+
+RUN useradd --create-home --user-group --home-dir /sandbox --shell /bin/bash sandbox
 
 # sandbox's /etc/subuid and /etc/subgid entries, needed so its own nested
 # Podman can build a further user namespace for the containers *it* runs,
@@ -213,6 +217,8 @@ RUN mkdir -p /sandbox/.config/containers \
     && mkdir -p /sandbox/.config/acli /sandbox/.config/gcloud /sandbox/.config/gws /sandbox/.config/opencode /sandbox/.local/state/opencode /sandbox/.local/share/opencode \
     && touch /sandbox/.local/state/opencode/model.json /sandbox/.config/gcloud/application_default_credentials.json \
     && chown -R sandbox:sandbox /sandbox/.config /sandbox/.local
+
+ENV HOME=/sandbox
 
 # Two more settings from podman's own reference Podman-in-Podman image
 # (https://github.com/containers/image_build/blob/main/podman/Containerfile),
