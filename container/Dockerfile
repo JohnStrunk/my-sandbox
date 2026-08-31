@@ -153,7 +153,11 @@ RUN /usr/sbin/setcap cap_setuid+eip /usr/bin/newuidmap \
     && /usr/sbin/setcap cap_setgid+eip /usr/bin/newgidmap \
     && chmod u-s,g-s /usr/bin/newuidmap /usr/bin/newgidmap
 
-RUN useradd --create-home --user-group --home-dir /sandbox --shell /bin/bash sandbox
+# Fedora's PAM account checks reject a locked account in some rootless
+# container runtimes. Keep the password random and undisclosed; sudo remains
+# explicitly passwordless through the rule below.
+RUN useradd --create-home --user-group --home-dir /sandbox --shell /bin/bash sandbox \
+    && printf 'sandbox:%s\n' "$(openssl rand -base64 32)" | chpasswd
 
 # sandbox's /etc/subuid and /etc/subgid entries, needed so its own nested
 # Podman can build a further user namespace for the containers *it* runs,
