@@ -153,11 +153,13 @@ RUN /usr/sbin/setcap cap_setuid+eip /usr/bin/newuidmap \
     && /usr/sbin/setcap cap_setgid+eip /usr/bin/newgidmap \
     && chmod u-s,g-s /usr/bin/newuidmap /usr/bin/newgidmap
 
-# Fedora's PAM account checks reject a locked account in some rootless
-# container runtimes. Keep the password random and undisclosed; sudo remains
-# explicitly passwordless through the rule below.
+# Fedora's PAM account checks need to read the shadow database before sudo's
+# privilege transition in some rootless container runtimes. Keep the password
+# random and undisclosed, and grant sandbox access only to that database.
 RUN useradd --create-home --user-group --home-dir /sandbox --shell /bin/bash sandbox \
-    && printf 'sandbox:%s\n' "$(openssl rand -base64 32)" | chpasswd
+    && printf 'sandbox:%s\n' "$(openssl rand -base64 32)" | chpasswd \
+    && chgrp sandbox /etc/shadow \
+    && chmod 0640 /etc/shadow
 
 # sandbox's /etc/subuid and /etc/subgid entries, needed so its own nested
 # Podman can build a further user namespace for the containers *it* runs,
