@@ -129,6 +129,13 @@ is not embedded in the generated configuration. The user's global
 unchanged. Since the container is persistent, use `devbox --recreate` after
 changing the host credentials or integration triggers.
 
+When all `IGLOO_MCP_COMMUNITY`, `IGLOO_MCP_COMMUNITY_KEY`,
+`IGLOO_MCP_APP_PASS`, `IGLOO_MCP_APP_ID`, `IGLOO_MCP_USERNAME`, and
+`IGLOO_MCP_PASSWORD` variables are available, `devbox` passes them into the
+container and enables the local `the-source` MCP server. Runtime integrations
+can contribute any top-level OpenCode config property, with multiple MCP
+integrations combined under one `mcp` object in `OPENCODE_CONFIG_CONTENT`.
+
 ---
 
 ## Local LLM Inference Server

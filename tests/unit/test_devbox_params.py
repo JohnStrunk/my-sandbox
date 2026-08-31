@@ -23,6 +23,39 @@ with open(sys.argv[1], "a") as f:
 ' "{log_file}" "$@"
 
 if [ "$1" = "run" ] && [ "$2" = "--rm" ]; then
+    if [ "$3" = "-i" ] && [ "$4" = "devbox:latest" ] && [ "$5" = "jq" ]; then
+        python3 -c '
+import json
+import sys
+
+def merge(left, right):
+    result = left.copy()
+    for key in right:
+        if (
+            key in result
+            and isinstance(result[key], dict)
+            and isinstance(right[key], dict)
+        ):
+            result[key] = merge(result[key], right[key])
+        else:
+            result[key] = right[key]
+    return result
+
+result = dict()
+text = sys.stdin.read()
+index = 0
+decoder = json.JSONDecoder()
+while index < len(text):
+    while index < len(text) and text[index].isspace():
+        index += 1
+    if index >= len(text):
+        break
+    value, index = decoder.raw_decode(text, index)
+    result = merge(result, value)
+print(json.dumps(result, separators=(",", ":")))
+'
+        exit 0
+    fi
     if [ "$4" = "id" ] && [ "$5" = "-u" ]; then
         echo "1000"
         exit 0
@@ -172,6 +205,15 @@ def test_devbox_does_not_add_github_mcp_without_credentials(
     env, log_file = mock_podman_env
     env.pop("GH_TOKEN", None)
     env.pop("GITHUB_TOKEN", None)
+    for name in (
+        "IGLOO_MCP_COMMUNITY",
+        "IGLOO_MCP_COMMUNITY_KEY",
+        "IGLOO_MCP_APP_PASS",
+        "IGLOO_MCP_APP_ID",
+        "IGLOO_MCP_USERNAME",
+        "IGLOO_MCP_PASSWORD",
+    ):
+        env.pop(name, None)
 
     # Keep the test independent from any host gh login.
     fake_gh = Path(env["PATH"].split(":", 1)[0]) / "gh"
@@ -191,6 +233,119 @@ def test_devbox_does_not_add_github_mcp_without_credentials(
         run_call[index + 1] for index, arg in enumerate(run_call[:-1]) if arg == "--env"
     ]
     assert not any(value.startswith("OPENCODE_CONFIG_CONTENT=") for value in env_values)
+
+
+@pytest.mark.unit
+def test_devbox_the_source_mcp_config(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, log_file = mock_podman_env
+    env.pop("GH_TOKEN", None)
+    env.pop("GITHUB_TOKEN", None)
+    source_credentials = {
+        "IGLOO_MCP_COMMUNITY": "mock-community",
+        "IGLOO_MCP_COMMUNITY_KEY": "mock-community-key",
+        "IGLOO_MCP_APP_PASS": "mock-app-pass",
+        "IGLOO_MCP_APP_ID": "mock-app-id",
+        "IGLOO_MCP_USERNAME": "mock-username",
+        "IGLOO_MCP_PASSWORD": "mock-password",  # pragma: allowlist secret
+    }
+    env.update(source_credentials)
+
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0
+
+    calls = parse_podman_calls(log_file)
+    run_call = next((c for c in calls if c and c[0] == "run" and "-d" in c), None)
+    assert run_call is not None
+    for name, value in source_credentials.items():
+        assert f"{name}={value}" in run_call  # pragma: allowlist secret
+
+    env_values = [
+        run_call[index + 1] for index, arg in enumerate(run_call[:-1]) if arg == "--env"
+    ]
+    config_value = next(
+        value for value in env_values if value.startswith("OPENCODE_CONFIG_CONTENT=")
+    )
+    config = json.loads(config_value.split("=", 1)[1])
+    assert config == {
+        "$schema": "https://opencode.ai/config.json",
+        "mcp": {
+            "the-source": {
+                "enabled": True,
+                "type": "local",
+                "command": [
+                    "uvx",
+                    "--from",
+                    "git+https://github.com/johnstrunk/igloo-mcp",
+                    "igloo-mcp",
+                ],
+                "environment": {
+                    "IGLOO_MCP_COMMUNITY": "{env:IGLOO_MCP_COMMUNITY}",
+                    "IGLOO_MCP_COMMUNITY_KEY": "{env:IGLOO_MCP_COMMUNITY_KEY}",
+                    "IGLOO_MCP_APP_PASS": "{env:IGLOO_MCP_APP_PASS}",
+                    "IGLOO_MCP_APP_ID": "{env:IGLOO_MCP_APP_ID}",
+                    "IGLOO_MCP_USERNAME": "{env:IGLOO_MCP_USERNAME}",
+                    "IGLOO_MCP_PASSWORD": "{env:IGLOO_MCP_PASSWORD}",
+                    "IGLOO_MCP_SERVER_NAME": "The Source",
+                    "IGLOO_MCP_SERVER_INSTRUCTIONS": (
+                        "This server provides search and fetch capabilities for The "
+                        "Source, Red Hat's intranet, containing articles with guides, "
+                        "instructions, and useful information that helps team members "
+                        "do their jobs and contribute to Red Hat."
+                    ),
+                },
+            },
+        },
+    }
+    for value in source_credentials.values():
+        assert value not in config_value
+
+
+@pytest.mark.unit
+def test_devbox_merges_mcp_configurations(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, log_file = mock_podman_env
+    env["GH_TOKEN"] = "mock-github-token"  # pragma: allowlist secret
+    env.update(
+        {
+            "IGLOO_MCP_COMMUNITY": "mock-community",
+            "IGLOO_MCP_COMMUNITY_KEY": "mock-community-key",
+            "IGLOO_MCP_APP_PASS": "mock-app-pass",
+            "IGLOO_MCP_APP_ID": "mock-app-id",
+            "IGLOO_MCP_USERNAME": "mock-username",
+            "IGLOO_MCP_PASSWORD": "mock-password",  # pragma: allowlist secret
+        }
+    )
+
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0
+
+    calls = parse_podman_calls(log_file)
+    run_call = next((c for c in calls if c and c[0] == "run" and "-d" in c), None)
+    assert run_call is not None
+    env_values = [
+        run_call[index + 1] for index, arg in enumerate(run_call[:-1]) if arg == "--env"
+    ]
+    config_value = next(
+        value for value in env_values if value.startswith("OPENCODE_CONFIG_CONTENT=")
+    )
+    config = json.loads(config_value.split("=", 1)[1])
+    assert set(config["mcp"]) == {"devbox-github", "the-source"}
+    assert config["mcp"]["devbox-github"]["headers"] == {
+        "Authorization": "Bearer {env:GH_TOKEN}"
+    }
+    assert config["mcp"]["the-source"]["environment"]["IGLOO_MCP_APP_ID"] == (
+        "{env:IGLOO_MCP_APP_ID}"
+    )
+    assert "mock-github-token" not in config_value
 
 
 @pytest.mark.unit
