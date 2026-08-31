@@ -102,6 +102,9 @@ create_container() {
   sandbox_gid="$(podman run --rm "devbox:latest" id -g sandbox)"
 
   local params=()
+  # Each entry is a complete OpenCode config object. They are merged below so
+  # every integration can contribute any config item.
+  local opencode_config=()
 
   # Local LLM inference server (see local-llm/start-llm-server.sh),
   # LiteLLM proxy (see litellm-proxy/start-proxy-server.sh), and
@@ -150,7 +153,70 @@ create_container() {
     params+=(
       --env "GH_TOKEN=$github_token" \
       --env "GITHUB_TOKEN=$github_token" \
-      --env "OPENCODE_CONFIG_CONTENT={\"\$schema\":\"https://opencode.ai/config.json\",\"mcp\":{\"devbox-github\":{\"type\":\"remote\",\"url\":\"https://api.githubcopilot.com/mcp/\",\"enabled\":true,\"oauth\":false,\"headers\":{\"Authorization\":\"Bearer {env:GH_TOKEN}\"}}}}" \
+    )
+    opencode_config+=(
+      "$(cat <<'EOF'
+{
+  "mcp": {
+    "devbox-github": {
+      "type": "remote",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "enabled": true,
+      "oauth": false,
+      "headers": {
+        "Authorization": "Bearer {env:GH_TOKEN}"
+      }
+    }
+  }
+}
+EOF
+)"
+    )
+  fi
+
+  # The Source MCP integration
+  if [ -n "${IGLOO_MCP_COMMUNITY:-}" ] \
+    && [ -n "${IGLOO_MCP_COMMUNITY_KEY:-}" ] \
+    && [ -n "${IGLOO_MCP_APP_PASS:-}" ] \
+    && [ -n "${IGLOO_MCP_APP_ID:-}" ] \
+    && [ -n "${IGLOO_MCP_USERNAME:-}" ] \
+    && [ -n "${IGLOO_MCP_PASSWORD:-}" ]; then
+    params+=(
+      --env "IGLOO_MCP_COMMUNITY=${IGLOO_MCP_COMMUNITY:-}" \
+      --env "IGLOO_MCP_COMMUNITY_KEY=${IGLOO_MCP_COMMUNITY_KEY:-}" \
+      --env "IGLOO_MCP_APP_PASS=${IGLOO_MCP_APP_PASS:-}" \
+      --env "IGLOO_MCP_APP_ID=${IGLOO_MCP_APP_ID:-}" \
+      --env "IGLOO_MCP_USERNAME=${IGLOO_MCP_USERNAME:-}" \
+      --env "IGLOO_MCP_PASSWORD=${IGLOO_MCP_PASSWORD:-}" \
+    )
+    opencode_config+=(
+      "$(cat <<'EOF'
+{
+  "mcp": {
+    "the-source": {
+      "enabled": true,
+      "type": "local",
+      "command": [
+        "uvx",
+        "--from",
+        "git+https://github.com/johnstrunk/igloo-mcp",
+        "igloo-mcp"
+      ],
+      "environment": {
+        "IGLOO_MCP_COMMUNITY": "{env:IGLOO_MCP_COMMUNITY}",
+        "IGLOO_MCP_COMMUNITY_KEY": "{env:IGLOO_MCP_COMMUNITY_KEY}",
+        "IGLOO_MCP_APP_PASS": "{env:IGLOO_MCP_APP_PASS}",
+        "IGLOO_MCP_APP_ID": "{env:IGLOO_MCP_APP_ID}",
+        "IGLOO_MCP_USERNAME": "{env:IGLOO_MCP_USERNAME}",
+        "IGLOO_MCP_PASSWORD": "{env:IGLOO_MCP_PASSWORD}",
+        "IGLOO_MCP_SERVER_NAME": "The Source",
+        "IGLOO_MCP_SERVER_INSTRUCTIONS": "This server provides search and fetch capabilities for The Source, Red Hat's intranet, containing articles with guides, instructions, and useful information that helps team members do their jobs and contribute to Red Hat."
+      }
+    }
+  }
+}
+EOF
+)"
     )
   fi
 
@@ -230,6 +296,18 @@ create_container() {
   if [ -f "$HOME/.config/gcloud/application_default_credentials.json" ]; then
     params+=(
       --volume "$HOME/.config/gcloud/application_default_credentials.json:/sandbox/.config/gcloud/application_default_credentials.json" \
+    )
+  fi
+
+  if [ "${#opencode_config[@]}" -gt 0 ]; then
+    local opencode_config_content
+    opencode_config_content="$({
+      printf '%s\n' "{\"\$schema\":\"https://opencode.ai/config.json\"}"
+      printf '%s\n' "${opencode_config[@]}"
+    } | podman run --rm -i "devbox:latest" jq -s -c \
+      "reduce .[] as \$item ({}; . * \$item)")"
+    params+=(
+      --env "OPENCODE_CONFIG_CONTENT=$opencode_config_content" \
     )
   fi
 
