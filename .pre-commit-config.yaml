@@ -74,7 +74,7 @@ repos:
         # `npm install -g`. That makes npm reject the install with
         # `EALLOWGIT`. The binary is installed globally in
         # sandbox/Dockerfile and .github/workflows/ci-workflow.yaml instead.
-        language: system
+        # language: system
         args: ["--config", ".github/markdownlint-cli2.yaml"]
         exclude: |
           (?x)^(
