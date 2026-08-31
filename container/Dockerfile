@@ -236,7 +236,9 @@ ENV BUILDAH_ISOLATION=chroot \
 
 COPY devbox-entry.sh /usr/local/bin/
 RUN chmod +rx /usr/local/bin/devbox-entry.sh \
-    && echo "sandbox ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+    && printf '%s\n' 'sandbox ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/sandbox \
+    && chmod 0440 /etc/sudoers.d/sandbox \
+    && visudo -cf /etc/sudoers
 
 ENTRYPOINT []
 CMD ["/usr/local/bin/devbox-entry.sh"]
