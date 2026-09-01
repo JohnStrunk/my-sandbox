@@ -80,6 +80,13 @@ variables, and opens an interactive bash shell in the bind-mounted directory.
 Subsequent runs from the same directory just exec a new shell into the
 existing container (starting it first if it's stopped).
 
+The launcher records a fingerprint of the image build context on each new
+container and checks it, along with the image ID, on subsequent runs. If the
+Dockerfile or another file in `container/` changed, or the image was rebuilt,
+the launcher warns that the existing container is stale and prints the
+`devbox --recreate` command needed to refresh it. Recreating removes only the
+container; the host-backed project directory remains intact.
+
 For convenience, symlink the script onto your `PATH` so it can be run as
 just `devbox` from any project directory:
 
@@ -221,3 +228,7 @@ quality, container definitions, YAML, and Markdown files.
 # Or run directly via pre-commit
 pre-commit run --all-files
 ```
+
+Container tests build and reuse an image tag derived from the contents of the
+`container/` build context, so changes to the Dockerfile or copied files use a
+fresh test image instead of an unrelated `devbox:latest` image.

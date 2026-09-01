@@ -136,6 +136,33 @@ def test_devbox_gemini_env(devbox_path: Path, mock_podman_env, tmp_path: Path):
 
 
 @pytest.mark.unit
+def test_devbox_records_context_fingerprint_on_container(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, log_file = mock_podman_env
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0
+
+    calls = parse_podman_calls(log_file)
+    run_call = next((c for c in calls if c and c[0] == "run" and "-d" in c), None)
+    assert run_call is not None
+
+    run_labels = [
+        value
+        for index, arg in enumerate(run_call[:-1])
+        if arg == "--label"
+        for value in [run_call[index + 1]]
+    ]
+    assert len(run_labels) == 1
+    assert run_labels[0].startswith(
+        "io.github.johnstrunk.my-sandbox.devbox-context-fingerprint="
+    )
+
+
+@pytest.mark.unit
 def test_devbox_litemaas_env(devbox_path: Path, mock_podman_env, tmp_path: Path):
     env, log_file = mock_podman_env
     env["LITEMAAS_API_KEY"] = "mock-litemaas-token"  # pragma: allowlist secret

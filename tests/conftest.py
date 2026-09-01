@@ -1,3 +1,4 @@
+import hashlib
 import shutil
 import subprocess
 from pathlib import Path
@@ -42,6 +43,20 @@ def dockerfile_path(repo_root: Path) -> Path:
     return repo_root / "container" / "Dockerfile"
 
 
+def devbox_context_fingerprint(context_dir: Path) -> str:
+    digest = hashlib.sha256()
+    files = sorted(
+        (path for path in context_dir.rglob("*") if path.is_file()),
+        key=lambda path: path.relative_to(context_dir).as_posix(),
+    )
+    for path in files:
+        digest.update(path.relative_to(context_dir).as_posix().encode())
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
 @pytest.fixture(scope="session")
 def is_podman_available() -> bool:
     if not shutil.which("podman"):
@@ -59,20 +74,20 @@ def is_podman_available() -> bool:
 
 
 @pytest.fixture(scope="session")
-def devbox_image(
-    is_podman_available: bool, dockerfile_path: Path, repo_root: Path
-) -> str:
+def devbox_image(is_podman_available: bool, dockerfile_path: Path) -> str:
     if not is_podman_available:
         pytest.skip("Podman is not available in the environment")
 
-    for tag in ("devbox:latest", "localhost/devbox:latest"):
-        res = subprocess.run(
-            ["podman", "image", "exists", tag],
-            capture_output=True,
-            check=False,
-        )
-        if res.returncode == 0:
-            return tag
+    image_tag = (
+        f"localhost/devbox:test-{devbox_context_fingerprint(dockerfile_path.parent)}"
+    )
+    res = subprocess.run(
+        ["podman", "image", "exists", image_tag],
+        capture_output=True,
+        check=False,
+    )
+    if res.returncode == 0:
+        return image_tag
 
     build_res = subprocess.run(
         [
@@ -81,7 +96,7 @@ def devbox_image(
             "--file",
             str(dockerfile_path),
             "--tag",
-            "devbox:latest",
+            image_tag,
             str(dockerfile_path.parent),
         ],
         capture_output=True,
@@ -89,9 +104,9 @@ def devbox_image(
         check=False,
     )
     if build_res.returncode == 0:
-        return "devbox:latest"
-    pytest.skip(f"Failed to find or build devbox image: {build_res.stderr}")
-    return "devbox:latest"
+        return image_tag
+    pytest.fail(f"Failed to build devbox image: {build_res.stderr}")
+    return image_tag
 
 
 def run_bash_script(

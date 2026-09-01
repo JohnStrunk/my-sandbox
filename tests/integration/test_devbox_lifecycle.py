@@ -57,6 +57,8 @@ def test_devbox_lifecycle_create_exec_recreate_remove(
         assert res_recreate.returncode == 0
         assert "Removing container" in res_recreate.stdout
         assert "Creating container" in res_recreate.stdout
+        assert test_file.exists()
+        assert test_file.read_text().strip() == "hello from container"
 
         # 4. Remove: stops and removes container
         res_remove = run_bash_script(

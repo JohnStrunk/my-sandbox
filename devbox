@@ -24,6 +24,7 @@ HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 BIND_DIR="$(realpath "$PWD")"
 NAME="devbox-$(basename "$BIND_DIR")"
 WORKDIR="/sandbox/$(basename "$BIND_DIR")"
+SOURCE_FINGERPRINT_LABEL="io.github.johnstrunk.my-sandbox.devbox-context-fingerprint"
 
 # Clear XDG_DATA_HOME so `devbox` works inside vscode terminal sessions
 export XDG_DATA_HOME=
@@ -46,6 +47,36 @@ Options:
 Arguments:
   command [arg ...]   Command to run in the container (default: /bin/bash)
 EOF
+}
+
+container_context_fingerprint() {
+  (
+    cd "$HERE/container"
+    find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum
+  ) | sha256sum | cut -d ' ' -f 1
+}
+
+container_is_stale() {
+  local expected_fingerprint="$1"
+  local recorded_fingerprint container_image current_image
+
+  recorded_fingerprint="$(podman inspect \
+    -f "{{ index .Config.Labels \"$SOURCE_FINGERPRINT_LABEL\" }}" \
+    "$NAME" 2>/dev/null || true)"
+  container_image="$(podman inspect -f '{{.Image}}' "$NAME" 2>/dev/null || true)"
+  current_image="$(podman image inspect -f '{{.Id}}' devbox:latest 2>/dev/null || true)"
+
+  if [ "$recorded_fingerprint" = "$expected_fingerprint" ] \
+    && [ -n "$current_image" ] \
+    && [ "$container_image" = "$current_image" ]; then
+    return 1
+  fi
+  return 0
+}
+
+warn_stale_container() {
+  echo "==> Existing container '$NAME' is stale or cannot be verified against the current devbox image." >&2
+  echo "    Run 'devbox --recreate' to refresh it; the host-backed project directory is preserved." >&2
 }
 
 ACTION="run"
@@ -92,6 +123,9 @@ remove_container() {
 }
 
 create_container() {
+  local source_fingerprint
+  source_fingerprint="$(container_context_fingerprint)"
+
   podman build \
     --file "$HERE/container/Dockerfile" \
     --tag "devbox:latest" \
@@ -361,6 +395,7 @@ EOF
     --user sandbox \
     --userns "keep-id:uid=$sandbox_uid,gid=$sandbox_gid" \
     --name "$NAME" \
+    --label "$SOURCE_FINGERPRINT_LABEL=$source_fingerprint" \
     --stop-timeout 0 \
     --device /dev/fuse \
     --device /dev/net/tun \
@@ -447,6 +482,11 @@ case "$ACTION" in
   run)
     if ! podman container exists "$NAME" 2>/dev/null; then
       create_container
+    else
+      expected_source_fingerprint="$(container_context_fingerprint)"
+      if container_is_stale "$expected_source_fingerprint"; then
+        warn_stale_container
+      fi
     fi
     enter_container "${COMMAND[@]}"
     ;;
