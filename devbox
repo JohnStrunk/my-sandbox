@@ -434,6 +434,67 @@ EOF
   podman exec -u 0:0 "$NAME" \
     find /sandbox -xdev \( ! -uid "$sandbox_uid" -o ! -gid "$sandbox_gid" \) \
     -exec chown -h "$sandbox_uid:$sandbox_gid" {} + 2>/dev/null || true
+
+  # Git identity: a fresh sandbox account has no Git identity configured,
+  # so an uninformed `git commit` inside the container fails with Git's
+  # "empty ident name" error. Fill in only whatever is missing, using the
+  # *invoking host user's* `git config --global user.name`/`user.email`
+  # as the source of truth -- never data baked into the image, and this
+  # never reads or writes the host's Git config beyond that lookup. Any
+  # identity already configured inside this (persistent) container is
+  # left untouched.
+  echo "==> Configuring Git identity"
+  local existing_git_name existing_git_email
+  existing_git_name="$(podman exec "$NAME" git config --global user.name 2>/dev/null || true)"
+  existing_git_email="$(podman exec "$NAME" git config --global user.email 2>/dev/null || true)"
+
+  if [ -z "$existing_git_name" ]; then
+    local host_git_name
+    host_git_name="$(git config --global user.name 2>/dev/null || true)"
+    if [ -n "$host_git_name" ]; then
+      if podman exec "$NAME" git config --global user.name "$host_git_name"; then
+        existing_git_name="$host_git_name"
+      else
+        echo "    WARNING: Failed to set Git user.name inside the container." >&2
+      fi
+    fi
+  fi
+  if [ -z "$existing_git_email" ]; then
+    local host_git_email
+    host_git_email="$(git config --global user.email 2>/dev/null || true)"
+    if [ -n "$host_git_email" ]; then
+      if podman exec "$NAME" git config --global user.email "$host_git_email"; then
+        existing_git_email="$host_git_email"
+      else
+        echo "    WARNING: Failed to set Git user.email inside the container." >&2
+      fi
+    fi
+  fi
+
+  if [ -z "$existing_git_name" ] || [ -z "$existing_git_email" ]; then
+    echo "    WARNING: Git user.name and/or user.email are not configured (checked the container and the host)." >&2
+    echo "    Commits inside the devbox will fail until you run, inside the container:" >&2
+    echo '      git config --global user.name "Your Name"' >&2
+    echo '      git config --global user.email "you@example.com"' >&2
+    echo "    Or run 'git config --global user.name/user.email' on the host before starting devbox." >&2
+  fi
+
+  # GitHub authentication: the devbox has no usable SSH access to GitHub,
+  # so Git operations over HTTPS against github.com must authenticate via
+  # the `gh` CLI's credential helper rather than SSH keys or an agent.
+  # `gh auth setup-git` reads whichever credentials `gh` already has (e.g.
+  # the GH_TOKEN/GITHUB_TOKEN env var set above) each time Git needs them,
+  # so this only needs to register the helper once per container.
+  if [ -n "$github_token" ]; then
+    echo "==> Configuring gh as Git's credential helper for GitHub HTTPS operations"
+    if ! podman exec "$NAME" gh auth setup-git; then
+      echo "    WARNING: 'gh auth setup-git' failed; Git HTTPS operations against github.com may fail or prompt for credentials." >&2
+    fi
+  else
+    echo "    WARNING: No GitHub token available; Git HTTPS operations against github.com will fail until you run, inside the container:" >&2
+    echo "      gh auth login && gh auth setup-git" >&2
+    echo "    Or set GH_TOKEN/GITHUB_TOKEN, or log in with 'gh auth login' on the host, before starting devbox." >&2
+  fi
 }
 
 enter_container() {

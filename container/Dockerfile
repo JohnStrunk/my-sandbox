@@ -15,6 +15,7 @@ RUN dnf install -y --setopt=install_weak_deps=False \
     curl \
     ffmpeg-free \
     gh \
+    git \
     glab \
     gnupg2 \
     jq \
