@@ -2,6 +2,7 @@ import hashlib
 import os
 import shutil
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -79,26 +80,108 @@ def devbox_context_fingerprint(context_dir: Path) -> str:
     return digest.hexdigest()
 
 
-@pytest.fixture(scope="session")
-def is_podman_available() -> bool:
+# Rootless Podman can take substantially longer than a few seconds to
+# initialize storage and the runtime service, especially in devbox/CI
+# environments. A short timeout causes healthy runtimes to be misreported
+# as unavailable, silently skipping container/integration tests. This
+# default is intentionally generous; it only bounds how long a *single*,
+# session-cached probe may take, not the runtime of individual tests.
+DEFAULT_PODMAN_PROBE_TIMEOUT = 60.0
+
+# Allows environments (e.g. CI) to tune the probe timeout without editing
+# source.
+PODMAN_PROBE_TIMEOUT_ENV_VAR = "DEVBOX_PODMAN_PROBE_TIMEOUT"
+
+
+@dataclass(frozen=True)
+class PodmanProbeResult:
+    """Outcome of checking whether a usable Podman runtime is available."""
+
+    available: bool
+    reason: str
+
+
+def podman_probe_timeout() -> float:
+    """Resolve the probe timeout, honoring an environment override."""
+    raw_value = os.environ.get(PODMAN_PROBE_TIMEOUT_ENV_VAR)
+    if not raw_value:
+        return DEFAULT_PODMAN_PROBE_TIMEOUT
+    try:
+        value = float(raw_value)
+    except ValueError:
+        return DEFAULT_PODMAN_PROBE_TIMEOUT
+    return value if value > 0 else DEFAULT_PODMAN_PROBE_TIMEOUT
+
+
+def probe_podman_availability(timeout: float | None = None) -> PodmanProbeResult:
+    """Check whether ``podman info`` succeeds within ``timeout`` seconds.
+
+    Distinguishes three outcomes so callers can produce a clear diagnostic:
+    * the ``podman`` executable is missing entirely,
+    * the runtime is still initializing and exceeded the bounded timeout,
+    * the command ran but failed (a genuine runtime error).
+    """
     if not shutil.which("podman"):
-        return False
+        return PodmanProbeResult(
+            available=False,
+            reason="'podman' executable was not found on PATH",
+        )
+
+    effective_timeout = podman_probe_timeout() if timeout is None else timeout
     try:
         res = subprocess.run(
             ["podman", "info"],
             capture_output=True,
-            timeout=5,
+            timeout=effective_timeout,
             check=False,
         )
-        return res.returncode == 0
-    except Exception:
-        return False
+    except subprocess.TimeoutExpired:
+        return PodmanProbeResult(
+            available=False,
+            reason=(
+                f"'podman info' did not complete within {effective_timeout:g}s "
+                "(the runtime may still be initializing)"
+            ),
+        )
+    except OSError as exc:
+        return PodmanProbeResult(
+            available=False,
+            reason=f"failed to execute 'podman info': {exc}",
+        )
+
+    if res.returncode != 0:
+        stderr = (
+            res.stderr.decode(errors="replace").strip()
+            if isinstance(res.stderr, bytes)
+            else str(res.stderr or "").strip()
+        )
+        detail = f": {stderr}" if stderr else ""
+        return PodmanProbeResult(
+            available=False,
+            reason=f"'podman info' exited with status {res.returncode}{detail}",
+        )
+
+    return PodmanProbeResult(available=True, reason="podman is available")
 
 
 @pytest.fixture(scope="session")
-def devbox_image(is_podman_available: bool, dockerfile_path: Path) -> str:
-    if not is_podman_available:
-        pytest.skip("Podman is not available in the environment")
+def podman_probe_result() -> PodmanProbeResult:
+    # Session-scoped so the (potentially slow) probe runs at most once per
+    # test session, regardless of how many tests/fixtures depend on it.
+    return probe_podman_availability()
+
+
+@pytest.fixture(scope="session")
+def is_podman_available(podman_probe_result: PodmanProbeResult) -> bool:
+    return podman_probe_result.available
+
+
+@pytest.fixture(scope="session")
+def devbox_image(podman_probe_result: PodmanProbeResult, dockerfile_path: Path) -> str:
+    if not podman_probe_result.available:
+        pytest.skip(
+            f"Podman is not available in the environment: {podman_probe_result.reason}"
+        )
 
     image_tag = (
         f"localhost/devbox:test-{devbox_context_fingerprint(dockerfile_path.parent)}"
