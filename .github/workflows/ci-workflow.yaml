@@ -37,7 +37,12 @@ jobs:
           save-cache: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install pre-commit
-        run: uv tool install pre-commit
+        # Use the same pinned version as the devbox image.
+        run: |
+          pre_commit_version="$(awk -F= \
+            '$1 == "ARG PRE_COMMIT_VERSION" { print $2; exit }' \
+            container/Dockerfile)"
+          uv tool install "pre-commit==${pre_commit_version}"
 
       - name: Install hadolint
         # Version must match the hadolint rev in .pre-commit-config.yaml

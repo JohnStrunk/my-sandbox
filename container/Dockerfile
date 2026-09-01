@@ -228,6 +228,14 @@ RUN mkdir -p /sandbox/.config/containers \
 
 ENV HOME=/sandbox
 
+# Install pre-commit for the sandbox user so its executable and tool
+# environment live under /sandbox/.local.
+# The CI workflow reads this pin to use the same version.
+# renovate: datasource=pypi depName=pre-commit
+ARG PRE_COMMIT_VERSION=4.6.2
+ENV PATH="/sandbox/.local/bin:${PATH}"
+RUN /usr/sbin/runuser -u sandbox -- uv tool install "pre-commit==${PRE_COMMIT_VERSION}"
+
 # Two more settings from podman's own reference Podman-in-Podman image
 # (https://github.com/containers/image_build/blob/main/podman/Containerfile),
 # defensive for nested `podman build`/`buildah` in this doubly-rootless
