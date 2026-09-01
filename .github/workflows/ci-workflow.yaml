@@ -107,10 +107,89 @@ jobs:
       - name: Install Podman
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y --no-install-recommends podman
+          sudo apt-get install -y --no-install-recommends podman zstd
+
+      - name: Determine Podman version
+        id: podman-version
+        run: printf 'version=%s\n' "$(podman version --format '{{.Version}}')" >> "$GITHUB_OUTPUT"
+
+      # Rootless layers can be owned by subordinate UIDs. Archive the graph
+      # root inside Podman's user namespace instead of caching it directly.
+      - name: Restore Podman layer cache
+        id: podman-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/podman-storage.tar.zst
+          key: podman-storage-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.podman-version.outputs.version }}-${{ hashFiles('container/**') }}
+          restore-keys: |
+            podman-storage-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.podman-version.outputs.version }}-
+
+      - name: Restore cached Podman layers
+        if: steps.podman-cache.outputs.cache-matched-key != ''
+        run: |
+          set -euo pipefail
+          storage="$HOME/.local/share/containers/storage"
+          rm -rf "$storage"
+          mkdir -p "$storage"
+          podman unshare tar \
+            --extract \
+            --zstd \
+            --numeric-owner \
+            --same-owner \
+            --same-permissions \
+            --xattrs \
+            --xattrs-include='*' \
+            --acls \
+            --file "$RUNNER_TEMP/podman-storage.tar.zst" \
+            --directory "$storage"
+          podman info --format '{{.Store.GraphRoot}}' >/dev/null
+
+      - name: Build devbox image
+        env:
+          CACHE_HIT: ${{ steps.podman-cache.outputs.cache-hit }}
+          CACHE_MATCHED_KEY: ${{ steps.podman-cache.outputs.cache-matched-key }}
+        run: |
+          set -euo pipefail
+          start_time="$(date +%s)"
+          podman build --layers --file container/Dockerfile --tag devbox:latest container/
+          duration="$(( $(date +%s) - start_time ))"
+          cache_hit="${CACHE_HIT:-false}"
+          matched_key="${CACHE_MATCHED_KEY:-none}"
+          printf 'Devbox image build duration: %ss (exact cache hit: %s)\n' \
+            "$duration" "$cache_hit"
+          printf 'Devbox image cache restored: %s\n' "$matched_key"
+          {
+            printf '%s\n' '### Devbox image build'
+            printf '%s\n' "- Duration: ${duration}s"
+            printf '%s\n' "- Exact cache hit: ${cache_hit}"
+            printf '%s\n' "- Restored cache key: ${matched_key}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Cache entries are immutable. Only update the shared cache from main;
+      # pull requests can read it but cannot modify it with untrusted changes.
+      - name: Archive Podman layers
+        if: success() && github.ref == 'refs/heads/main' && steps.podman-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          podman unshare tar \
+            --create \
+            --zstd \
+            --numeric-owner \
+            --xattrs \
+            --xattrs-include='*' \
+            --acls \
+            --file "$RUNNER_TEMP/podman-storage.tar.zst" \
+            --directory "$HOME/.local/share/containers/storage" .
 
       - name: Run test suite
         run: uv run --extra test pytest -m "not e2e_inference"
+
+      - name: Save Podman layer cache
+        if: success() && github.ref == 'refs/heads/main' && steps.podman-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/podman-storage.tar.zst
+          key: podman-storage-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.podman-version.outputs.version }}-${{ hashFiles('container/**') }}
 
   # This is a dummy job to determine success of the CI workflow
   ci-success:
