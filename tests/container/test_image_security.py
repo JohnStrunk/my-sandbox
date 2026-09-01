@@ -80,6 +80,17 @@ def test_buildah_env_variables(devbox_image: str):
 
 
 @pytest.mark.container
+def test_sandbox_local_bin_on_path(devbox_image: str):
+    res = run_in_devbox(
+        devbox_image,
+        ["bash", "-c", "printf '%s\\n' \"$PATH\""],
+        user="sandbox",
+    )
+    assert res.returncode == 0
+    assert "/sandbox/.local/bin" in res.stdout.strip().split(":")
+
+
+@pytest.mark.container
 def test_redhat_ca_certificates_installed(devbox_image: str):
     res = run_in_devbox(
         devbox_image,

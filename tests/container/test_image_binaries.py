@@ -9,6 +9,7 @@ BINARIES = [
     ("rustup", ["rustup", "--version"]),
     ("uv", ["uv", "--version"]),
     ("uvx", ["uvx", "--version"]),
+    ("pre-commit", ["pre-commit", "--version"]),
     ("node", ["node", "--version"]),
     ("npm", ["npm", "--version"]),
     ("npx", ["npx", "--version"]),
