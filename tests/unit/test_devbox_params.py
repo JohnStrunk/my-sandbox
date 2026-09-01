@@ -1,11 +1,12 @@
 import json
+import os
 import stat
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from tests.conftest import LAUNCHER_OPTIONAL_ENV_VARS, run_bash_script
+from tests.conftest import CREDENTIAL_ENV_VARS, run_bash_script
 
 
 @pytest.fixture
@@ -222,8 +223,36 @@ def test_devbox_does_not_forward_host_credentials(
     assert res.returncode == 0
 
     logged = log_file.read_text()
-    for name in LAUNCHER_OPTIONAL_ENV_VARS:
+    for name in CREDENTIAL_ENV_VARS:
         assert f"{name}=host-{name.lower()}" not in logged
+
+
+@pytest.mark.unit
+def test_devbox_launcher_uses_isolated_home(
+    devbox_path: Path, mock_podman_env, tmp_path: Path, isolated_home: Path
+):
+    # The launcher must never discover the real host's CLI configuration or
+    # credential files (e.g. gh, gcloud, OpenCode state) through $HOME.
+    env, log_file = mock_podman_env
+    assert env["HOME"] == str(isolated_home)
+    assert env["HOME"] != os.environ.get("HOME")
+    assert not any(isolated_home.iterdir())
+
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0
+
+    calls = parse_podman_calls(log_file)
+    run_call = next((c for c in calls if c and c[0] == "run" and "-d" in c), None)
+    assert run_call is not None
+    volumes = [run_call[i + 1] for i, arg in enumerate(run_call) if arg == "--volume"]
+    # Only the bind-mounted project directory and repo-local opencode.json
+    # are expected; no host config/credential directories should be mounted.
+    assert len(volumes) == 2
+    assert any(f"{run_dir}:/sandbox/" in v for v in volumes)
+    assert any(v.endswith(":/sandbox/opencode.json") for v in volumes)
 
 
 @pytest.mark.unit

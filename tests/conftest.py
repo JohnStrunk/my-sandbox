@@ -9,7 +9,26 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-LAUNCHER_OPTIONAL_ENV_VARS = (
+# Credential-isolated test runner (issue #81)
+# ---------------------------------------------------------------------------
+# Provider and integration credentials must never influence the outcome of an
+# isolated test, and mock command logs/diagnostics must never contain host
+# credential values. `CREDENTIAL_ENV_VARS` is the maintained scrub list of
+# provider/integration environment variables that `devbox` and its supporting
+# scripts read. The `_isolated_test_environment` autouse fixture below
+# removes these from `os.environ` for every test by default, so unit,
+# container, and integration tests are deterministic whether or not the host
+# happens to have any of these set.
+#
+# Tests that need to exercise credential passthrough behavior opt in
+# explicitly (e.g. via `monkeypatch.setenv(...)`, or the `host_credentials`
+# and `isolated_env` fixtures below).
+#
+# `tests/e2e_inference` is the intentional exception: those tests are
+# end-to-end checks that require real provider credentials, so they are
+# exempt from the automatic scrub (see the `e2e_inference` marker check in
+# `_isolated_test_environment`).
+CREDENTIAL_ENV_VARS = (
     "GEMINI_API_KEY",
     "GOOGLE_GENERATIVE_AI_API_KEY",
     "GH_TOKEN",
@@ -26,23 +45,73 @@ LAUNCHER_OPTIONAL_ENV_VARS = (
     "LITEMAAS_API_KEY",
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
+    "ANTHROPIC_BASE_URL",
     "OPENROUTER_API_KEY",
     "GOOGLE_CLOUD_PROJECT",
     "VERTEX_LOCATION",
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolated_test_environment(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Scrub provider/integration credentials from every test by default.
+
+    This is the standard, reusable isolation applied to the whole suite
+    (issue #81): unit, container, and integration tests must produce the
+    same result whether or not the host happens to have credentials set.
+    Tests under `tests/e2e_inference` are intentional end-to-end tests that
+    need real credentials, so they're exempt via the `e2e_inference` marker.
+    """
+    if request.node.get_closest_marker("e2e_inference") is not None:
+        return
+    for name in CREDENTIAL_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+
+
 @pytest.fixture
 def host_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in LAUNCHER_OPTIONAL_ENV_VARS:
+    """Simulate a host machine that has every optional credential set.
+
+    Used to verify that isolated tests/launchers don't accidentally forward
+    credentials they weren't explicitly given.
+    """
+    for name in CREDENTIAL_ENV_VARS:
         monkeypatch.setenv(name, f"host-{name.lower()}")
 
 
 @pytest.fixture
-def isolated_env(host_credentials) -> dict[str, str]:
+def isolated_home(tmp_path: Path) -> Path:
+    """A fresh, empty directory to use as `$HOME` for a subprocess.
+
+    Prevents host CLI configuration and credential files (e.g. `gh`'s auth
+    config, gcloud application-default credentials, or OpenCode state) from
+    being discovered by scripts under test unless a test explicitly
+    populates this directory.
+    """
+    home = tmp_path / "isolated-home"
+    home.mkdir(exist_ok=True)
+    return home
+
+
+@pytest.fixture
+def isolated_env(host_credentials: None, isolated_home: Path) -> dict[str, str]:
+    """A deterministic environment for launching `devbox` (or similar
+    scripts) as a subprocess: no provider/integration credentials and no
+    host home-directory state, unless a test adds them explicitly.
+    """
     env = os.environ.copy()
-    for name in LAUNCHER_OPTIONAL_ENV_VARS:
+    for name in CREDENTIAL_ENV_VARS:
         env.pop(name, None)
+    env["HOME"] = str(isolated_home)
+    for xdg_var, subdir in (
+        ("XDG_CONFIG_HOME", "config"),
+        ("XDG_DATA_HOME", "share"),
+        ("XDG_STATE_HOME", "state"),
+        ("XDG_CACHE_HOME", "cache"),
+    ):
+        env[xdg_var] = str(isolated_home / subdir)
     return env
 
 

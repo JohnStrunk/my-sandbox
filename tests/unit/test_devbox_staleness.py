@@ -1,4 +1,3 @@
-import os
 import stat
 import subprocess
 from pathlib import Path
@@ -30,6 +29,7 @@ def _shell_context_fingerprint(context_dir: Path) -> str:
 
 def _mock_podman(
     tmp_path: Path,
+    isolated_env: dict[str, str],
     recorded_fingerprint: str,
     container_image: str,
     current_image: str,
@@ -61,7 +61,7 @@ exit 0
     )
     mock_podman.chmod(mock_podman.stat().st_mode | stat.S_IEXEC)
 
-    env = os.environ.copy()
+    env = isolated_env
     env["PATH"] = f"{bin_dir}:{env.get('PATH', '')}"
     env["MOCK_RECORDED_FINGERPRINT"] = recorded_fingerprint
     env["MOCK_CONTAINER_IMAGE"] = container_image
@@ -71,10 +71,11 @@ exit 0
 
 @pytest.mark.unit
 def test_devbox_warns_before_entering_stale_container(
-    devbox_path: Path, tmp_path: Path
+    devbox_path: Path, tmp_path: Path, isolated_env: dict[str, str]
 ):
     env = _mock_podman(
         tmp_path,
+        isolated_env,
         recorded_fingerprint="old-context",
         container_image="current-image",
         current_image="current-image",
@@ -88,10 +89,13 @@ def test_devbox_warns_before_entering_stale_container(
 
 
 @pytest.mark.unit
-def test_devbox_warns_for_rebuilt_image(devbox_path: Path, tmp_path: Path):
+def test_devbox_warns_for_rebuilt_image(
+    devbox_path: Path, tmp_path: Path, isolated_env: dict[str, str]
+):
     expected_fingerprint = _shell_context_fingerprint(devbox_path.parent / "container")
     env = _mock_podman(
         tmp_path,
+        isolated_env,
         recorded_fingerprint=expected_fingerprint,
         container_image="old-image",
         current_image="current-image",
@@ -104,10 +108,13 @@ def test_devbox_warns_for_rebuilt_image(devbox_path: Path, tmp_path: Path):
 
 
 @pytest.mark.unit
-def test_devbox_does_not_warn_for_current_container(devbox_path: Path, tmp_path: Path):
+def test_devbox_does_not_warn_for_current_container(
+    devbox_path: Path, tmp_path: Path, isolated_env: dict[str, str]
+):
     expected_fingerprint = _shell_context_fingerprint(devbox_path.parent / "container")
     env = _mock_podman(
         tmp_path,
+        isolated_env,
         recorded_fingerprint=expected_fingerprint,
         container_image="current-image",
         current_image="current-image",

@@ -221,6 +221,67 @@ an Anthropic model with `anthropic/<model-id>`.
 
 ---
 
+## Testing
+
+Tests live under `tests/` and run with [pytest](https://pytest.org). Install
+the test extras and invoke pytest through `uv` -- this is the one documented
+way to run the suite, locally and in CI:
+
+```shell
+uv run --extra test pytest
+```
+
+Tests are organized with markers:
+
+- `unit` - Fast, fully isolated tests of `devbox`'s argument parsing and
+  helper logic (no real Podman required).
+- `container` - Static and smoke checks against a built `devbox` image.
+- `integration` - Container lifecycle and nested Podman-in-Podman checks.
+- `e2e_inference` - End-to-end checks against real LLM provider APIs.
+
+CI runs `uv run --extra test pytest -m "not e2e_inference"`; the `container`
+and `integration` markers still run in CI (they require Podman, which is
+available there) but `e2e_inference` is opt-in since it needs real provider
+credentials.
+
+### Isolated by default
+
+Every test except `e2e_inference` runs inside a credential-isolated
+environment (see `tests/conftest.py`): an autouse fixture scrubs known
+provider/integration credential environment variables
+(`CREDENTIAL_ENV_VARS`) before each test, and the `isolated_env`/
+`isolated_home` fixtures give `devbox`-launching tests a fresh, empty `$HOME`
+and XDG directories. This means:
+
+- Unit and container/integration tests produce the same result whether or
+  not the machine running them has `GEMINI_API_KEY`, a `gh auth login`
+  session, gcloud application-default credentials, OpenCode state, etc.
+- Host CLI configuration and credential files under `$HOME` cannot
+  influence a test unless the test explicitly creates them under its own
+  `isolated_home`.
+- Mock command logs and test diagnostics never contain host credential
+  values by default.
+
+Tests that need to exercise credential passthrough behavior opt in
+explicitly, for example:
+
+```python
+def test_devbox_gemini_env(devbox_path, mock_podman_env, tmp_path):
+    env, log_file = mock_podman_env
+    env["GEMINI_API_KEY"] = "mock-gemini-token"  # pragma: allowlist secret
+    ...
+```
+
+`tests/e2e_inference` is the intentional boundary: those tests are real
+end-to-end checks and are exempt from the scrub, reading actual provider
+credentials (e.g. `GEMINI_API_KEY`, `LITEMAAS_API_KEY`) from the environment
+and skipping themselves when a credential isn't set. Run them explicitly
+with the relevant credentials exported:
+
+```shell
+GEMINI_API_KEY=... uv run --extra test pytest -m e2e_inference
+```
+
 ## Code Quality & Pre-Commit
 
 This repository uses [pre-commit](https://pre-commit.com) to validate code
