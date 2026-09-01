@@ -65,6 +65,16 @@ print(json.dumps(result, separators=(",", ":")))
     fi
 fi
 
+if [ "$1" = "run" ] && [ "$2" = "-d" ] \
+    && [ "${{MOCK_REJECT_NESTED_SYSCTLS:-}}" = "1" ]; then
+    case "$*" in
+        *--sysctl*)
+            echo "Error: Read-only file system" >&2
+            exit 125
+            ;;
+    esac
+fi
+
 if [ "$1" = "container" ] && [ "$2" = "exists" ]; then
     case "$3" in
         mock-llm-running|mock-proxy-running|mock-switchyard-running)
@@ -96,7 +106,6 @@ fi
 exit 0
 """)
     mock_script.chmod(mock_script.stat().st_mode | stat.S_IEXEC)
-
     # Prevent the launcher from finding credentials in the host's gh config.
     fake_gh = bin_dir / "gh"
     fake_gh.write_text("#!/usr/bin/env bash\nexit 1\n")
@@ -599,6 +608,59 @@ def test_devbox_switchyard_loopback_network(
     assert run_call is not None
     assert "--network" in run_call
     assert "slirp4netns:allow_host_loopback=true" in run_call
+
+
+@pytest.mark.unit
+def test_devbox_requests_nested_network_sysctls(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, log_file = mock_podman_env
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0
+
+    calls = parse_podman_calls(log_file)
+    run_call = next((c for c in calls if c and c[0] == "run" and "-d" in c), None)
+    assert run_call is not None
+    for sysctl in (
+        "net.ipv4.conf.default.route_localnet=1",
+        "net.ipv4.conf.default.arp_notify=1",
+        "net.ipv4.conf.default.rp_filter=2",
+        "net.ipv4.ip_forward=1",
+    ):
+        assert sysctl in run_call
+    assert "DEVBOX_SUBID_READY_FILE=/sandbox/.devbox-subids-ready" in run_call
+    container_name = next(arg for arg in run_call if arg.startswith("devbox-"))
+    assert [
+        "exec",
+        "-u",
+        "0:0",
+        container_name,
+        "touch",
+        "/sandbox/.devbox-subids-ready",
+    ] in calls
+
+
+@pytest.mark.unit
+def test_devbox_retries_without_nested_network_sysctls(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, log_file = mock_podman_env
+    env["MOCK_REJECT_NESTED_SYSCTLS"] = "1"
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0
+    assert "using pasta-only API networking" in res.stdout
+
+    run_calls = [c for c in parse_podman_calls(log_file) if c and c[0] == "run"]
+    detached_run_calls = [c for c in run_calls if "-d" in c]
+    assert len(detached_run_calls) == 2
+    assert "--sysctl" in detached_run_calls[0]
+    assert "--sysctl" not in detached_run_calls[1]
 
 
 @pytest.mark.unit

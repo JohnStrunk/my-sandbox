@@ -145,6 +145,7 @@ RUN dnf install -y --setopt=install_weak_deps=False \
     aardvark-dns \
     fuse-overlayfs \
     netavark \
+    passt \
     podman \
     slirp4netns \
     shadow-utils-subid \
@@ -207,26 +208,28 @@ RUN useradd --create-home --user-group --home-dir /sandbox --shell /bin/bash san
 #     because the outer container's /proc/sys is read-only. This is
 #     podman's own documented fix for rootless use:
 #     https://github.com/containers/podman/pull/16209
+#   - netns = "pasta": uses userspace networking for the default network.
+#     Unlike a netavark bridge, pasta does not need to write sysctls through
+#     the outer container's read-only /proc/sys and supports published ports.
 #   - utsns = "host": avoids crun's "sethostname: Operation not permitted"
 #     when nested containers try to set their own hostname in a fresh UTS
 #     namespace.
-#   - default_rootless_network_cmd = "slirp4netns": nested containers
-#     default to unprivileged, userspace NAT networking instead of the CNI
-#     bridge plugin, which needs bridge-creation privileges the outer
-#     rootless container doesn't have.
+#   - default_rootless_network_cmd = "pasta": keeps explicit rootless network
+#     requests on the same userspace network implementation.
 # This combination (together with the newuidmap/newgidmap fix above and
 # devbox's dynamic subordinate ID setup) follows the pattern
 # documented by Podman's own maintainers, cited above.
 RUN mkdir -p /sandbox/.config/containers \
     && printf '[storage]\ndriver = "overlay"\n\n[storage.options]\nmount_program = "/usr/bin/fuse-overlayfs"\nmountopt = "nodev,fsync=0"\n' \
     > /sandbox/.config/containers/storage.conf \
-    && printf '[containers]\ncgroups = "disabled"\nvolumes = ["/proc:/proc"]\ndefault_sysctls = []\nutsns = "host"\n\n[network]\ndefault_rootless_network_cmd = "slirp4netns"\n' \
+    && printf '[containers]\ncgroups = "disabled"\nvolumes = ["/proc:/proc"]\ndefault_sysctls = []\nnetns = "pasta"\nutsns = "host"\n\n[network]\nnetwork_backend = "netavark"\ndefault_rootless_network_cmd = "pasta"\n' \
     > /sandbox/.config/containers/containers.conf \
-    && mkdir -p /sandbox/.config/acli /sandbox/.config/gcloud /sandbox/.config/gws /sandbox/.config/opencode /sandbox/.local/state/opencode /sandbox/.local/share/opencode \
+    && mkdir -p /sandbox/.config/acli /sandbox/.config/gcloud /sandbox/.config/gws /sandbox/.config/opencode /sandbox/.local/state/opencode /sandbox/.local/share/opencode /sandbox/.docker/run \
     && touch /sandbox/.local/state/opencode/model.json /sandbox/.config/gcloud/application_default_credentials.json \
-    && chown -R sandbox:sandbox /sandbox/.config /sandbox/.local
+    && chown -R sandbox:sandbox /sandbox/.config /sandbox/.local /sandbox/.docker
 
-ENV HOME=/sandbox
+ENV HOME=/sandbox \
+    DOCKER_HOST=unix:///sandbox/.docker/run/docker.sock
 
 # Install pre-commit for the sandbox user so its executable and tool
 # environment live under /sandbox/.local.
@@ -250,8 +253,9 @@ RUN /usr/sbin/runuser -u sandbox -- uv tool install "pre-commit==${PRE_COMMIT_VE
 ENV BUILDAH_ISOLATION=chroot \
     _CONTAINERS_USERNS_CONFIGURED=""
 
-COPY devbox-entry.sh /usr/local/bin/
-RUN chmod +rx /usr/local/bin/devbox-entry.sh \
+COPY devbox-entry.sh devbox-docker-api-check.sh /usr/local/bin/
+RUN chmod +rx /usr/local/bin/devbox-entry.sh /usr/local/bin/devbox-docker-api-check.sh \
+    && ln -s /usr/local/bin/devbox-docker-api-check.sh /usr/local/bin/devbox-docker-api-check \
     && printf '%s\n' 'sandbox ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/sandbox \
     && chmod 0440 /etc/sudoers.d/sandbox \
     && visudo -cf /etc/sudoers

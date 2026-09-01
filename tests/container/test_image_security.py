@@ -64,8 +64,21 @@ def test_containers_containers_conf(devbox_image: str):
     content = res.stdout
     assert 'cgroups = "disabled"' in content
     assert 'volumes = ["/proc:/proc"]' in content
+    assert 'netns = "pasta"' in content
     assert 'utsns = "host"' in content
-    assert 'default_rootless_network_cmd = "slirp4netns"' in content
+    assert 'network_backend = "netavark"' in content
+    assert 'default_rootless_network_cmd = "pasta"' in content
+
+
+@pytest.mark.container
+def test_docker_api_environment(devbox_image: str):
+    res = run_in_devbox(
+        devbox_image,
+        ["bash", "-c", "printf '%s\\n' \"$DOCKER_HOST\""],
+        user="sandbox",
+    )
+    assert res.returncode == 0
+    assert res.stdout.strip() == "unix:///sandbox/.docker/run/docker.sock"
 
 
 @pytest.mark.container

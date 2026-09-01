@@ -27,6 +27,8 @@ BINARIES = [
     ("markdownlint-cli2", ["markdownlint-cli2", "--help"]),
     ("ffmpeg", ["ffmpeg", "-version"]),
     ("podman", ["podman", "--version"]),
+    ("pasta", ["pasta", "--version"]),
+    ("devbox-docker-api-check", ["devbox-docker-api-check", "--help"]),
 ]
 
 

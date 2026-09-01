@@ -122,6 +122,36 @@ podman run --rm alpine uname -a
 opencode
 ```
 
+### Nested Docker-Compatible API
+
+Every devbox starts a rootless Podman Docker-compatible API service. Clients
+inside the devbox discover it through the stable `DOCKER_HOST` value:
+
+```shell
+printf '%s\n' "$DOCKER_HOST"
+curl --unix-socket "${DOCKER_HOST#unix://}" http://localhost/_ping
+devbox-docker-api-check
+```
+
+The default nested network uses `pasta`, which supports published ports without
+requiring writes through the outer container's read-only `/proc/sys`. The
+launcher also asks the outer Podman to preconfigure the sysctls required for
+explicit netavark bridge networks. If the host rejects those values, the
+launcher falls back to the pasta-only mode and
+`devbox-docker-api-check --require-user-networks` reports that user-defined
+bridge networks are unavailable.
+
+Docker-compatible clients such as Testcontainers can use the API without any
+additional socket bind mount or daemon installation.
+
+If the API service cannot start in a constrained host environment, regular
+devbox commands remain available and the launcher prints the diagnostic; API
+clients should wait for a successful `devbox-docker-api-check` first.
+
+Because devboxes are persistent, run `devbox --recreate` once after upgrading
+to this API-enabled image so an existing container receives the new entrypoint
+and environment.
+
 ### Automatic OpenCode Integrations
 
 The integrations below are enabled when their requirements are present while a

@@ -25,6 +25,7 @@ BIND_DIR="$(realpath "$PWD")"
 NAME="devbox-$(basename "$BIND_DIR")"
 WORKDIR="/sandbox/$(basename "$BIND_DIR")"
 SOURCE_FINGERPRINT_LABEL="io.github.johnstrunk.my-sandbox.devbox-context-fingerprint"
+SUBID_READY_FILE="/sandbox/.devbox-subids-ready"
 
 # Clear XDG_DATA_HOME so `devbox` works inside vscode terminal sessions
 export XDG_DATA_HOME=
@@ -391,17 +392,48 @@ EOF
   fi
 
   echo "==> Creating container '$NAME'"
-  podman run -d \
-    --user sandbox \
-    --userns "keep-id:uid=$sandbox_uid,gid=$sandbox_gid" \
-    --name "$NAME" \
-    --label "$SOURCE_FINGERPRINT_LABEL=$source_fingerprint" \
-    --stop-timeout 0 \
-    --device /dev/fuse \
-    --device /dev/net/tun \
-    --security-opt label=disable \
-    "${params[@]}" \
-    "devbox:latest"
+  local podman_run_args=(
+    run -d
+    --user sandbox
+    --userns "keep-id:uid=$sandbox_uid,gid=$sandbox_gid"
+    --name "$NAME"
+    --label "$SOURCE_FINGERPRINT_LABEL=$source_fingerprint"
+    --stop-timeout 0
+    --device /dev/fuse
+    --device /dev/net/tun
+    --security-opt label=disable
+    --env "DEVBOX_SUBID_READY_FILE=$SUBID_READY_FILE"
+  )
+  # Preseed the values netavark needs for an explicit bridge network. The
+  # outer container may reject these when its own /proc/sys is read-only; the
+  # pasta-only retry still provides a working rootless API and default port
+  # forwarding in that environment.
+  local nested_network_sysctls=(
+    --sysctl net.ipv4.conf.default.route_localnet=1
+    --sysctl net.ipv4.conf.default.arp_notify=1
+    --sysctl net.ipv4.conf.default.rp_filter=2
+    --sysctl net.ipv4.ip_forward=1
+  )
+  local run_output
+  if run_output="$(
+    podman "${podman_run_args[@]}" "${nested_network_sysctls[@]}" \
+      "${params[@]}" "devbox:latest" 2>&1
+  )"; then
+    printf '%s\n' "$run_output"
+  elif [[ "$run_output" == *sysctl* || "$run_output" == *"Read-only file system"* ]]; then
+    echo "==> Outer Podman cannot preconfigure nested-network sysctls; using pasta-only API networking"
+    podman rm -f "$NAME" >/dev/null 2>&1 || true
+    if ! run_output="$(
+      podman "${podman_run_args[@]}" "${params[@]}" "devbox:latest" 2>&1
+    )"; then
+      printf '%s\n' "$run_output" >&2
+      return 1
+    fi
+    printf '%s\n' "$run_output"
+  else
+    printf '%s\n' "$run_output" >&2
+    return 1
+  fi
 
   # --userns=keep-id gives this container's own user namespace a limited
   # range of usable IDs (0..N, where N is determined by the invoking host
@@ -424,9 +456,23 @@ EOF
   # its "podman" user's identity of 1000:
   # https://github.com/containers/podman/blob/main/contrib/podmanimage/stable/Dockerfile
   echo "==> Configuring nested Podman's subordinate UID/GID delegation"
+  cleanup_failed_create() {
+    echo "==> Removing incomplete container '$NAME'" >&2
+    timeout 10 podman rm -f "$NAME" >/dev/null 2>&1 || true
+  }
   local max_uid max_gid
-  max_uid="$(podman exec "$NAME" awk '{ if ($1 + $3 - 1 > max) max = $1 + $3 - 1 } END { print max }' /proc/self/uid_map)"
-  max_gid="$(podman exec "$NAME" awk '{ if ($1 + $3 - 1 > max) max = $1 + $3 - 1 } END { print max }' /proc/self/gid_map)"
+  if ! max_uid="$(podman exec "$NAME" awk '{ if ($1 + $3 - 1 > max) max = $1 + $3 - 1 } END { print max }' /proc/self/uid_map)"; then
+    cleanup_failed_create
+    return 1
+  fi
+  if ! max_gid="$(podman exec "$NAME" awk '{ if ($1 + $3 - 1 > max) max = $1 + $3 - 1 } END { print max }' /proc/self/gid_map)"; then
+    cleanup_failed_create
+    return 1
+  fi
+  if [[ -z "$max_uid" || -z "$max_gid" ]]; then
+    cleanup_failed_create
+    return 1
+  fi
   subid_ranges() { # id max -> "sandbox:..." subuid/subgid lines around $id
     local id="$1" max="$2"
     if [ "$id" -gt 1 ]; then
@@ -436,9 +482,40 @@ EOF
       echo "sandbox:$((id + 1)):$((max - id))"
     fi
   }
-  podman exec -u 0:0 "$NAME" sed -i '/^sandbox:/d' /etc/subuid /etc/subgid
-  subid_ranges "$sandbox_uid" "$max_uid" | podman exec -i -u 0:0 "$NAME" tee -a /etc/subuid >/dev/null
-  subid_ranges "$sandbox_gid" "$max_gid" | podman exec -i -u 0:0 "$NAME" tee -a /etc/subgid >/dev/null
+  if ! podman exec -u 0:0 "$NAME" sed -i '/^sandbox:/d' /etc/subuid /etc/subgid; then
+    cleanup_failed_create
+    return 1
+  fi
+  if ! subid_ranges "$sandbox_uid" "$max_uid" | podman exec -i -u 0:0 "$NAME" tee -a /etc/subuid >/dev/null; then
+    cleanup_failed_create
+    return 1
+  fi
+  if ! subid_ranges "$sandbox_gid" "$max_gid" | podman exec -i -u 0:0 "$NAME" tee -a /etc/subgid >/dev/null; then
+    cleanup_failed_create
+    return 1
+  fi
+
+  # The entrypoint waits for this marker so the API service sees the dynamic
+  # subordinate-ID ranges instead of starting against the image defaults.
+  if ! podman exec -u 0:0 "$NAME" touch "$SUBID_READY_FILE"; then
+    cleanup_failed_create
+    return 1
+  fi
+
+  local api_attempts=0
+  while ! timeout 1 podman exec "$NAME" curl --connect-timeout 1 --max-time 1 \
+    --fail --silent --unix-socket /sandbox/.docker/run/docker.sock \
+    http://localhost/_ping >/dev/null 2>&1; do
+    api_attempts=$((api_attempts + 1))
+    if [ "$api_attempts" -ge 50 ]; then
+      echo "WARNING: Docker API did not become ready at /sandbox/.docker/run/docker.sock" >&2
+      echo "Docker API diagnostics:" >&2
+      timeout 10 podman exec "$NAME" devbox-docker-api-check >&2 || true
+      echo "Continuing without Docker-compatible API access" >&2
+      break
+    fi
+    sleep 0.1
+  done
 
   # Podman auto-creates missing parent directories for bind-mounted
   # files/dirs (e.g. the opencode model.json mount above) as root, ignoring
