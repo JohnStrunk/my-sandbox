@@ -7,6 +7,8 @@ USER root
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # Install system utilities matching devcontainer
+# Prevent Node.js 22 Intl.Segmenter crashes without full ICU data:
+# https://bugzilla.redhat.com/show_bug.cgi?id=2418608
 # hadolint ignore=DL3041
 RUN dnf install -y --setopt=install_weak_deps=False \
     ca-certificates \
@@ -17,6 +19,7 @@ RUN dnf install -y --setopt=install_weak_deps=False \
     gnupg2 \
     jq \
     libcap \
+    nodejs22-full-i18n \
     nodejs \
     npm \
     openssl \
