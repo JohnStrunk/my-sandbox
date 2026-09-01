@@ -7,9 +7,36 @@ import pytest
 
 from tests.conftest import run_bash_script
 
+DEVBOX_OPTIONAL_ENV_VARS = (
+    "GEMINI_API_KEY",
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+    "CONTEXT7_API_KEY",
+    "IGLOO_MCP_COMMUNITY",
+    "IGLOO_MCP_COMMUNITY_KEY",
+    "IGLOO_MCP_APP_PASS",
+    "IGLOO_MCP_APP_ID",
+    "IGLOO_MCP_USERNAME",
+    "IGLOO_MCP_PASSWORD",
+    "GITLAB_HOST",
+    "GITLAB_TOKEN",
+    "LITEMAAS_API_KEY",
+    "LITELLM_API_KEY",
+    "LITELLM_MASTER_KEY",
+    "OPENAI_API_KEY",
+    "GOOGLE_CLOUD_PROJECT",
+    "VERTEX_LOCATION",
+)
+
 
 @pytest.fixture
-def mock_podman_env(tmp_path: Path):
+def host_credentials(monkeypatch: pytest.MonkeyPatch):
+    for name in DEVBOX_OPTIONAL_ENV_VARS:
+        monkeypatch.setenv(name, f"host-{name.lower()}")
+
+
+@pytest.fixture
+def mock_podman_env(tmp_path: Path, host_credentials):
     bin_dir = tmp_path / "mock_bin"
     bin_dir.mkdir()
     log_file = tmp_path / "podman_calls.jsonl"
@@ -98,8 +125,15 @@ exit 0
 """)
     mock_script.chmod(mock_script.stat().st_mode | stat.S_IEXEC)
 
+    # Prevent the launcher from finding credentials in the host's gh config.
+    fake_gh = bin_dir / "gh"
+    fake_gh.write_text("#!/usr/bin/env bash\nexit 1\n")
+    fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IEXEC)
+
     env = os.environ.copy()
     env["PATH"] = f"{bin_dir}:{env.get('PATH', '')}"
+    for name in DEVBOX_OPTIONAL_ENV_VARS:
+        env.pop(name, None)
     return env, log_file
 
 
@@ -177,6 +211,22 @@ def test_devbox_litemaas_env(devbox_path: Path, mock_podman_env, tmp_path: Path)
     run_call = next((c for c in calls if c and c[0] == "run" and "-d" in c), None)
     assert run_call is not None
     assert "LITEMAAS_API_KEY=mock-litemaas-token" in run_call
+
+
+@pytest.mark.unit
+def test_devbox_does_not_forward_host_credentials(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, log_file = mock_podman_env
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0
+
+    logged = log_file.read_text()
+    for name in DEVBOX_OPTIONAL_ENV_VARS:
+        assert f"{name}=host-{name.lower()}" not in logged
 
 
 @pytest.mark.unit
