@@ -8,7 +8,6 @@ dependencies = []
 
 [project.optional-dependencies]
 test = [
-    "nemo-switchyard==0.2.0",
     "pytest==9.1.1",
     "pytest-testinfra==10.2.2",
     "pytest-mock==3.15.1",
@@ -24,7 +23,7 @@ markers = [
     "unit: Fast isolated unit tests for CLI argument parsing and helper logic",
     "container: Container image static and smoke verification tests",
     "integration: Integration tests for container lifecycle and nested Podman",
-    "e2e_inference: End-to-end LLM inference tests (local Ollama or API providers)",
+    "e2e_inference: End-to-end LLM inference tests for API providers",
 ]
 
 [tool.ruff]

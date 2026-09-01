@@ -1,6 +1,5 @@
 import json
 import os
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -87,56 +86,6 @@ def test_gemini_inference_e2e():
 
 
 @pytest.mark.e2e_inference
-def test_switchyard_inference_e2e(opencode_json_path: Path):
-    data = json.loads(opencode_json_path.read_text())
-    sy_config = data.get("provider", {}).get("switchyard-proxy", {})
-    base_url = sy_config.get("options", {}).get("baseURL")
-    assert base_url, "switchyard-proxy baseURL missing in opencode.json"
-
-    # Try local proxy first, or fallback to configured baseURL
-    target_url = "http://localhost:4000/v1"
-    try:
-        r = requests.get("http://localhost:4000/health", timeout=2)
-        if r.status_code != 200:
-            target_url = base_url
-    except requests.RequestException:
-        target_url = base_url
-
-    try:
-        res = requests.get(f"{target_url}/models", timeout=2)
-        if res.status_code != 200:
-            pytest.skip("Switchyard proxy not reachable")
-    except requests.RequestException:
-        pytest.skip("Switchyard proxy not reachable")
-
-    payload = {
-        "model": "switchyard-auto",
-        "messages": [
-            {
-                "role": "user",
-                "content": "Respond with only the single word: PONG",
-            }
-        ],
-        "max_tokens": 150,
-        "temperature": 0.0,
-    }
-
-    res = requests.post(
-        f"{target_url}/chat/completions",
-        json=payload,
-        timeout=30,
-    )
-    assert res.status_code == 200, (
-        f"Switchyard request failed with code {res.status_code}: {res.text}"
-    )
-    res_data = res.json()
-    assert "choices" in res_data
-    message = res_data["choices"][0]["message"]
-    content = message.get("content") or message.get("reasoning_content") or ""
-    assert "PONG" in content.upper()
-
-
-@pytest.mark.e2e_inference
 def test_opencode_cli_in_devbox(devbox_image: str):
     # If any inference credential is set, verify OpenCode runs a basic model check
     has_creds = bool(
@@ -151,35 +100,3 @@ def test_opencode_cli_in_devbox(devbox_image: str):
 
     res = run_in_devbox(devbox_image, ["opencode", "--version"], user="sandbox")
     assert res.returncode == 0
-
-
-@pytest.mark.e2e_inference
-def test_opencode_switchyard_in_devbox(devbox_path: Path, repo_root: Path):
-    # Verify switchyard proxy is reachable
-    try:
-        r = requests.get("http://localhost:4000/health", timeout=2)
-        if r.status_code != 200:
-            pytest.skip("Switchyard proxy is not running locally on port 4000")
-    except requests.RequestException:
-        pytest.skip("Switchyard proxy is not running locally on port 4000")
-
-    cmd = [
-        str(devbox_path),
-        "opencode",
-        "run",
-        "-m",
-        "switchyard-proxy/switchyard-auto",
-        "Respond with only the single word: PONG",
-    ]
-    res = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        cwd=str(repo_root),
-        timeout=60,
-        check=False,
-    )
-    assert res.returncode == 0, (
-        f"OpenCode run in devbox failed: {res.stderr}\nStdout: {res.stdout}"
-    )
-    assert "PONG" in res.stdout.upper()

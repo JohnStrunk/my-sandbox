@@ -11,15 +11,6 @@ This repository provides:
 - **`container/`**: A container image definition bundling modern language
   toolchains, cloud CLIs, code linters, and AI coding assistants like
   [OpenCode](https://opencode.ai).
-- **`local-llm/`**: A self-contained local LLM inference server based on
-  [Ollama](https://ollama.com), enabling offline or local AI model execution
-  with zero cloud API dependencies.
-- **`litellm-proxy/`**: An LLM autorouting proxy server based on
-  [LiteLLM](https://docs.litellm.ai/docs/proxy/auto_routing), enabling dynamic
-  complexity-based model routing across multiple model tiers.
-- **`switchyard-proxy/`**: An LLM autorouting proxy server based on
-  [Switchyard](https://github.com/NVIDIA-NeMo/Switchyard), providing protocol
-  translation and dynamic model routing across providers.
 
 ---
 
@@ -46,9 +37,6 @@ This repository provides:
   and endpoints such as Anthropic's directly into the container. When a GitHub
   token is available, it also enables the OpenCode GitHub MCP server without
   modifying any mounted OpenCode configuration file.
-- **Local LLM Integration**: Devboxes automatically detect running local
-  inference containers and configure slirp4netns loopback routing to connect to
-  local Ollama models via `10.0.2.2:11434`.
 
 ---
 
@@ -149,39 +137,6 @@ an Anthropic model with `anthropic/<model-id>`.
 
 ---
 
-## Local LLM Inference Server
-
-The `local-llm/` directory provides scripts to run CPU-quantized large language
-models locally via Ollama. This allows devbox instances to perform AI-assisted
-development completely offline.
-
-### Quick Start (Host Machine)
-
-Start the local LLM inference server once on your host machine before launching
-your devbox:
-
-```shell
-# Start the Ollama container and download default models
-./local-llm/start-llm-server.sh
-
-# Check the server status and loaded models
-./local-llm/status-llm-server.sh
-
-# Stop the server when done
-./local-llm/stop-llm-server.sh
-```
-
-### Supported Models
-
-- `gpt-oss:20b`: OpenAI open-weight model with MXFP4 quantization.
-- `qwen3.8:27b`: Alibaba coding model with q4_K_M quantization and
-  multi-token prediction.
-
-For detailed hardware requirements, configuration options, and performance
-guidelines, see the [Local LLM README](local-llm/README.md).
-
----
-
 ## Repository Structure
 
 ```text
@@ -195,25 +150,6 @@ guidelines, see the [Local LLM README](local-llm/README.md).
 ├── container/
 │   ├── Dockerfile             # Container definition
 │   └── devbox-entry.sh        # Devbox container entrypoint
-├── local-llm/
-│   ├── README.md              # Local LLM documentation
-│   ├── start-llm-server.sh    # Script to start local Ollama server
-│   ├── status-llm-server.sh   # Script to check Ollama status
-│   └── stop-llm-server.sh     # Script to stop Ollama server
-├── litellm-proxy/
-│   ├── config.yaml            # LiteLLM routing and model configuration
-│   ├── README.md              # LiteLLM proxy documentation
-│   ├── start-proxy-server.sh  # Script to start LiteLLM autorouting proxy
-│   ├── status-proxy-server.sh # Script to check proxy status
-│   └── stop-proxy-server.sh   # Script to stop proxy server
-├── switchyard-proxy/
-│   ├── README.md              # Switchyard proxy documentation
-│   ├── Dockerfile             # Switchyard proxy container definition
-│   ├── routes.toml            # Switchyard routing configuration
-│   ├── server.py              # Switchyard server runner script
-│   ├── start-switchyard-proxy.sh # Script to start Switchyard proxy container
-│   ├── status-switchyard-proxy.sh # Script to check Switchyard proxy status
-│   └── stop-switchyard-proxy.sh # Script to stop Switchyard proxy container
 ├── devbox                     # Main launcher script
 ├── opencode.json              # OpenCode model and provider configuration
 └── .pre-commit-config.yaml    # Pre-commit hook definitions

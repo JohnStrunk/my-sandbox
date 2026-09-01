@@ -23,9 +23,6 @@ LAUNCHER_OPTIONAL_ENV_VARS = (
     "GITLAB_HOST",
     "GITLAB_TOKEN",
     "LITEMAAS_API_KEY",
-    "LITELLM_API_KEY",
-    "LITELLM_MASTER_KEY",
-    "LITELLM_SALT_KEY",
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
     "OPENROUTER_API_KEY",
@@ -56,21 +53,6 @@ def repo_root() -> Path:
 @pytest.fixture(scope="session")
 def devbox_path(repo_root: Path) -> Path:
     return repo_root / "devbox"
-
-
-@pytest.fixture(scope="session")
-def local_llm_dir(repo_root: Path) -> Path:
-    return repo_root / "local-llm"
-
-
-@pytest.fixture(scope="session")
-def litellm_proxy_dir(repo_root: Path) -> Path:
-    return repo_root / "litellm-proxy"
-
-
-@pytest.fixture(scope="session")
-def switchyard_proxy_dir(repo_root: Path) -> Path:
-    return repo_root / "switchyard-proxy"
 
 
 @pytest.fixture(scope="session")
