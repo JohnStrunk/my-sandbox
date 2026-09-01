@@ -523,6 +523,45 @@ def test_devbox_litellm_env(devbox_path: Path, mock_podman_env, tmp_path: Path):
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize(
+    "anthropic_env",
+    [
+        {"ANTHROPIC_API_KEY": "mock-anthropic-token"},  # pragma: allowlist secret
+        {"ANTHROPIC_BASE_URL": "https://anthropic.example/v1"},
+        {
+            "ANTHROPIC_API_KEY": "mock-anthropic-token",  # pragma: allowlist secret
+            "ANTHROPIC_BASE_URL": "https://anthropic.example/v1",
+        },
+    ],
+)
+def test_devbox_anthropic_env(
+    devbox_path: Path,
+    mock_podman_env,
+    tmp_path: Path,
+    anthropic_env: dict[str, str],
+):
+    env, log_file = mock_podman_env
+    env.pop("ANTHROPIC_API_KEY", None)
+    env.pop("ANTHROPIC_BASE_URL", None)
+    env.update(anthropic_env)
+
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0
+
+    calls = parse_podman_calls(log_file)
+    run_call = next((c for c in calls if c and c[0] == "run" and "-d" in c), None)
+    assert run_call is not None
+    for name, value in anthropic_env.items():
+        assert f"{name}={value}" in run_call
+    for name in ("ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL"):
+        if name not in anthropic_env:
+            assert not any(arg.startswith(f"{name}=") for arg in run_call)
+
+
+@pytest.mark.unit
 def test_devbox_vertex_env(devbox_path: Path, mock_podman_env, tmp_path: Path):
     env, log_file = mock_podman_env
     env["GOOGLE_CLOUD_PROJECT"] = "my-gcp-project"
