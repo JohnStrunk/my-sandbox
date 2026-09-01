@@ -127,6 +127,7 @@ create_container() {
   source_fingerprint="$(container_context_fingerprint)"
 
   podman build \
+    --layers \
     --file "$HERE/container/Dockerfile" \
     --tag "devbox:latest" \
     "$HERE/container"
