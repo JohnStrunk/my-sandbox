@@ -1,5 +1,6 @@
 import json
 import stat
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -83,6 +84,37 @@ if [ "$1" = "exec" ]; then
     fi
     if echo "$*" | grep -q "gid_map"; then
         echo "65535"
+        exit 0
+    fi
+    # Mock the container's own `git config --global <key> [value]`, so
+    # tests can simulate an identity already configured inside the
+    # (persistent) container via MOCK_CONTAINER_GIT_NAME/_EMAIL, without
+    # a real container.
+    if [ "$3" = "git" ] && [ "$4" = "config" ] && [ "$5" = "--global" ]; then
+        if [ -n "${{7:-}}" ]; then
+            # Simulated `git config --global <key> <value>` (set)
+            if [ "${{MOCK_GIT_CONFIG_SET_FAILS:-}}" = "1" ]; then
+                exit 1
+            fi
+            exit 0
+        fi
+        case "$6" in
+            user.name)
+                name="${{MOCK_CONTAINER_GIT_NAME:-}}"
+                [ -n "$name" ] && echo "$name" && exit 0
+                exit 1
+                ;;
+            user.email)
+                email="${{MOCK_CONTAINER_GIT_EMAIL:-}}"
+                [ -n "$email" ] && echo "$email" && exit 0
+                exit 1
+                ;;
+        esac
+    fi
+    if [ "$3" = "gh" ] && [ "$4" = "auth" ] && [ "$5" = "setup-git" ]; then
+        if [ "${{MOCK_GH_AUTH_SETUP_GIT_FAILS:-}}" = "1" ]; then
+            exit 1
+        fi
         exit 0
     fi
     exit 0
@@ -618,3 +650,191 @@ def test_devbox_opencode_data_volume_ignores_xdg_data_home(
     assert any(
         f"{expected_data_dir}:/sandbox/.local/share/opencode" in v for v in run_call
     )
+
+
+def _git_config_set_calls(calls: list[list[str]], key: str) -> list[list[str]]:
+    return [
+        c
+        for c in calls
+        if c[:5] == ["exec", c[1], "git", "config", "--global"]
+        and len(c) >= 6
+        and c[5] == key
+        and len(c) >= 7
+    ]
+
+
+@pytest.mark.unit
+def test_devbox_configures_git_identity_from_host_config(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, log_file = mock_podman_env
+    host_gitconfig = tmp_path / "host_gitconfig"
+    env["GIT_CONFIG_GLOBAL"] = str(host_gitconfig)
+    env.pop("MOCK_CONTAINER_GIT_NAME", None)
+    env.pop("MOCK_CONTAINER_GIT_EMAIL", None)
+    subprocess.run(
+        ["git", "config", "--global", "user.name", "Host User"],
+        env=env,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "--global", "user.email", "host-user@example.com"],
+        env=env,
+        check=True,
+    )
+
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0
+    assert "not configured" not in res.stderr
+
+    calls = parse_podman_calls(log_file)
+    name_calls = _git_config_set_calls(calls, "user.name")
+    email_calls = _git_config_set_calls(calls, "user.email")
+    assert any(c[6] == "Host User" for c in name_calls)
+    assert any(c[6] == "host-user@example.com" for c in email_calls)
+
+
+@pytest.mark.unit
+def test_devbox_warns_when_no_git_identity_available(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, log_file = mock_podman_env
+    env["GIT_CONFIG_GLOBAL"] = str(tmp_path / "nonexistent_gitconfig")
+    env.pop("MOCK_CONTAINER_GIT_NAME", None)
+    env.pop("MOCK_CONTAINER_GIT_EMAIL", None)
+
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0
+    assert "not configured" in res.stderr
+    assert 'git config --global user.name "Your Name"' in res.stderr
+
+    calls = parse_podman_calls(log_file)
+    assert _git_config_set_calls(calls, "user.name") == []
+    assert _git_config_set_calls(calls, "user.email") == []
+
+
+@pytest.mark.unit
+def test_devbox_preserves_existing_container_git_identity(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, log_file = mock_podman_env
+    host_gitconfig = tmp_path / "host_gitconfig"
+    env["GIT_CONFIG_GLOBAL"] = str(host_gitconfig)
+    subprocess.run(
+        ["git", "config", "--global", "user.name", "Host User"],
+        env=env,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "--global", "user.email", "host-user@example.com"],
+        env=env,
+        check=True,
+    )
+    env["MOCK_CONTAINER_GIT_NAME"] = "Container User"
+    env["MOCK_CONTAINER_GIT_EMAIL"] = "container-user@example.com"
+
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0
+    assert "not configured" not in res.stderr
+
+    calls = parse_podman_calls(log_file)
+    # The container's existing identity must never be overwritten with the
+    # (different) host identity.
+    assert _git_config_set_calls(calls, "user.name") == []
+    assert _git_config_set_calls(calls, "user.email") == []
+
+
+@pytest.mark.unit
+def test_devbox_runs_gh_auth_setup_git_when_token_available(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, log_file = mock_podman_env
+    env["GH_TOKEN"] = "mock-github-token"  # pragma: allowlist secret
+
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0
+
+    calls = parse_podman_calls(log_file)
+    assert any(c[:5] == ["exec", c[1], "gh", "auth", "setup-git"] for c in calls)
+
+
+@pytest.mark.unit
+def test_devbox_warns_when_no_github_token_for_setup_git(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, log_file = mock_podman_env
+    env.pop("GH_TOKEN", None)
+    env.pop("GITHUB_TOKEN", None)
+
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0
+    assert "gh auth login && gh auth setup-git" in res.stderr
+
+    calls = parse_podman_calls(log_file)
+    assert not any(c[:5] == ["exec", c[1], "gh", "auth", "setup-git"] for c in calls)
+
+
+@pytest.mark.unit
+def test_devbox_warns_when_gh_auth_setup_git_fails(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, log_file = mock_podman_env
+    env["GH_TOKEN"] = "mock-github-token"  # pragma: allowlist secret
+    env["MOCK_GH_AUTH_SETUP_GIT_FAILS"] = "1"
+
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0
+    assert "'gh auth setup-git' failed" in res.stderr
+
+
+@pytest.mark.unit
+def test_devbox_survives_git_config_set_failure(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    # A transient failure setting the Git identity inside the container
+    # (e.g. a flaky `podman exec`) must not abort the whole launch under
+    # `set -euo pipefail`; it should be reported as a warning and the
+    # launcher should still finish entering the container.
+    env, _ = mock_podman_env
+    host_gitconfig = tmp_path / "host_gitconfig"
+    env["GIT_CONFIG_GLOBAL"] = str(host_gitconfig)
+    subprocess.run(
+        ["git", "config", "--global", "user.name", "Host User"],
+        env=env,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "--global", "user.email", "host-user@example.com"],
+        env=env,
+        check=True,
+    )
+    env.pop("MOCK_CONTAINER_GIT_NAME", None)
+    env.pop("MOCK_CONTAINER_GIT_EMAIL", None)
+    env["MOCK_GIT_CONFIG_SET_FAILS"] = "1"
+
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0, res.stderr
+    assert "Failed to set Git user.name" in res.stderr
+    assert "Failed to set Git user.email" in res.stderr
+    assert "Entering container" in res.stdout

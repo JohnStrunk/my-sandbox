@@ -111,6 +111,25 @@ podman run --rm alpine uname -a
 opencode
 ```
 
+### Git Identity & GitHub Authentication
+
+When a container is created, `devbox` configures a Git identity inside it: any
+`user.name`/`user.email` already set inside that (persistent) container is
+left untouched, and anything still missing is filled in from the invoking
+host user's own `git config --global user.name`/`user.email` -- the host's
+Git config is only ever read, never modified. If neither source has an
+identity, `devbox` prints a warning explaining how to set one with
+`git config --global user.name/user.email` inside the container.
+
+The devbox has no usable SSH access to GitHub, so all Git operations against
+`github.com` must go over HTTPS, authenticated through the `gh` CLI. Whenever
+a GitHub token is available (see the GitHub integration below), `devbox` runs
+`gh auth setup-git` inside the container automatically, registering `gh` as
+Git's credential helper so `git clone`/`fetch`/`push` against
+`https://github.com/...` URLs work without SSH keys or an agent. Otherwise, it
+prints a warning explaining how to run `gh auth login && gh auth setup-git`
+manually.
+
 ### Automatic OpenCode Integrations
 
 The integrations below are enabled when their requirements are present while a
