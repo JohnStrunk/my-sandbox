@@ -24,6 +24,7 @@ RUN dnf install -y --setopt=install_weak_deps=False \
     nodejs \
     npm \
     openssl \
+    procps-ng \
     ripgrep \
     ShellCheck \
     shadow-utils \

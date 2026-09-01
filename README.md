@@ -29,7 +29,8 @@ This repository provides:
     Google Cloud SDK (`gcloud`), Google Workspace CLI (`gws`), Atlassian CLI
     (`acli`), Google Antigravity (`agy`), and OpenCode (`opencode`).
   - **Linters & Utilities**: `pre-commit`, `ripgrep`, `jq`, `shellcheck`,
-    `hadolint`, `markdownlint-cli2`, and `ffmpeg`.
+    `hadolint`, `markdownlint-cli2`, `ffmpeg`, and process diagnostics
+    (`ps`, `pgrep`) via `procps-ng`.
 - **Automatic Host Credential & Config Passthrough**: `devbox` detects and
   bind-mounts existing host configurations (GitHub tokens, Google Cloud ADC,
   Atlassian CLI, Google Workspace, LiteMaaS API keys, and OpenCode
