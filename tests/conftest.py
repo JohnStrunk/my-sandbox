@@ -1,4 +1,5 @@
 import hashlib
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -6,6 +7,45 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+LAUNCHER_OPTIONAL_ENV_VARS = (
+    "GEMINI_API_KEY",
+    "GOOGLE_GENERATIVE_AI_API_KEY",
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+    "CONTEXT7_API_KEY",
+    "IGLOO_MCP_COMMUNITY",
+    "IGLOO_MCP_COMMUNITY_KEY",
+    "IGLOO_MCP_APP_PASS",
+    "IGLOO_MCP_APP_ID",
+    "IGLOO_MCP_USERNAME",
+    "IGLOO_MCP_PASSWORD",
+    "GITLAB_HOST",
+    "GITLAB_TOKEN",
+    "LITEMAAS_API_KEY",
+    "LITELLM_API_KEY",
+    "LITELLM_MASTER_KEY",
+    "LITELLM_SALT_KEY",
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "OPENROUTER_API_KEY",
+    "GOOGLE_CLOUD_PROJECT",
+    "VERTEX_LOCATION",
+)
+
+
+@pytest.fixture
+def host_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in LAUNCHER_OPTIONAL_ENV_VARS:
+        monkeypatch.setenv(name, f"host-{name.lower()}")
+
+
+@pytest.fixture
+def isolated_env(host_credentials) -> dict[str, str]:
+    env = os.environ.copy()
+    for name in LAUNCHER_OPTIONAL_ENV_VARS:
+        env.pop(name, None)
+    return env
 
 
 @pytest.fixture(scope="session")

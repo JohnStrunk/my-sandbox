@@ -1,42 +1,14 @@
 import json
-import os
 import stat
 from pathlib import Path
 
 import pytest
 
-from tests.conftest import run_bash_script
-
-DEVBOX_OPTIONAL_ENV_VARS = (
-    "GEMINI_API_KEY",
-    "GH_TOKEN",
-    "GITHUB_TOKEN",
-    "CONTEXT7_API_KEY",
-    "IGLOO_MCP_COMMUNITY",
-    "IGLOO_MCP_COMMUNITY_KEY",
-    "IGLOO_MCP_APP_PASS",
-    "IGLOO_MCP_APP_ID",
-    "IGLOO_MCP_USERNAME",
-    "IGLOO_MCP_PASSWORD",
-    "GITLAB_HOST",
-    "GITLAB_TOKEN",
-    "LITEMAAS_API_KEY",
-    "LITELLM_API_KEY",
-    "LITELLM_MASTER_KEY",
-    "OPENAI_API_KEY",
-    "GOOGLE_CLOUD_PROJECT",
-    "VERTEX_LOCATION",
-)
+from tests.conftest import LAUNCHER_OPTIONAL_ENV_VARS, run_bash_script
 
 
 @pytest.fixture
-def host_credentials(monkeypatch: pytest.MonkeyPatch):
-    for name in DEVBOX_OPTIONAL_ENV_VARS:
-        monkeypatch.setenv(name, f"host-{name.lower()}")
-
-
-@pytest.fixture
-def mock_podman_env(tmp_path: Path, host_credentials):
+def mock_podman_env(tmp_path: Path, isolated_env):
     bin_dir = tmp_path / "mock_bin"
     bin_dir.mkdir()
     log_file = tmp_path / "podman_calls.jsonl"
@@ -130,10 +102,8 @@ exit 0
     fake_gh.write_text("#!/usr/bin/env bash\nexit 1\n")
     fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IEXEC)
 
-    env = os.environ.copy()
+    env = isolated_env
     env["PATH"] = f"{bin_dir}:{env.get('PATH', '')}"
-    for name in DEVBOX_OPTIONAL_ENV_VARS:
-        env.pop(name, None)
     return env, log_file
 
 
@@ -225,7 +195,7 @@ def test_devbox_does_not_forward_host_credentials(
     assert res.returncode == 0
 
     logged = log_file.read_text()
-    for name in DEVBOX_OPTIONAL_ENV_VARS:
+    for name in LAUNCHER_OPTIONAL_ENV_VARS:
         assert f"{name}=host-{name.lower()}" not in logged
 
 
