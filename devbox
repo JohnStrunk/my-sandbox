@@ -339,6 +339,18 @@ EOF
     )
   fi
 
+  # Anthropic configuration
+  if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+    params+=(
+      --env "ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}" \
+    )
+  fi
+  if [ -n "${ANTHROPIC_BASE_URL:-}" ]; then
+    params+=(
+      --env "ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-}" \
+    )
+  fi
+
   # OpenCode session data and configuration
   if [ -d "$HOME/.local/share/opencode" ]; then
     params+=(
