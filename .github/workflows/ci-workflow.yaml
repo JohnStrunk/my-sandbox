@@ -36,37 +36,44 @@ jobs:
         with:
           save-cache: ${{ github.ref == 'refs/heads/main' }}
 
+      - name: Validate tool versions
+        run: python3 scripts/validate_tool_versions.py
+
       - name: Install pre-commit
-        # Use the same pinned version as the devbox image.
         run: |
-          pre_commit_version="$(awk -F= \
-            '$1 == "ARG PRE_COMMIT_VERSION" { print $2; exit }' \
-            container/Dockerfile)"
+          pre_commit_version="$(jq -er '.tools.pre_commit.version' \
+            container/tool-versions.json)"
+          pre_commit_version="${pre_commit_version#v}"
           uv tool install "pre-commit==${pre_commit_version}"
 
       - name: Install hadolint
-        # Version must match the hadolint rev in .pre-commit-config.yaml
-        env:
-          HADOLINT_VERSION: "v2.14.0"
         run: |
           set -euo pipefail
+          hadolint_version="$(jq -er '.tools.hadolint.version' \
+            container/tool-versions.json)"
+          hadolint_version="${hadolint_version#v}"
+          hadolint_version="v${hadolint_version}"
           asset="hadolint-linux-x86_64"
-          base_url="https://github.com/hadolint/hadolint/releases/download/${HADOLINT_VERSION}"
+          base_url="https://github.com/hadolint/hadolint/releases/download/${hadolint_version}"
           curl -sSfL -o "$asset" "${base_url}/${asset}"
-          curl -sSfL -o "${asset}.sha256" "${base_url}/${asset}.sha256"
-          sha256sum -c "${asset}.sha256"
+          curl -sSfL -o checksums.sha256 "${base_url}/checksums.sha256"
+          checksum_line="$(awk -v asset="$asset" '$2 == "*" asset { print; exit }' checksums.sha256)"
+          if [ -z "$checksum_line" ]; then
+            echo "No checksum found for $asset" >&2
+            exit 1
+          fi
+          printf '%s\n' "$checksum_line" | sha256sum -c -
+          rm -f checksums.sha256
           chmod +x "$asset"
           sudo mv "$asset" /usr/local/bin/hadolint
 
       - name: Install markdownlint-cli2
-        # Version must match the markdownlint-cli2 rev in
-        # .pre-commit-config.yaml. Its pre-commit hook uses
-        # `language: system` and runs this binary directly, since npm's
-        # `allow-git` config rejects the hook's default `language: node`
-        # install command (`npm install --allow-git=root -g
-        # git+file://...`) with EALLOWGIT.
         # zizmor: ignore[adhoc-packages]
-        run: npm install -g markdownlint-cli2@0.23.0
+        run: |
+          markdownlint_version="$(jq -er '.tools.markdownlint_cli2.version' \
+            container/tool-versions.json)"
+          markdownlint_version="${markdownlint_version#v}"
+          npm install -g "markdownlint-cli2@${markdownlint_version}"
 
       - name: Enable cache for pre-commit hooks
         # https://github.com/actions/cache

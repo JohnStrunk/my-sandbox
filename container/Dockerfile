@@ -40,17 +40,24 @@ ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
     REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
     NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
 
+# Keep image, CI, and pre-commit tool pins in one machine-readable manifest.
+ARG TARGETARCH=amd64
+COPY tool-versions.json /tmp/devbox-tool-versions.json
+
 # Install Hadolint
-# renovate: datasource=github-releases depName=hadolint/hadolint
-ARG HADOLINT_VERSION=2.15.1
-RUN curl -sSL "https://github.com/hadolint/hadolint/releases/download/v${HADOLINT_VERSION}/hadolint-Linux-x86_64" -o /usr/local/bin/hadolint \
+RUN hadolint_version="$(jq -er '.tools.hadolint.version' /tmp/devbox-tool-versions.json)" \
+    && hadolint_version="${hadolint_version#v}" \
+    && case "${TARGETARCH:-amd64}" in \
+        amd64) hadolint_arch=x86_64 ;; \
+        arm64) hadolint_arch=arm64 ;; \
+        *) echo "Unsupported architecture for Hadolint: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+    && curl -sSL "https://github.com/hadolint/hadolint/releases/download/v${hadolint_version}/hadolint-linux-${hadolint_arch}" -o /usr/local/bin/hadolint \
     && chmod +x /usr/local/bin/hadolint
 
 # Go toolchain
-# renovate: datasource=golang-version depName=golang
-ARG GO_VERSION=1.27.0
-ARG TARGETARCH=amd64
-RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${TARGETARCH}.tar.gz" -o /tmp/go.tgz \
+RUN go_version="$(jq -er '.tools.go.version' /tmp/devbox-tool-versions.json)" \
+    && curl -fsSL "https://go.dev/dl/go${go_version}.linux-${TARGETARCH}.tar.gz" -o /tmp/go.tgz \
     && tar -C /usr/local -xzf /tmp/go.tgz \
     && rm /tmp/go.tgz
 ENV PATH="/usr/local/go/bin:${PATH}"
@@ -63,33 +70,38 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no
     && chmod -R a+w "${RUSTUP_HOME}" "${CARGO_HOME}"
 
 # uv (Python packaging)
-# renovate: datasource=github-releases depName=astral-sh/uv
-ARG UV_VERSION=0.12.5
-RUN curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | sh \
+RUN uv_version="$(jq -er '.tools.uv.version' /tmp/devbox-tool-versions.json)" \
+    && uv_version="${uv_version#v}" \
+    && curl -LsSf "https://astral.sh/uv/${uv_version}/install.sh" | sh \
     && mv /root/.local/bin/uv /root/.local/bin/uvx /usr/local/bin/
 ENV UV_CACHE_DIR=/sandbox/.uv_cache
 
 # markdownlint-cli2 version must match the rev in .pre-commit-config.yaml -
 # its pre-commit hook uses `language: system` and runs this binary directly.
-RUN npm install -g --no-fund \
-    markdownlint-cli2@0.23.2 \
-    @playwright/cli@0.1.18 \
+RUN markdownlint_version="$(jq -er '.tools.markdownlint_cli2.version' /tmp/devbox-tool-versions.json)" \
+    && playwright_version="$(jq -er '.tools.playwright_cli.version' /tmp/devbox-tool-versions.json)" \
+    && markdownlint_version="${markdownlint_version#v}" \
+    && playwright_version="${playwright_version#v}" \
+    && npm install -g --no-fund \
+    "markdownlint-cli2@${markdownlint_version}" \
+    "@playwright/cli@${playwright_version}" \
     && npx -y playwright install
 
 # Install Google Antigravity CLI
-# renovate: datasource=github-releases depName=google-antigravity/antigravity-cli
-ARG AGY_VERSION=1.1.20
-RUN arch="${TARGETARCH}" && [ "$arch" = "amd64" ] && arch="x64" \
-    && curl -fsSL "https://github.com/google-antigravity/antigravity-cli/releases/download/${AGY_VERSION}/agy_cli_linux_${arch}.tar.gz" -o /tmp/agy.tgz \
+RUN agy_version="$(jq -er '.tools.antigravity_cli.version' /tmp/devbox-tool-versions.json)" \
+    && agy_version="${agy_version#v}" \
+    && arch="${TARGETARCH}" \
+    && if [ "$arch" = "amd64" ]; then arch="x64"; fi \
+    && curl -fsSL "https://github.com/google-antigravity/antigravity-cli/releases/download/${agy_version}/agy_cli_linux_${arch}.tar.gz" -o /tmp/agy.tgz \
     && tar -C /tmp -xzf /tmp/agy.tgz antigravity \
     && mv /tmp/antigravity /usr/local/bin/agy \
     && chmod +x /usr/local/bin/agy \
     && rm /tmp/agy.tgz
 
 # Install OpenCode
-# renovate: datasource=github-releases depName=anomalyco/opencode
-ARG OPENCODE_VERSION=1.18.23
-RUN curl -fsSL https://opencode.ai/install | bash -s -- --version "${OPENCODE_VERSION}" && \
+RUN opencode_version="$(jq -er '.tools.opencode.version' /tmp/devbox-tool-versions.json)" \
+    && opencode_version="${opencode_version#v}" \
+    && curl -fsSL https://opencode.ai/install | bash -s -- --version "${opencode_version}" && \
     mv /root/.opencode/bin/opencode /usr/bin/ && \
     chmod +x /usr/bin/opencode
 
@@ -117,15 +129,17 @@ RUN case "${TARGETARCH}" in \
     && rm -rf /var/cache/dnf
 
 # Atlassian CLI (acli)
-# renovate: datasource=custom.acli depName=acli
-ARG ACLI_VERSION=1.3.29-stable
-RUN curl -L "https://acli.atlassian.com/linux/${ACLI_VERSION}/acli_${ACLI_VERSION}_linux_${TARGETARCH}.tar.gz" -o /tmp/acli.tar.gz \
+RUN acli_version="$(jq -er '.tools.acli.version' /tmp/devbox-tool-versions.json)" \
+    && acli_version="${acli_version#v}" \
+    && curl -L "https://acli.atlassian.com/linux/${acli_version}/acli_${acli_version}_linux_${TARGETARCH}.tar.gz" -o /tmp/acli.tar.gz \
     && tar xzf /tmp/acli.tar.gz -C /tmp/ \
     && mv /tmp/acli_*_linux_${TARGETARCH}/acli /usr/local/bin/acli \
     && rm -rf /tmp/acli.tar.gz /tmp/acli_*_linux_${TARGETARCH}
 
-RUN npm install -g --no-fund \
-    @googleworkspace/cli@0.22.5
+RUN google_workspace_version="$(jq -er '.tools.google_workspace_cli.version' /tmp/devbox-tool-versions.json)" \
+    && google_workspace_version="${google_workspace_version#v}" \
+    && npm install -g --no-fund \
+    "@googleworkspace/cli@${google_workspace_version}"
 
 # Podman (for Podman-in-Podman support, so the sandbox can build/run its own
 # containers). This runs fully rootless, nested inside the also-rootless
@@ -230,11 +244,10 @@ ENV HOME=/sandbox
 
 # Install pre-commit for the sandbox user so its executable and tool
 # environment live under /sandbox/.local.
-# The CI workflow reads this pin to use the same version.
-# renovate: datasource=pypi depName=pre-commit
-ARG PRE_COMMIT_VERSION=4.6.2
 ENV PATH="/sandbox/.local/bin:${PATH}"
-RUN /usr/sbin/runuser -u sandbox -- uv tool install "pre-commit==${PRE_COMMIT_VERSION}"
+RUN pre_commit_version="$(jq -er '.tools.pre_commit.version' /tmp/devbox-tool-versions.json)" \
+    && pre_commit_version="${pre_commit_version#v}" \
+    && /usr/sbin/runuser -u sandbox -- uv tool install "pre-commit==${pre_commit_version}"
 
 # Two more settings from podman's own reference Podman-in-Podman image
 # (https://github.com/containers/image_build/blob/main/podman/Containerfile),
@@ -255,6 +268,8 @@ RUN chmod +rx /usr/local/bin/devbox-entry.sh \
     && printf '%s\n' 'sandbox ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/sandbox \
     && chmod 0440 /etc/sudoers.d/sandbox \
     && visudo -cf /etc/sudoers
+
+RUN rm -f /tmp/devbox-tool-versions.json
 
 ENTRYPOINT []
 CMD ["/usr/local/bin/devbox-entry.sh"]
