@@ -149,9 +149,12 @@ an Anthropic model with `anthropic/<model-id>`.
 │   └── renovate.json5         # Renovate dependency updates
 ├── container/
 │   ├── Dockerfile             # Container definition
-│   └── devbox-entry.sh        # Devbox container entrypoint
+│   ├── devbox-entry.sh        # Devbox container entrypoint
+│   └── tool-versions.json     # Canonical image and CI tool versions
 ├── devbox                     # Main launcher script
 ├── opencode.json              # OpenCode model and provider configuration
+├── scripts/
+│   └── validate_tool_versions.py # Version consumer consistency check
 └── .pre-commit-config.yaml    # Pre-commit hook definitions
 ```
 
@@ -175,3 +178,20 @@ pre-commit run --all-files
 Container tests build and reuse an image tag derived from the contents of the
 `container/` build context, so changes to the Dockerfile or copied files use a
 fresh test image instead of an unrelated `devbox:latest` image.
+
+### Managing Tool Versions
+
+Pinned versions for tools installed in the devbox image or CI are maintained in
+[`container/tool-versions.json`](container/tool-versions.json). The Dockerfile
+and workflow read that manifest directly. Pre-commit requires literal `rev`
+values, so its revisions are checked against the manifest by the validation
+hook.
+
+Run the consistency check directly when changing a tool version:
+
+```shell
+python3 scripts/validate_tool_versions.py
+```
+
+The Renovate configuration updates the manifest and groups related pre-commit
+consumer updates so a version change remains synchronized.

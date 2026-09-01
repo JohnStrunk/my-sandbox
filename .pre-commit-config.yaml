@@ -74,7 +74,7 @@ repos:
         # `npm install -g`. That makes npm reject the install with
         # `EALLOWGIT`. The binary is installed globally in
         # sandbox/Dockerfile and .github/workflows/ci-workflow.yaml instead.
-        # language: system
+        language: system
         args: ["--config", ".github/markdownlint-cli2.yaml"]
         exclude: |
           (?x)^(
@@ -123,3 +123,12 @@ repos:
     rev: v1.29.0
     hooks:
       - id: zizmor
+
+  - repo: local
+    hooks:
+      - id: validate-tool-versions
+        name: Validate canonical tool versions
+        entry: python3 scripts/validate_tool_versions.py
+        language: system
+        pass_filenames: false
+        files: '^(container/Dockerfile|container/tool-versions\.json|\.github/workflows/ci-workflow\.yaml|\.pre-commit-config\.yaml|pyproject\.toml|uv\.lock|scripts/validate_tool_versions\.py)$'

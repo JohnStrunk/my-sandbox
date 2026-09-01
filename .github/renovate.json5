@@ -25,12 +25,42 @@
   "rangeStrategy": "pin",
   "packageRules": [
     {
-      "description": "Update golang tag in dockerfile & golang version in workflows in a single PR",
+      "description": "Update golang version in the canonical manifest",
       "groupName": "golang version",
       "matchDepNames": [
         "go",
         "golang",
       ],
+    },
+    {
+      "description": "Keep canonical tool versions and their consumers together",
+      "matchPackageNames": [
+        "hadolint/hadolint",
+        "markdownlint-cli2",
+        "DavidAnson/markdownlint-cli2",
+        "ruff",
+        "astral-sh/ruff-pre-commit",
+        "pre-commit/pre-commit-hooks",
+        "pre-commit/pygrep-hooks",
+        "adrienverge/yamllint",
+        "Mergifyio/mergify-pre-commit",
+        "renovatebot/pre-commit-hooks",
+        "shellcheck-py/shellcheck-py",
+        "Yelp/detect-secrets",
+        "bmares/check-json5",
+        "zizmorcore/zizmor-pre-commit",
+      ],
+      "groupName": "devbox tool versions",
+    },
+    {
+      "description": "Use loose versioning for ShellCheck's four-part tags",
+      "matchManagers": [
+        "pre-commit",
+      ],
+      "matchPackageNames": [
+        "shellcheck-py/shellcheck-py",
+      ],
+      "versioning": "loose",
     },
     {
       "description": "Pin devcontainer image digests",
@@ -99,6 +129,17 @@
     },
   },
   "customManagers": [
+    {
+      "customType": "jsonata",
+      "fileFormat": "json",
+      "managerFilePatterns": [
+        "/(?:^|/)tool-versions\\.json$/",
+      ],
+      "matchStrings": [
+        '$each(tools, function($v, $k) { {"depName": $v.depName, "currentValue": $v.version, "datasource": $v.datasource, "versioning": $v.versioning} })',
+      ],
+      "versioningTemplate": "{{#if versioning}}{{{versioning}}}{{else}}semver-coerced{{/if}}",
+    },
     {
       "customType": "regex",
       "managerFilePatterns": ["/(?:^|/)Dockerfile$/", "/\\.sh$/"],
