@@ -188,6 +188,7 @@ def test_devbox_github_mcp_config_from_token(
             "external_directory": {
                 "/tmp/**": "allow",
                 "/sandbox/**": "allow",
+                "/sandbox/.cache/pre-commit/**": "allow",
                 "/sandbox/.*": "ask",
             },
         },
@@ -245,6 +246,7 @@ def test_devbox_context7_mcp_config_from_api_key(
             "external_directory": {
                 "/tmp/**": "allow",
                 "/sandbox/**": "allow",
+                "/sandbox/.cache/pre-commit/**": "allow",
                 "/sandbox/.*": "ask",
             },
         },
@@ -307,6 +309,7 @@ def test_devbox_does_not_add_github_mcp_without_credentials(
             "external_directory": {
                 "/tmp/**": "allow",
                 "/sandbox/**": "allow",
+                "/sandbox/.cache/pre-commit/**": "allow",
                 "/sandbox/.*": "ask",
             },
         },
@@ -356,6 +359,7 @@ def test_devbox_the_source_mcp_config(
             "external_directory": {
                 "/tmp/**": "allow",
                 "/sandbox/**": "allow",
+                "/sandbox/.cache/pre-commit/**": "allow",
                 "/sandbox/.*": "ask",
             },
         },

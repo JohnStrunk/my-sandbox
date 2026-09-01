@@ -141,6 +141,7 @@ create_container() {
     "external_directory": {
       "/tmp/**": "allow",
       "/sandbox/**": "allow",
+      "/sandbox/.cache/pre-commit/**": "allow",
       "/sandbox/.*": "ask"
     }
   }
