@@ -618,3 +618,68 @@ def test_devbox_opencode_data_volume_ignores_xdg_data_home(
     assert any(
         f"{expected_data_dir}:/sandbox/.local/share/opencode" in v for v in run_call
     )
+
+
+@pytest.mark.unit
+def test_devbox_persistent_cache_volumes(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, log_file = mock_podman_env
+    fake_home = tmp_path / "fakehome"
+    fake_home.mkdir()
+    env["HOME"] = str(fake_home)
+    env.pop("XDG_CACHE_HOME", None)
+
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0
+
+    calls = parse_podman_calls(log_file)
+    run_call = next((c for c in calls if c and c[0] == "run" and "-d" in c), None)
+    assert run_call is not None
+    volumes = [run_call[i + 1] for i, arg in enumerate(run_call) if arg == "--volume"]
+
+    # uv and pre-commit caches are shared (not per-directory) named volumes.
+    assert "devbox-uv-cache:/sandbox/.uv_cache" in volumes
+    assert "devbox-precommit-cache:/sandbox/.cache/pre-commit" in volumes
+
+    # Nested Podman/Buildah storage is host-backed so its size is easy to
+    # manage, and the host directory is created ahead of time.
+    expected_storage_dir = fake_home / ".cache" / "devbox" / "containers-storage"
+    assert expected_storage_dir.is_dir()
+    assert any(
+        f"{expected_storage_dir}:/sandbox/.local/share/containers/storage" in v
+        for v in volumes
+    )
+
+
+@pytest.mark.unit
+def test_devbox_persistent_cache_volume_respects_xdg_cache_home(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, log_file = mock_podman_env
+    fake_home = tmp_path / "fakehome"
+    fake_home.mkdir()
+    xdg_cache_home = tmp_path / "xdg-cache"
+    env["HOME"] = str(fake_home)
+    env["XDG_CACHE_HOME"] = str(xdg_cache_home)
+
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0
+
+    calls = parse_podman_calls(log_file)
+    run_call = next((c for c in calls if c and c[0] == "run" and "-d" in c), None)
+    assert run_call is not None
+
+    expected_storage_dir = xdg_cache_home / "devbox" / "containers-storage"
+    assert expected_storage_dir.is_dir()
+    assert not (fake_home / ".cache").exists()
+    assert any(
+        f"{expected_storage_dir}:/sandbox/.local/share/containers/storage" in v
+        for v in run_call
+    )
