@@ -1,15 +1,14 @@
 import json
-import os
 import stat
 from pathlib import Path
 
 import pytest
 
-from tests.conftest import run_bash_script
+from tests.conftest import LAUNCHER_OPTIONAL_ENV_VARS, run_bash_script
 
 
 @pytest.fixture
-def mock_switchyard_env(tmp_path: Path):
+def mock_switchyard_env(tmp_path: Path, isolated_env):
     bin_dir = tmp_path / "mock_bin"
     bin_dir.mkdir()
     log_file = tmp_path / "calls.jsonl"
@@ -60,7 +59,7 @@ exit 0
 """)
     mock_curl.chmod(mock_curl.stat().st_mode | stat.S_IEXEC)
 
-    env = os.environ.copy()
+    env = isolated_env
     env["PATH"] = f"{bin_dir}:{env.get('PATH', '')}"
     return env, log_file
 
@@ -98,6 +97,8 @@ def test_start_switchyard_proxy(switchyard_proxy_dir: Path, mock_switchyard_env)
     assert "SWITCHYARD_CONFIG=/app/routes.toml" in run_call
     assert "GEMINI_API_KEY=mock-gemini-key" in run_call
     assert "LITEMAAS_API_KEY=mock-litemaas-key" in run_call
+    for name in LAUNCHER_OPTIONAL_ENV_VARS:
+        assert f"{name}=host-{name.lower()}" not in run_call
 
 
 @pytest.mark.unit

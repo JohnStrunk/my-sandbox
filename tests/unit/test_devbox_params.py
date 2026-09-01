@@ -1,15 +1,14 @@
 import json
-import os
 import stat
 from pathlib import Path
 
 import pytest
 
-from tests.conftest import run_bash_script
+from tests.conftest import LAUNCHER_OPTIONAL_ENV_VARS, run_bash_script
 
 
 @pytest.fixture
-def mock_podman_env(tmp_path: Path):
+def mock_podman_env(tmp_path: Path, isolated_env):
     bin_dir = tmp_path / "mock_bin"
     bin_dir.mkdir()
     log_file = tmp_path / "podman_calls.jsonl"
@@ -98,7 +97,12 @@ exit 0
 """)
     mock_script.chmod(mock_script.stat().st_mode | stat.S_IEXEC)
 
-    env = os.environ.copy()
+    # Prevent the launcher from finding credentials in the host's gh config.
+    fake_gh = bin_dir / "gh"
+    fake_gh.write_text("#!/usr/bin/env bash\nexit 1\n")
+    fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IEXEC)
+
+    env = isolated_env
     env["PATH"] = f"{bin_dir}:{env.get('PATH', '')}"
     return env, log_file
 
@@ -177,6 +181,22 @@ def test_devbox_litemaas_env(devbox_path: Path, mock_podman_env, tmp_path: Path)
     run_call = next((c for c in calls if c and c[0] == "run" and "-d" in c), None)
     assert run_call is not None
     assert "LITEMAAS_API_KEY=mock-litemaas-token" in run_call
+
+
+@pytest.mark.unit
+def test_devbox_does_not_forward_host_credentials(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, log_file = mock_podman_env
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0
+
+    logged = log_file.read_text()
+    for name in LAUNCHER_OPTIONAL_ENV_VARS:
+        assert f"{name}=host-{name.lower()}" not in logged
 
 
 @pytest.mark.unit
