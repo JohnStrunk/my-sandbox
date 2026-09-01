@@ -25,6 +25,9 @@ BIND_DIR="$(realpath "$PWD")"
 NAME="devbox-$(basename "$BIND_DIR")"
 WORKDIR="/sandbox/$(basename "$BIND_DIR")"
 
+# Clear XDG_DATA_HOME so `devbox` works inside vscode terminal sessions
+export XDG_DATA_HOME=
+
 usage() {
   cat <<EOF
 Usage: $(basename "$0") [-r|--remove] [--recreate|--new] [-h|--help] [--] [command [arg ...]]
@@ -125,8 +128,25 @@ create_container() {
     )
   fi
 
+  # Bind-mount the current working directory into the container at /sandbox/<dirname>
   params+=(
     --volume "$BIND_DIR:$WORKDIR" \
+  )
+
+  # Allow access to /tmp and /sandbox w/o prompting
+  opencode_config+=(
+    "$(cat <<'EOF'
+{
+  "permission": {
+    "external_directory": {
+      "/tmp/**": "allow",
+      "/sandbox/**": "allow",
+      "/sandbox/.*": "ask"
+    }
+  }
+}
+EOF
+)"
   )
 
   # Atlassian CLI (acli) configuration
@@ -261,11 +281,11 @@ EOF
   fi
 
   # OpenCode session data and configuration
-  local opencode_data_dir="${XDG_DATA_HOME:-$HOME/.local/share}/opencode"
-  mkdir -p "$opencode_data_dir"
-  params+=(
-    --volume "$opencode_data_dir:/sandbox/.local/share/opencode" \
-  )
+  if [ -d "$HOME/.local/share/opencode" ]; then
+    params+=(
+      --volume "$HOME/.local/share/opencode:/sandbox/.local/share/opencode" \
+    )
+  fi
   if [ -d "$HOME/.config/opencode" ]; then
     params+=(
       --volume "$HOME/.config/opencode:/sandbox/.config/opencode" \

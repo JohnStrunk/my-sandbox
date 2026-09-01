@@ -183,6 +183,13 @@ def test_devbox_github_mcp_config_from_token(
     config = json.loads(config_value.split("=", 1)[1])
     assert config == {
         "$schema": "https://opencode.ai/config.json",
+        "permission": {
+            "external_directory": {
+                "/tmp/**": "allow",
+                "/sandbox/**": "allow",
+                "/sandbox/.*": "ask",
+            },
+        },
         "mcp": {
             "devbox-github": {
                 "type": "remote",
@@ -232,7 +239,20 @@ def test_devbox_does_not_add_github_mcp_without_credentials(
     env_values = [
         run_call[index + 1] for index, arg in enumerate(run_call[:-1]) if arg == "--env"
     ]
-    assert not any(value.startswith("OPENCODE_CONFIG_CONTENT=") for value in env_values)
+    config_value = next(
+        value for value in env_values if value.startswith("OPENCODE_CONFIG_CONTENT=")
+    )
+    config = json.loads(config_value.split("=", 1)[1])
+    assert config == {
+        "$schema": "https://opencode.ai/config.json",
+        "permission": {
+            "external_directory": {
+                "/tmp/**": "allow",
+                "/sandbox/**": "allow",
+                "/sandbox/.*": "ask",
+            },
+        },
+    }
 
 
 @pytest.mark.unit
@@ -273,6 +293,13 @@ def test_devbox_the_source_mcp_config(
     config = json.loads(config_value.split("=", 1)[1])
     assert config == {
         "$schema": "https://opencode.ai/config.json",
+        "permission": {
+            "external_directory": {
+                "/tmp/**": "allow",
+                "/sandbox/**": "allow",
+                "/sandbox/.*": "ask",
+            },
+        },
         "mcp": {
             "the-source": {
                 "enabled": True,
@@ -476,6 +503,8 @@ def test_devbox_config_volume_mounts(
     (fake_home / ".config" / "acli").mkdir(parents=True)
     (fake_home / ".config" / "gws").mkdir(parents=True)
     (fake_home / ".config" / "opencode").mkdir(parents=True)
+    expected_data_dir = fake_home / ".local" / "share" / "opencode"
+    expected_data_dir.mkdir(parents=True)
 
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
@@ -490,15 +519,13 @@ def test_devbox_config_volume_mounts(
     assert any(":/sandbox/.config/acli" in v for v in volumes)
     assert any(":/sandbox/.config/gws" in v for v in volumes)
     assert any(":/sandbox/.config/opencode" in v for v in volumes)
-    expected_data_dir = fake_home / ".local" / "share" / "opencode"
-    assert expected_data_dir.is_dir()
     assert any(
         f"{expected_data_dir}:/sandbox/.local/share/opencode" in v for v in volumes
     )
 
 
 @pytest.mark.unit
-def test_devbox_opencode_data_volume_honors_xdg_data_home(
+def test_devbox_opencode_data_volume_ignores_xdg_data_home(
     devbox_path: Path, mock_podman_env, tmp_path: Path
 ):
     env, log_file = mock_podman_env
@@ -507,6 +534,8 @@ def test_devbox_opencode_data_volume_honors_xdg_data_home(
     xdg_data_home = tmp_path / "xdg-data"
     env["HOME"] = str(fake_home)
     env["XDG_DATA_HOME"] = str(xdg_data_home)
+    expected_data_dir = fake_home / ".local" / "share" / "opencode"
+    expected_data_dir.mkdir(parents=True)
 
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
@@ -517,8 +546,7 @@ def test_devbox_opencode_data_volume_honors_xdg_data_home(
     calls = parse_podman_calls(log_file)
     run_call = next((c for c in calls if c and c[0] == "run" and "-d" in c), None)
     assert run_call is not None
-    expected_data_dir = xdg_data_home / "opencode"
-    assert expected_data_dir.is_dir()
+    assert not xdg_data_home.exists()
     assert any(
         f"{expected_data_dir}:/sandbox/.local/share/opencode" in v for v in run_call
     )
