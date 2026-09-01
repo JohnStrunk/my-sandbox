@@ -154,6 +154,7 @@ an Anthropic model with `anthropic/<model-id>`.
 ├── devbox                     # Main launcher script
 ├── opencode.json              # OpenCode model and provider configuration
 ├── scripts/
+│   ├── fast-check.sh          # Fast lint + unit test validation
 │   └── validate_tool_versions.py # Version consumer consistency check
 └── .pre-commit-config.yaml    # Pre-commit hook definitions
 ```
@@ -178,6 +179,34 @@ pre-commit run --all-files
 Container tests build and reuse an image tag derived from the contents of the
 `container/` build context, so changes to the Dockerfile or copied files use a
 fresh test image instead of an unrelated `devbox:latest` image.
+
+### Validation Levels
+
+Two documented validation commands cover different stages of iterating on a
+change. Both run unmodified inside a fresh devbox, since the `pre-commit` and
+`uv` executables are preinstalled in the devbox image; no manual tool
+installation is required. Pre-commit still downloads and caches each hook's
+own environment on its first invocation in a new container, so only that
+very first run pays a one-time, network-dependent setup cost. Because devbox
+containers persist across sessions, later runs reuse the cache and stay fast.
+
+| Command | Checks | Approximate cost |
+| --- | --- | --- |
+| `./scripts/fast-check.sh` | Pre-commit lint hooks and unit tests (`tests/unit`) | Seconds after the first run; no container image build |
+| `uv run --extra test pytest -m "not e2e_inference"` | Everything above plus container image build/smoke tests and container lifecycle/nested-Podman integration tests | Several minutes; builds the devbox container image |
+
+Use `./scripts/fast-check.sh` while iterating on launcher scripts,
+configuration, or documentation, then run the full command before opening a
+pull request. CI always runs the full command (see
+[`.github/workflows/ci-workflow.yaml`](.github/workflows/ci-workflow.yaml)) as
+the final validation, along with `pre-commit run -a` for the same lint hooks
+`fast-check.sh` runs.
+
+Tests are grouped with pytest markers (`unit`, `container`, `integration`,
+`e2e_inference`; see [`pyproject.toml`](pyproject.toml)), so any subset can
+also be run directly, e.g. `uv run --extra test pytest -m unit`. The
+`e2e_inference` marker is excluded from both documented commands above
+because it calls real LLM provider APIs and requires provider credentials.
 
 ### Managing Tool Versions
 
