@@ -160,6 +160,7 @@ def test_devbox_github_mcp_config_from_token(
     env, log_file = mock_podman_env
     env.pop("GH_TOKEN", None)
     env.pop("GITHUB_TOKEN", None)
+    env.pop("CONTEXT7_API_KEY", None)
     env[token_name] = "mock-github-token"  # pragma: allowlist secret
 
     run_dir = tmp_path / "workdir"
@@ -206,12 +207,69 @@ def test_devbox_github_mcp_config_from_token(
 
 
 @pytest.mark.unit
+def test_devbox_context7_mcp_config_from_api_key(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, log_file = mock_podman_env
+    env.pop("GH_TOKEN", None)
+    env.pop("GITHUB_TOKEN", None)
+    env.pop("CONTEXT7_API_KEY", None)
+    env["CONTEXT7_API_KEY"] = "mock-context7-token"  # pragma: allowlist secret
+
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0
+
+    calls = parse_podman_calls(log_file)
+    run_call = next(
+        (c for c in calls if c and c[0] == "run" and "-d" in c),
+        None,
+    )
+    assert run_call is not None
+    assert (
+        "CONTEXT7_API_KEY=mock-context7-token" in run_call
+    )  # pragma: allowlist secret
+
+    env_values = [
+        run_call[index + 1] for index, arg in enumerate(run_call[:-1]) if arg == "--env"
+    ]
+    config_value = next(
+        value for value in env_values if value.startswith("OPENCODE_CONFIG_CONTENT=")
+    )
+    config = json.loads(config_value.split("=", 1)[1])
+    assert config == {
+        "$schema": "https://opencode.ai/config.json",
+        "permission": {
+            "external_directory": {
+                "/tmp/**": "allow",
+                "/sandbox/**": "allow",
+                "/sandbox/.*": "ask",
+            },
+        },
+        "mcp": {
+            "context7": {
+                "type": "remote",
+                "url": "https://mcp.context7.com/mcp",
+                "headers": {
+                    "Authorization": "Bearer {env:CONTEXT7_API_KEY}",
+                },
+                "enabled": True,
+            },
+        },
+    }
+    assert "mock-context7-token" not in config_value
+
+
+@pytest.mark.unit
 def test_devbox_does_not_add_github_mcp_without_credentials(
     devbox_path: Path, mock_podman_env, tmp_path: Path
 ):
     env, log_file = mock_podman_env
     env.pop("GH_TOKEN", None)
     env.pop("GITHUB_TOKEN", None)
+    env.pop("CONTEXT7_API_KEY", None)
     for name in (
         "IGLOO_MCP_COMMUNITY",
         "IGLOO_MCP_COMMUNITY_KEY",
@@ -262,6 +320,7 @@ def test_devbox_the_source_mcp_config(
     env, log_file = mock_podman_env
     env.pop("GH_TOKEN", None)
     env.pop("GITHUB_TOKEN", None)
+    env.pop("CONTEXT7_API_KEY", None)
     source_credentials = {
         "IGLOO_MCP_COMMUNITY": "mock-community",
         "IGLOO_MCP_COMMUNITY_KEY": "mock-community-key",
@@ -338,6 +397,7 @@ def test_devbox_merges_mcp_configurations(
 ):
     env, log_file = mock_podman_env
     env["GH_TOKEN"] = "mock-github-token"  # pragma: allowlist secret
+    env.pop("CONTEXT7_API_KEY", None)
     env.update(
         {
             "IGLOO_MCP_COMMUNITY": "mock-community",

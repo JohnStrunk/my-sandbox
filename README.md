@@ -117,24 +117,21 @@ opencode
 
 ### Automatic OpenCode Integrations
 
-When `GH_TOKEN`, `GITHUB_TOKEN`, or an authenticated host `gh` CLI is
-available while a devbox container is created, `devbox` passes the token into
-the container and adds the remote GitHub MCP server to OpenCode's effective
-configuration. The generated server is named `devbox-github` so it does not
-replace a project-local `github` server.
+The integrations below are enabled when their requirements are present while a
+devbox container is created:
 
-The token is referenced through OpenCode's `{env:GH_TOKEN}` substitution and
-is not embedded in the generated configuration. The user's global
-`~/.config/opencode` configuration and the project's `opencode.json` remain
-unchanged. Since the container is persistent, use `devbox --recreate` after
-changing the host credentials or integration triggers.
+| Name | Description | Requirements |
+| --- | --- | --- |
+| GitHub | GitHub repository, issue, pull request, and code search capabilities. | At least one of `GH_TOKEN`, `GITHUB_TOKEN`, or an authenticated host `gh` CLI. |
+| The Source | Search and fetch capabilities for The Source, Red Hat's intranet. | All of `IGLOO_MCP_COMMUNITY`, `IGLOO_MCP_COMMUNITY_KEY`, `IGLOO_MCP_APP_PASS`, `IGLOO_MCP_APP_ID`, `IGLOO_MCP_USERNAME`, and `IGLOO_MCP_PASSWORD`. |
+| Context7 | Up-to-date documentation and code examples for software libraries. | `CONTEXT7_API_KEY`. |
 
-When all `IGLOO_MCP_COMMUNITY`, `IGLOO_MCP_COMMUNITY_KEY`,
-`IGLOO_MCP_APP_PASS`, `IGLOO_MCP_APP_ID`, `IGLOO_MCP_USERNAME`, and
-`IGLOO_MCP_PASSWORD` variables are available, `devbox` passes them into the
-container and enables the local `the-source` MCP server. Runtime integrations
-can contribute any top-level OpenCode config property, with multiple MCP
-integrations combined under one `mcp` object in `OPENCODE_CONFIG_CONTENT`.
+Runtime integrations can contribute any top-level OpenCode config property, with
+multiple MCP integrations combined under one `mcp` object in
+`OPENCODE_CONFIG_CONTENT`. The user's global `~/.config/opencode`
+configuration and the project's `opencode.json` remain unchanged. Since the
+container is persistent, use `devbox --recreate` after adding or changing host
+credentials or integration triggers.
 
 ---
 
