@@ -20,6 +20,7 @@ BINARIES = [
     ("acli", ["acli", "--version"]),
     ("agy", ["agy", "--help"]),
     ("opencode", ["opencode", "--version"]),
+    ("tokenjuice", ["tokenjuice", "--version"]),
     ("rg", ["rg", "--version"]),
     ("jq", ["jq", "--version"]),
     ("shellcheck", ["shellcheck", "--version"]),

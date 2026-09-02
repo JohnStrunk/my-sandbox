@@ -106,6 +106,11 @@ RUN opencode_version="$(jq -er '.tools.opencode.version' /tmp/devbox-tool-versio
     mv /root/.opencode/bin/opencode /usr/bin/ && \
     chmod +x /usr/bin/opencode
 
+# Install tokenjuice, a deterministic output compactor for terminal-heavy
+# agent workflows: https://github.com/vincentkoc/tokenjuice
+RUN tokenjuice_version="$(jq -er '.tools.tokenjuice.version' /tmp/devbox-tool-versions.json)" \
+    && npm install -g --no-fund "tokenjuice@${tokenjuice_version}"
+
 # Install Google Cloud CLI
 # https://cloud.google.com/sdk/docs/install-sdk#linux
 # hadolint ignore=DL3041
@@ -249,6 +254,15 @@ ENV PATH="/sandbox/.local/bin:${PATH}"
 RUN pre_commit_version="$(jq -er '.tools.pre_commit.version' /tmp/devbox-tool-versions.json)" \
     && pre_commit_version="${pre_commit_version#v}" \
     && /usr/sbin/runuser -u sandbox -- uv tool install "pre-commit==${pre_commit_version}"
+
+# Register tokenjuice's OpenCode plugin for the sandbox user, so terminal-heavy
+# tool output (bash, grep, etc.) is compacted by default. Runs as sandbox (via
+# runuser, which resolves its HOME from /etc/passwd) so the generated
+# ~/.config/opencode/plugins/tokenjuice.js is owned by that user, matching the
+# other /sandbox/.config content above. A host-mounted ~/.config/opencode
+# directory (see devbox) takes precedence over this baked-in plugin, the same
+# as the other OpenCode configuration and state defaults set up above.
+RUN /usr/sbin/runuser -u sandbox -- tokenjuice install opencode
 
 # Two more settings from podman's own reference Podman-in-Podman image
 # (https://github.com/containers/image_build/blob/main/podman/Containerfile),
