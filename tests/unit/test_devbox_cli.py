@@ -1,4 +1,3 @@
-import os
 import stat
 from pathlib import Path
 
@@ -33,7 +32,9 @@ def test_devbox_invalid_option(devbox_path: Path):
 
 
 @pytest.mark.unit
-def test_devbox_remove_invocation(devbox_path: Path, tmp_path: Path):
+def test_devbox_remove_invocation(
+    devbox_path: Path, tmp_path: Path, isolated_env: dict[str, str]
+):
     # Create a mock podman script that records all calls
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -49,7 +50,7 @@ exit 0
 """)
     mock_podman.chmod(mock_podman.stat().st_mode | stat.S_IEXEC)
 
-    env = os.environ.copy()
+    env = isolated_env
     env["PATH"] = f"{bin_dir}:{env.get('PATH', '')}"
 
     res = run_bash_script(devbox_path, ["--remove"], env=env, cwd=tmp_path)
