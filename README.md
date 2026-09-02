@@ -25,6 +25,10 @@ This repository provides:
 - **Persistent Caches**: `uv`, pre-commit, and nested Podman/Buildah image
   storage survive `devbox --recreate`, so recreating a container doesn't
   repeat downloads or image builds whose inputs haven't changed.
+- **Nested Docker-Compatible API**: Every devbox starts a rootless Podman
+  API service reachable at a stable `DOCKER_HOST`, so Docker API clients like
+  [Testcontainers](https://testcontainers.com) or Dockerode work out of the
+  box, including published container ports.
 - **Comprehensive Toolchain**:
   - **Languages & Runtimes**: Go, Rust, Python packaging via `uv` and `uvx`,
     Node.js, and Playwright with full browser dependencies.
@@ -171,6 +175,41 @@ This is local, runtime cache persistence between devbox sessions on one
 machine. It's a different scope from the GitHub Actions layer caching that
 speeds up building the `devbox:latest` image itself in CI (see
 `.github/workflows/`); the two don't share storage.
+
+### Nested Docker-Compatible API
+
+Every devbox starts a rootless Podman API service on the socket `DOCKER_HOST`
+already points at, so Docker API clients work with no extra setup:
+
+```shell
+printf '%s\n' "$DOCKER_HOST"                                    # unix:///sandbox/.docker/run/docker.sock
+curl --unix-socket "${DOCKER_HOST#unix://}" http://localhost/_ping  # OK
+devbox-docker-api-check                                         # human-readable diagnostic
+```
+
+Containers created through this API (including by clients that don't request
+a network explicitly, such as Testcontainers' `GenericContainer`) use
+[`pasta`](https://passt.top/) for networking when the host cannot configure
+the nested bridge prerequisites. Pasta supports published ports without
+needing any Linux capabilities beyond what the devbox already has. When the
+host accepts the launch-time sysctls and the nested bridge preflight passes,
+`devbox` switches the nested default to the `netavark` bridge backend so Docker
+API clients can also attach containers to user-defined networks.
+
+`pasta` itself does not support **user-defined bridge networks** (`podman
+network create`, or Testcontainers' `Network` class with container aliases).
+Those need nested Podman's `netavark` bridge backend, which in turn needs a
+handful of namespaced IPv4/IPv6 sysctls that the _host_ running `devbox` must
+be able to preconfigure on the outer container. `devbox` attempts this and an
+actual temporary network/published-port probe automatically, then falls back
+to a pasta-only devbox (still fully functional for everything else) if either
+check fails. Run `devbox-docker-api-check
+--require-user-networks` inside the devbox to check which case applies.
+
+If the API service itself fails to start (rare -- e.g. a host that also
+blocks nested user namespaces), `devbox` prints a warning but still starts
+the container normally; regular devbox usage, including plain nested
+`podman run`, is unaffected.
 
 ### Automatic OpenCode Integrations
 
