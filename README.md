@@ -30,7 +30,9 @@ This repository provides:
     Node.js, and Playwright with full browser dependencies.
   - **Cloud & Productivity CLIs**: GitHub CLI (`gh`), GitLab CLI (`glab`),
     Google Cloud SDK (`gcloud`), Google Workspace CLI (`gws`), Atlassian CLI
-    (`acli`), Google Antigravity (`agy`), and OpenCode (`opencode`).
+    (`acli`), Google Antigravity (`agy`), and OpenCode (`opencode`), with
+    [tokenjuice](https://github.com/vincentkoc/tokenjuice)'s OpenCode plugin
+    pre-installed to compact noisy terminal output before it reaches context.
   - **Linters & Utilities**: `pre-commit`, `ripgrep`, `jq`, `shellcheck`,
     `hadolint`, `markdownlint-cli2`, and `ffmpeg`.
 - **Automatic Host Credential & Config Passthrough**: `devbox` detects and

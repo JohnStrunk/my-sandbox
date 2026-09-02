@@ -60,6 +60,14 @@
         "docker": true
       }
     },
+    "tokenjuice": {
+      "version": "0.8.1",
+      "datasource": "npm",
+      "depName": "tokenjuice",
+      "consumers": {
+        "docker": true
+      }
+    },
     "acli": {
       "version": "1.3.29-stable",
       "datasource": "custom.acli",
