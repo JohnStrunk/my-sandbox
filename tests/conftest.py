@@ -1,5 +1,6 @@
 import hashlib
 import os
+import shlex
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -9,7 +10,26 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-LAUNCHER_OPTIONAL_ENV_VARS = (
+# Credential-isolated test runner (issue #81)
+# ---------------------------------------------------------------------------
+# Provider and integration credentials must never influence the outcome of an
+# isolated test, and mock command logs/diagnostics must never contain host
+# credential values. `CREDENTIAL_ENV_VARS` is the maintained scrub list of
+# provider/integration environment variables that `devbox` and its supporting
+# scripts read. The `_isolated_test_environment` autouse fixture below
+# removes these from `os.environ` for every test by default, so unit,
+# container, and integration tests are deterministic whether or not the host
+# happens to have any of these set.
+#
+# Tests that need to exercise credential passthrough behavior opt in
+# explicitly (e.g. via `monkeypatch.setenv(...)`, or the `host_credentials`
+# and `isolated_env` fixtures below).
+#
+# `tests/e2e_inference` is the intentional exception: those tests are
+# end-to-end checks that require real provider credentials, so they are
+# exempt from the automatic scrub (see the `e2e_inference` marker check in
+# `_isolated_test_environment`).
+CREDENTIAL_ENV_VARS = (
     "GEMINI_API_KEY",
     "GOOGLE_GENERATIVE_AI_API_KEY",
     "GH_TOKEN",
@@ -26,23 +46,132 @@ LAUNCHER_OPTIONAL_ENV_VARS = (
     "LITEMAAS_API_KEY",
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
+    "ANTHROPIC_BASE_URL",
     "OPENROUTER_API_KEY",
     "GOOGLE_CLOUD_PROJECT",
     "VERTEX_LOCATION",
 )
 
+# Environment overrides that can make a CLI read configuration or credentials
+# from a host path even when `$HOME` is isolated. Tests may set these
+# explicitly when that behavior is what they are verifying.
+HOST_CONFIG_ENV_VARS = (
+    "AWS_CONFIG_FILE",
+    "AWS_SHARED_CREDENTIALS_FILE",
+    "AZURE_CONFIG_DIR",
+    "CLOUDSDK_CONFIG",
+    "CONTAINERS_CONF",
+    "CONTAINERS_REGISTRIES_CONF",
+    "CONTAINERS_STORAGE_CONF",
+    "DOCKER_CONFIG",
+    "GH_CONFIG_DIR",
+    "GIT_CONFIG_GLOBAL",
+    "GIT_CONFIG_SYSTEM",
+    "GIT_SSH_COMMAND",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "GLAB_CONFIG_DIR",
+    "KUBECONFIG",
+    "NETRC",
+    "NPM_CONFIG_USERCONFIG",
+    "OPENCODE_CONFIG",
+    "OPENCODE_CONFIG_DIR",
+    "PIP_CONFIG_FILE",
+    "SSH_AUTH_SOCK",
+)
+
+ISOLATION_ENV_VARS = CREDENTIAL_ENV_VARS + HOST_CONFIG_ENV_VARS
+
+
+@pytest.fixture(autouse=True)
+def _isolated_test_environment(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Scrub provider/integration credentials from every test by default.
+
+    This is the standard, reusable isolation applied to the whole suite
+    (issue #81): unit, container, and integration tests must produce the
+    same result whether or not the host happens to have credentials set.
+    Tests under `tests/e2e_inference` are intentional end-to-end tests that
+    need real credentials, so they're exempt via the `e2e_inference` marker.
+    """
+    if request.node.get_closest_marker("e2e_inference") is not None:
+        return
+    for name in ISOLATION_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+
 
 @pytest.fixture
 def host_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in LAUNCHER_OPTIONAL_ENV_VARS:
+    """Simulate a host machine with credentials and config overrides set.
+
+    Used to verify that isolated tests/launchers don't accidentally forward
+    host state they weren't explicitly given.
+    """
+    for name in ISOLATION_ENV_VARS:
         monkeypatch.setenv(name, f"host-{name.lower()}")
 
 
 @pytest.fixture
-def isolated_env(host_credentials) -> dict[str, str]:
+def isolated_home(tmp_path: Path) -> Path:
+    """A fresh, empty directory to use as `$HOME` for a subprocess.
+
+    Prevents host CLI configuration and credential files (e.g. `gh`'s auth
+    config, gcloud application-default credentials, or OpenCode state) from
+    being discovered by scripts under test unless a test explicitly
+    populates this directory.
+    """
+    home = tmp_path / "isolated-home"
+    home.mkdir(exist_ok=True)
+    return home
+
+
+@pytest.fixture
+def isolated_env(host_credentials: None, isolated_home: Path) -> dict[str, str]:
+    """A deterministic environment for launching `devbox` (or similar
+    scripts) as a subprocess: no provider/integration credentials and no
+    host home-directory state, unless a test adds them explicitly.
+    """
     env = os.environ.copy()
-    for name in LAUNCHER_OPTIONAL_ENV_VARS:
+    for name in ISOLATION_ENV_VARS:
         env.pop(name, None)
+    env["HOME"] = str(isolated_home)
+    isolated_xdg = isolated_home.parent / "isolated-xdg"
+    for xdg_var, subdir in (
+        ("XDG_CONFIG_HOME", "config"),
+        ("XDG_DATA_HOME", "share"),
+        ("XDG_STATE_HOME", "state"),
+        ("XDG_CACHE_HOME", "cache"),
+    ):
+        env[xdg_var] = str(isolated_xdg / subdir)
+
+    # Keep the host Podman image store and runtime configuration visible to
+    # real launcher integration tests without exposing that host state to the
+    # test process or to containers. The wrapper restores only the runtime's
+    # non-secret HOME/XDG settings; the credential/config override variables
+    # above remain scrubbed.
+    # Unit tests that install a mock `podman` prepend their own bin directory
+    # later, so this wrapper is only used by tests that intentionally run the
+    # real outer Podman runtime.
+    podman_path = shutil.which("podman")
+    if podman_path:
+        isolated_bin = isolated_home.parent / "isolated-bin"
+        isolated_bin.mkdir(exist_ok=True)
+        podman_wrapper = isolated_bin / "podman"
+        host_env = os.environ.copy()
+        wrapper_lines = ["#!/usr/bin/env bash\n"]
+        if host_env.get("HOME"):
+            wrapper_lines.append(f"export HOME={shlex.quote(host_env['HOME'])}\n")
+        else:
+            wrapper_lines.append("unset HOME\n")
+        for name in ("XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR"):
+            if host_env.get(name):
+                wrapper_lines.append(f"export {name}={shlex.quote(host_env[name])}\n")
+            else:
+                wrapper_lines.append(f"unset {name}\n")
+        wrapper_lines.append(f'exec {shlex.quote(podman_path)} "$@"\n')
+        podman_wrapper.write_text("".join(wrapper_lines))
+        podman_wrapper.chmod(podman_wrapper.stat().st_mode | 0o111)
+        env["PATH"] = f"{isolated_bin}:{env.get('PATH', '')}"
     return env
 
 

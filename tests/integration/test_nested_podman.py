@@ -6,7 +6,9 @@ import pytest
 from tests.conftest import run_bash_script
 
 
-def _check_nested_podman_supported(devbox_path: Path, tmp_path: Path) -> bool:
+def _check_nested_podman_supported(
+    devbox_path: Path, tmp_path: Path, env: dict[str, str]
+) -> bool:
     test_dir = tmp_path / "check_nested"
     test_dir.mkdir(exist_ok=True)
     container_name = f"devbox-{test_dir.name}"
@@ -14,6 +16,7 @@ def _check_nested_podman_supported(devbox_path: Path, tmp_path: Path) -> bool:
         res = run_bash_script(
             devbox_path,
             ["podman", "run", "--rm", "docker.io/library/alpine:latest", "true"],
+            env=env,
             cwd=test_dir,
             timeout=40,
         )
@@ -26,12 +29,16 @@ def _check_nested_podman_supported(devbox_path: Path, tmp_path: Path) -> bool:
         )
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def nested_podman_available(
-    devbox_path: Path, devbox_image: str, tmp_path_factory
+    devbox_path: Path,
+    devbox_image: str,
+    isolated_env: dict[str, str],
+    tmp_path: Path,
 ) -> bool:
-    tmp = tmp_path_factory.mktemp("nested_check")
-    if not _check_nested_podman_supported(devbox_path, tmp):
+    tmp = tmp_path / "nested_check"
+    tmp.mkdir()
+    if not _check_nested_podman_supported(devbox_path, tmp, isolated_env):
         pytest.skip("Nested user namespaces not supported in this host/container env")
     return True
 
@@ -42,6 +49,7 @@ def test_nested_podman_run(
     devbox_image: str,
     nested_podman_available: bool,
     tmp_path: Path,
+    isolated_env: dict[str, str],
 ):
     test_dir = tmp_path / "nested_run_ws"
     test_dir.mkdir()
@@ -59,6 +67,7 @@ def test_nested_podman_run(
                 "echo",
                 "nested-podman-ok",
             ],
+            env=isolated_env,
             cwd=test_dir,
             timeout=90,
         )
@@ -80,6 +89,7 @@ def test_nested_podman_build(
     devbox_image: str,
     nested_podman_available: bool,
     tmp_path: Path,
+    isolated_env: dict[str, str],
 ):
     test_dir = tmp_path / "nested_build_ws"
     test_dir.mkdir()
@@ -97,6 +107,7 @@ CMD ["cat", "/msg.txt"]
         build_res = run_bash_script(
             devbox_path,
             ["podman", "build", "-t", "nested-test:v1", "."],
+            env=isolated_env,
             cwd=test_dir,
             timeout=120,
         )
@@ -109,6 +120,7 @@ CMD ["cat", "/msg.txt"]
         run_res = run_bash_script(
             devbox_path,
             ["podman", "run", "--rm", "nested-test:v1"],
+            env=isolated_env,
             cwd=test_dir,
             timeout=60,
         )
