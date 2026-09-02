@@ -268,13 +268,12 @@ create_container_locked() {
     --volume "$BIND_DIR:$WORKDIR" \
   )
 
-  # Persistent caches shared across *all* devbox instances (not just this
-  # directory's container), so recreating a container doesn't repeat
-  # downloads/builds whose inputs haven't changed:
-  #   - uv's package cache and pre-commit's hook environments use
-  #     Podman-managed named volumes: their host-side location doesn't
-  #     matter, and rootless Podman gives them the same keep-id-aware
-  #     ownership handling as the bind mounts above.
+  # Persistent storage shared across *all* devbox instances (not just this
+  # directory's container):
+  #   - The knowledge base and uv/pre-commit caches use Podman-managed named
+  #     volumes: their host-side location doesn't matter, and rootless Podman
+  #     gives them the same keep-id-aware ownership handling as the bind mounts
+  #     above.
   #   - Nested Podman/Buildah's own image and layer storage
   #     (/sandbox/.local/share/containers/storage, per storage.conf's
   #     default graphroot) instead uses a host-backed directory, so its
@@ -283,6 +282,7 @@ create_container_locked() {
   local podman_storage_cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/devbox/containers-storage"
   mkdir -p "$podman_storage_cache_dir"
   params+=(
+    --volume "devbox-kb:/sandbox/kb" \
     --volume "devbox-uv-cache:/sandbox/.uv_cache" \
     --volume "devbox-precommit-cache:/sandbox/.cache/pre-commit" \
     --volume "$podman_storage_cache_dir:/sandbox/.local/share/containers/storage" \
