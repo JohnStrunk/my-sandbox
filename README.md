@@ -22,6 +22,9 @@ This repository provides:
 - **Nested Podman-in-Podman**: Build and run containers inside the devbox
   without host root permissions. Uses `fuse-overlayfs` and dynamic subordinate
   UID/GID delegation (`/etc/subuid` and `/etc/subgid`).
+- **Persistent Caches**: `uv`, pre-commit, and nested Podman/Buildah image
+  storage survive `devbox --recreate`, so recreating a container doesn't
+  repeat downloads or image builds whose inputs haven't changed.
 - **Comprehensive Toolchain**:
   - **Languages & Runtimes**: Go, Rust, Python packaging via `uv` and `uvx`,
     Node.js, and Playwright with full browser dependencies.
@@ -132,6 +135,42 @@ Git's credential helper so `git clone`/`fetch`/`push` against
 `https://github.com/...` URLs work without SSH keys or an agent. Otherwise, it
 prints a warning explaining how to run `gh auth login && gh auth setup-git`
 manually.
+
+### Persistent Caches
+
+`devbox` backs a few directories that are otherwise disposable-but-expensive
+with storage that survives `devbox --recreate` (and container removal in
+general), so recreating a container doesn't repeat downloads or nested image
+builds whose inputs haven't changed:
+
+| Path | Backing | Notes |
+| --- | --- | --- |
+| `/sandbox/.uv_cache` | Podman named volume `devbox-uv-cache` | `uv`/`uvx` package downloads. |
+| `/sandbox/.cache/pre-commit` | Podman named volume `devbox-precommit-cache` | Pre-commit hook environments. |
+| `/sandbox/.local/share/containers/storage` | Host directory `${XDG_CACHE_HOME:-~/.cache}/devbox/containers-storage` | Nested Podman/Buildah's own image and layer storage. |
+
+The `uv` and pre-commit caches use Podman-managed named volumes because their
+exact host-side location doesn't matter. Nested Podman/Buildah's storage
+instead uses a plain host directory so its size can be inspected and pruned
+with ordinary tools (`du -sh`, `rm -rf`) without needing `podman volume`
+commands.
+
+All three are shared across _every_ devbox instance, not just one project's
+container, so they persist even across `devbox --remove`; only deleting the
+volume/directory itself clears them:
+
+```shell
+# uv and pre-commit caches
+podman volume rm devbox-uv-cache devbox-precommit-cache
+
+# Nested Podman/Buildah image and layer storage
+rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/devbox/containers-storage"
+```
+
+This is local, runtime cache persistence between devbox sessions on one
+machine. It's a different scope from the GitHub Actions layer caching that
+speeds up building the `devbox:latest` image itself in CI (see
+`.github/workflows/`); the two don't share storage.
 
 ### Automatic OpenCode Integrations
 
