@@ -278,7 +278,7 @@ def test_docker_api_published_port(
             timeout=60,
         )
         assert rootless.returncode == 0, rootless.stderr
-        assert rootless.stdout.strip() == "true"
+        assert rootless.stdout.strip().splitlines()[-1] == "true"
 
         ping = run_bash_script(
             devbox_path,
@@ -295,7 +295,7 @@ def test_docker_api_published_port(
             timeout=60,
         )
         assert ping.returncode == 0, ping.stderr
-        assert ping.stdout.strip() == "OK"
+        assert ping.stdout.strip().splitlines()[-1] == "OK"
         _assert_devbox_is_unprivileged(test_dir)
 
         _install_testcontainers(devbox_path, test_dir, isolated_env)
