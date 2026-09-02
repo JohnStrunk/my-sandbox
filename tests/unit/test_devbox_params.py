@@ -67,8 +67,62 @@ print(json.dumps(result, separators=(",", ":")))
     fi
 fi
 
+if [ "$1" = "run" ] && [ "$2" = "-d" ] \
+    && [ "${{MOCK_REJECT_NESTED_SYSCTLS:-}}" = "1" ]; then
+    case "$*" in
+        *--sysctl*)
+            echo "Error: OCI runtime error: crun: open" \
+                "/proc/sys/net/ipv4/conf/default/route_localnet:" \
+                "Read-only file system" >&2
+            exit 126
+            ;;
+    esac
+fi
+
+if [ "$1" = "run" ] && [ "$2" = "-d" ] \
+    && [ "${{MOCK_FAIL_CONTAINER_RUN:-}}" = "1" ]; then
+    echo "Error: image create failed" >&2
+    exit 125
+fi
+
+if [ "$1" = "run" ] && [ "$2" = "-d" ] \
+    && [ "${{MOCK_FAIL_UNRELATED_SYSCTL:-}}" = "1" ]; then
+    echo "Error: storage setup failed at /proc/sys/net/ipv4/ping_group_range" >&2
+    exit 125
+fi
+
+if [ "$1" = "run" ] && [ "$2" = "-d" ] \
+    && [ "${{MOCK_REJECT_IPV6_SYSCTL:-}}" = "1" ]; then
+    case "$*" in
+        *--sysctl*)
+            echo "Error: crun: open /proc/sys/net/ipv6/conf/default/accept_ra" >&2
+            exit 126
+            ;;
+    esac
+fi
+
+if [ "$1" = "run" ] && [ "$2" = "-d" ] \
+    && [ "${{MOCK_REJECT_IPV6_FORWARDING:-}}" = "1" ]; then
+    case "$*" in
+        *--sysctl*)
+            echo "Error: crun: open /proc/sys/net/ipv6/conf/all/forwarding" >&2
+            exit 126
+            ;;
+    esac
+fi
+
 if [ "$1" = "container" ] && [ "$2" = "exists" ]; then
     # Default container does not exist
+    [ "${{MOCK_CONTAINER_EXISTS:-}}" = "1" ] && exit 0
+    if [ "${{MOCK_CONTAINER_EXISTS_ERROR:-}}" = "1" ]; then
+        echo "Error: storage unavailable" >&2
+        exit 125
+    fi
+    exit 1
+fi
+
+if [ "$1" = "rm" ] && [ "${{MOCK_RM_FAIL:-}}" = "1" ]; then
+    echo "Error: removal failed" >&2
     exit 1
 fi
 
@@ -80,6 +134,7 @@ fi
 if [ "$1" = "exec" ]; then
     # Mock /proc/self/uid_map and gid_map query
     if echo "$*" | grep -q "uid_map"; then
+        [ "${{MOCK_UID_MAP_FAIL:-}}" = "1" ] && exit 1
         echo "65535"
         exit 0
     fi
@@ -116,6 +171,14 @@ if [ "$1" = "exec" ]; then
         if [ "${{MOCK_GH_AUTH_SETUP_GIT_FAILS:-}}" = "1" ]; then
             exit 1
         fi
+    fi
+    if [ "$3" = "podman" ] && [ "$4" = "create" ]; then
+        echo "mock-preflight-container"
+        exit 0
+    fi
+    if echo "$*" | grep -q "docker.sock"; then
+        # Docker API readiness probe (curl --unix-socket .../_ping)
+        [ "${{MOCK_DOCKER_API_NEVER_READY:-}}" = "1" ] && exit 1
         exit 0
     fi
     exit 0
@@ -935,3 +998,240 @@ def test_devbox_survives_git_config_set_failure(
     assert "Failed to set Git user.name" in res.stderr
     assert "Failed to set Git user.email" in res.stderr
     assert "Entering container" in res.stdout
+
+
+@pytest.mark.unit
+def test_devbox_requests_nested_bridge_sysctls(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, log_file = mock_podman_env
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0
+
+    calls = parse_podman_calls(log_file)
+    run_calls = [c for c in calls if c and c[0] == "run" and "-d" in c]
+    assert len(run_calls) == 1
+    run_call = run_calls[0]
+    for sysctl in (
+        "net.ipv4.conf.default.route_localnet=1",
+        "net.ipv4.conf.default.arp_notify=1",
+        "net.ipv4.conf.default.rp_filter=2",
+        "net.ipv4.ip_forward=1",
+        "net.ipv6.conf.default.accept_dad=0",
+        "net.ipv6.conf.default.accept_ra=0",
+        "net.ipv6.conf.all.forwarding=1",
+    ):
+        assert sysctl in run_call
+    assert any(
+        "containers.conf" in arg and 'netns = "bridge"' in " ".join(call)
+        for call in calls
+        if call and call[0] == "exec"
+        for arg in call
+    )
+    assert any(
+        "podman" in call and "--rootless-netns" in call for call in calls if call
+    )
+    assert any(
+        "podman" in call and "network" in call and "create" in call
+        for call in calls
+        if call
+    )
+    assert any(
+        "podman" in call
+        and "create" in call
+        and "--network" in call
+        and "--publish" in call
+        for call in calls
+        if call
+    )
+
+
+@pytest.mark.unit
+def test_devbox_retries_without_nested_bridge_sysctls_on_rejection(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, log_file = mock_podman_env
+    env["MOCK_REJECT_NESTED_SYSCTLS"] = "1"
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0, res.stderr
+    assert "retrying without them" in res.stderr
+    assert "user-defined bridge networks" in res.stderr
+
+    run_calls = [
+        c for c in parse_podman_calls(log_file) if c and c[0] == "run" and "-d" in c
+    ]
+    assert len(run_calls) == 2
+    assert any("--sysctl" in c for c in run_calls[:1])
+    assert not any("--sysctl" in c for c in run_calls[1:])
+    assert not any(
+        "containers.conf" in arg and 'netns = "bridge"' in " ".join(call)
+        for call in parse_podman_calls(log_file)
+        if call and call[0] == "exec"
+        for arg in call
+    )
+
+
+@pytest.mark.unit
+def test_devbox_does_not_mask_unrelated_container_create_failure(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, log_file = mock_podman_env
+    env["MOCK_FAIL_CONTAINER_RUN"] = "1"
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode != 0
+    assert "image create failed" in res.stderr
+
+    run_calls = [
+        c for c in parse_podman_calls(log_file) if c and c[0] == "run" and "-d" in c
+    ]
+    assert len(run_calls) == 1
+
+
+@pytest.mark.unit
+def test_devbox_does_not_treat_unrelated_sysctl_error_as_fallback(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, log_file = mock_podman_env
+    env["MOCK_FAIL_UNRELATED_SYSCTL"] = "1"
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode != 0
+    assert "storage setup failed" in res.stderr
+    assert "retrying without them" not in res.stderr
+
+    run_calls = [
+        c for c in parse_podman_calls(log_file) if c and c[0] == "run" and "-d" in c
+    ]
+    assert len(run_calls) == 1
+
+
+@pytest.mark.unit
+def test_devbox_retries_without_sysctls_on_ipv6_sysctl_rejection(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, log_file = mock_podman_env
+    env["MOCK_REJECT_IPV6_SYSCTL"] = "1"
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0
+    assert "retrying without them" in res.stderr
+
+    run_calls = [
+        c for c in parse_podman_calls(log_file) if c and c[0] == "run" and "-d" in c
+    ]
+    assert len(run_calls) == 2
+    assert not any("--sysctl" in c for c in run_calls[1:])
+
+
+@pytest.mark.unit
+def test_devbox_retries_without_sysctls_on_ipv6_forwarding_rejection(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, log_file = mock_podman_env
+    env["MOCK_REJECT_IPV6_FORWARDING"] = "1"
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0
+    assert "retrying without them" in res.stderr
+
+    run_calls = [
+        c for c in parse_podman_calls(log_file) if c and c[0] == "run" and "-d" in c
+    ]
+    assert len(run_calls) == 2
+    assert not any("--sysctl" in c for c in run_calls[1:])
+
+
+@pytest.mark.unit
+def test_devbox_removes_container_when_subid_setup_fails(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, log_file = mock_podman_env
+    env["MOCK_UID_MAP_FAIL"] = "1"
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode != 0
+
+    calls = parse_podman_calls(log_file)
+    assert any(c[:2] == ["rm", "-f"] for c in calls)
+
+
+@pytest.mark.unit
+def test_devbox_reports_container_removal_failure(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, _ = mock_podman_env
+    env["MOCK_CONTAINER_EXISTS"] = "1"
+    env["MOCK_RM_FAIL"] = "1"
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["--recreate", "true"], env=env, cwd=run_dir)
+    assert res.returncode != 0
+    assert "failed to remove container" in res.stderr
+
+
+@pytest.mark.unit
+def test_devbox_reports_container_exists_probe_failure(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, _ = mock_podman_env
+    env["MOCK_CONTAINER_EXISTS_ERROR"] = "1"
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["--remove"], env=env, cwd=run_dir)
+    assert res.returncode != 0
+    assert "could not determine whether container" in res.stderr
+
+
+@pytest.mark.unit
+def test_devbox_sets_docker_host_ready_marker_env(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, log_file = mock_podman_env
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0
+
+    calls = parse_podman_calls(log_file)
+    run_call = next((c for c in calls if c and c[0] == "run" and "-d" in c), None)
+    assert run_call is not None
+    assert "DEVBOX_SUBID_READY_FILE=/sandbox/.devbox-subids-ready" in run_call
+
+    exec_calls = [c for c in calls if c and c[0] == "exec"]
+    assert any(
+        "docker.sock" in arg and "_ping" in " ".join(c) for c in exec_calls for arg in c
+    )
+
+
+@pytest.mark.unit
+def test_devbox_warns_when_docker_api_never_ready(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, log_file = mock_podman_env
+    env["MOCK_DOCKER_API_NEVER_READY"] = "1"
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir, timeout=60)
+    assert res.returncode == 0, res.stderr
+    assert "Docker API did not become ready" in res.stderr

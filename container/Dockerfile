@@ -161,11 +161,18 @@ RUN google_workspace_version="$(jq -er '.tools.google_workspace_cli.version' /tm
 #
 # netavark/aardvark-dns are installed explicitly so nested Podman always uses
 # the current network backend with container-name DNS resolution.
+#
+# passt (providing the `pasta` command) is nested Podman's default rootless
+# network mode (see containers.conf below): unlike the netavark bridge mode,
+# pasta needs no sysctl writes through the outer container's read-only
+# /proc/sys (see below) to support published ports, so it works in this
+# doubly-rootless setup without any added capabilities.
 # hadolint ignore=DL3041
 RUN dnf install -y --setopt=install_weak_deps=False \
     aardvark-dns \
     fuse-overlayfs \
     netavark \
+    passt \
     podman \
     slirp4netns \
     shadow-utils-subid \
@@ -231,23 +238,49 @@ RUN useradd --create-home --user-group --home-dir /sandbox --shell /bin/bash san
 #   - utsns = "host": avoids crun's "sethostname: Operation not permitted"
 #     when nested containers try to set their own hostname in a fresh UTS
 #     namespace.
-#   - default_rootless_network_cmd = "slirp4netns": nested containers
-#     default to unprivileged, userspace NAT networking instead of the CNI
-#     bridge plugin, which needs bridge-creation privileges the outer
-#     rootless container doesn't have.
+#   - netns = "pasta": selects pasta as nested Podman's default
+#     Docker-API-compatible network mode. Podman's Docker-compat layer ignores
+#     [network] default_rootless_network_cmd and substitutes "bridge" for an
+#     unspecified NetworkMode unless this [containers] netns option is itself
+#     set to something other than its "" / "default" / "private" values (see
+#     podman's pkg/api/handlers/compat/containers_create.go). Setting it here
+#     is what makes clients such as Testcontainers/Dockerode, which normally
+#     don't request a network, get pasta -- and therefore working published
+#     ports -- by default instead of a netavark bridge that needs sysctl writes
+#     the outer container's read-only /proc/sys blocks.
+#   - default_rootless_network_cmd = "pasta": keeps plain `podman run`
+#     (native CLI, not the Docker-compat API) on the same default.
 # This combination (together with the newuidmap/newgidmap fix above and
 # devbox's dynamic subordinate ID setup) follows the pattern
 # documented by Podman's own maintainers, cited above.
+#
+# A netavark bridge network (an explicit `podman network create`/
+# `--network bridge`, as opposed to the pasta default above) still needs
+# netavark to write a handful of IPv4 sysctls for the bridge/interface it
+# creates (route_localnet, arp_notify, rp_filter, and ip_forward), plus
+# IPv6 forwarding/autoconfiguration values when IPv6 is enabled. Those writes
+# still fail through the outer container's read-only /proc/sys. `devbox`
+# preseeds the equivalent defaults
+# values on the *outer* container at launch (see devbox), then verifies those
+# values inside nested Podman's rootless network namespace, then exercises a
+# temporary user-defined network with a published port, before changing this
+# `netns` setting to `bridge`. Netavark's read-before-write (see
+# containers/netavark src/network/sysctl.rs) can then use the inherited
+# values instead of hitting EROFS. This only helps if the host that launches
+# the outer container can itself apply those sysctls; `devbox` detects and
+# reports when it can't (see devbox-docker-api-check.sh), and the pasta-based
+# default network above remains available either way.
 RUN mkdir -p /sandbox/.config/containers \
     && printf '[storage]\ndriver = "overlay"\n\n[storage.options]\nmount_program = "/usr/bin/fuse-overlayfs"\nmountopt = "nodev,fsync=0"\n' \
     > /sandbox/.config/containers/storage.conf \
-    && printf '[containers]\ncgroups = "disabled"\nvolumes = ["/proc:/proc"]\ndefault_sysctls = []\nutsns = "host"\n\n[network]\ndefault_rootless_network_cmd = "slirp4netns"\n' \
+    && printf '[containers]\ncgroups = "disabled"\nvolumes = ["/proc:/proc"]\ndefault_sysctls = []\nutsns = "host"\nnetns = "pasta"\n\n[network]\nnetwork_backend = "netavark"\ndefault_rootless_network_cmd = "pasta"\n' \
     > /sandbox/.config/containers/containers.conf \
-    && mkdir -p /sandbox/.config/acli /sandbox/.config/gcloud /sandbox/.config/gws /sandbox/.config/opencode /sandbox/.local/state/opencode /sandbox/.local/share/opencode \
+    && mkdir -p /sandbox/.config/acli /sandbox/.config/gcloud /sandbox/.config/gws /sandbox/.config/opencode /sandbox/.local/state/opencode /sandbox/.local/share/opencode /sandbox/.docker/run \
     && touch /sandbox/.local/state/opencode/model.json /sandbox/.config/gcloud/application_default_credentials.json \
-    && chown -R sandbox:sandbox /sandbox/.config /sandbox/.local
+    && chown -R sandbox:sandbox /sandbox/.config /sandbox/.local /sandbox/.docker
 
-ENV HOME=/sandbox
+ENV HOME=/sandbox \
+    DOCKER_HOST=unix:///sandbox/.docker/run/docker.sock
 
 # Install pre-commit for the sandbox user so its executable and tool
 # environment live under /sandbox/.local.
@@ -279,8 +312,9 @@ RUN /usr/sbin/runuser -u sandbox -- tokenjuice install opencode
 ENV BUILDAH_ISOLATION=chroot \
     _CONTAINERS_USERNS_CONFIGURED=""
 
-COPY devbox-entry.sh /usr/local/bin/
-RUN chmod +rx /usr/local/bin/devbox-entry.sh \
+COPY devbox-entry.sh devbox-docker-api-check.sh /usr/local/bin/
+RUN chmod +rx /usr/local/bin/devbox-entry.sh /usr/local/bin/devbox-docker-api-check.sh \
+    && ln -s devbox-docker-api-check.sh /usr/local/bin/devbox-docker-api-check \
     && printf '%s\n' 'sandbox ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/sandbox \
     && chmod 0440 /etc/sudoers.d/sandbox \
     && visudo -cf /etc/sudoers

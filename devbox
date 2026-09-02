@@ -25,6 +25,8 @@ BIND_DIR="$(realpath "$PWD")"
 NAME="devbox-$(basename "$BIND_DIR")"
 WORKDIR="/sandbox/$(basename "$BIND_DIR")"
 SOURCE_FINGERPRINT_LABEL="io.github.johnstrunk.my-sandbox.devbox-context-fingerprint"
+SUBID_READY_FILE="/sandbox/.devbox-subids-ready"
+DEVBOX_LOCK_FD=""
 
 # Clear XDG_DATA_HOME so `devbox` works inside vscode terminal sessions
 export XDG_DATA_HOME=
@@ -112,17 +114,134 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-remove_container() {
+container_exists() {
+  local status
   if podman container exists "$NAME" 2>/dev/null; then
-    echo "==> Removing container '$NAME'"
-    podman stop "$NAME" >/dev/null 2>&1 || true
-    podman rm "$NAME" >/dev/null 2>&1 || true
+    return 0
   else
+    status=$?
+  fi
+  if [ "$status" -eq 1 ]; then
+    return 1
+  fi
+  echo "==> ERROR: could not determine whether container '$NAME' exists" >&2
+  return "$status"
+}
+
+remove_container() {
+  if container_exists; then
+    echo "==> Removing container '$NAME'"
+    timeout 30 podman stop "$NAME" >/dev/null 2>&1 || true
+    if ! timeout 30 podman rm "$NAME" >/dev/null 2>&1; then
+      echo "==> ERROR: failed to remove container '$NAME'" >&2
+      return 1
+    fi
+  else
+    local status=$?
+    if [ "$status" -ne 1 ]; then
+      return "$status"
+    fi
     echo "==> Container '$NAME' does not exist; nothing to remove"
   fi
 }
 
+acquire_devbox_lock() {
+  if [[ -n "$DEVBOX_LOCK_FD" ]]; then
+    return 0
+  fi
+  local lock_root="${XDG_CACHE_HOME:-$HOME/.cache}/devbox/locks"
+  local lock_file="$lock_root/devbox-${NAME}.lock"
+  local lock_fd
+  if ! mkdir -p "$lock_root" || ! chmod 700 "$lock_root" \
+    || ! exec {lock_fd}>"$lock_file"; then
+    echo "==> Could not create the devbox creation lock '$lock_file'" >&2
+    return 1
+  fi
+  if ! flock "$lock_fd"; then
+    echo "==> Could not acquire the devbox creation lock '$lock_file'" >&2
+    exec {lock_fd}>&-
+    return 1
+  fi
+  DEVBOX_LOCK_FD="$lock_fd"
+}
+
+release_devbox_lock() {
+  if [[ -n "$DEVBOX_LOCK_FD" ]]; then
+    flock -u "$DEVBOX_LOCK_FD" || true
+    exec {DEVBOX_LOCK_FD}>&-
+    DEVBOX_LOCK_FD=""
+  fi
+}
+
+wait_for_docker_api() {
+  echo "==> Waiting for nested Podman's Docker-compatible API"
+  local api_attempts=0
+  local api_deadline=$((SECONDS + 20))
+  while ! timeout 3 podman exec "$NAME" curl --connect-timeout 1 --max-time 1 \
+    --fail --silent --unix-socket /sandbox/.docker/run/docker.sock \
+    http://localhost/_ping >/dev/null 2>&1; do
+    api_attempts=$((api_attempts + 1))
+    if [ "$api_attempts" -ge 50 ] || [ "$SECONDS" -ge "$api_deadline" ]; then
+      echo "==> WARNING: Docker API did not become ready; devbox will continue without it:" >&2
+      timeout 10 podman exec "$NAME" devbox-docker-api-check >&2 || true
+      return 0
+    fi
+    sleep 0.1
+  done
+}
+
+nested_network_sysctl_failure() {
+  case "$1" in
+    *route_localnet* | *arp_notify* | *rp_filter* | *ip_forward* | \
+      *accept_dad* | *accept_ra* | *net.ipv4.conf.default.* | \
+      *net.ipv6.conf.default.* | *net.ipv6.conf.all.forwarding* | \
+      *net/ipv6/conf/all/forwarding*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
 create_container() {
+  local lock_acquired=false
+  if [[ -z "$DEVBOX_LOCK_FD" ]]; then
+    if ! acquire_devbox_lock; then
+      return 1
+    fi
+    lock_acquired=true
+  fi
+
+  # A second launcher may have observed the container as absent while the
+  # first launcher was creating it. Re-check under the lock before doing any
+  # image build or container replacement.
+  if container_exists; then
+    if [[ "$lock_acquired" == true ]]; then
+      release_devbox_lock
+    fi
+    return 0
+  else
+    local status=$?
+    if [ "$status" -ne 1 ]; then
+      if [[ "$lock_acquired" == true ]]; then
+        release_devbox_lock
+      fi
+      return "$status"
+    fi
+  fi
+
+  local create_status
+  if create_container_locked; then
+    create_status=0
+  else
+    create_status=$?
+  fi
+  if [[ "$lock_acquired" == true ]]; then
+    release_devbox_lock
+  fi
+  return "$create_status"
+}
+
+create_container_locked() {
   local source_fingerprint
   source_fingerprint="$(container_context_fingerprint)"
 
@@ -393,18 +512,78 @@ EOF
     )
   fi
 
+  local base_run_args=(
+    run -d
+    --user sandbox
+    --userns "keep-id:uid=$sandbox_uid,gid=$sandbox_gid"
+    --name "$NAME"
+    --label "$SOURCE_FINGERPRINT_LABEL=$source_fingerprint"
+    --stop-timeout 0
+    --device /dev/fuse
+    --device /dev/net/tun
+    --security-opt label=disable
+    --env "DEVBOX_SUBID_READY_FILE=$SUBID_READY_FILE"
+  )
+  # Nested Podman's Docker-compatible API defaults new containers to the
+  # pasta network (see container/Dockerfile), which already supports
+  # published ports without any of this. An *explicit* netavark bridge
+  # network (`podman network create`, or Testcontainers' Network class)
+  # still needs nested netavark to write a few net.ipv4 sysctls for the
+  # bridge interface it creates, which fails through this outer container's
+  # own read-only /proc/sys unless those values are already correct. A
+  # fresh network namespace that a nested process creates inherits this
+  # outer container's current net.ipv4.conf.default.* values, so preseeding
+  # them here -- if the host running this `podman run` allows it -- can let
+  # nested netavark's own read-before-write skip straight past the write
+  # that would otherwise fail. See container/Dockerfile for the sysctl
+  # names netavark's bridge setup writes and why this specific set covers
+  # them.
+  local nested_bridge_sysctls=(
+    --sysctl net.ipv4.conf.default.route_localnet=1
+    --sysctl net.ipv4.conf.default.arp_notify=1
+    --sysctl net.ipv4.conf.default.rp_filter=2
+    --sysctl net.ipv4.ip_forward=1
+    --sysctl net.ipv6.conf.default.accept_dad=0
+    --sysctl net.ipv6.conf.default.accept_ra=0
+    --sysctl net.ipv6.conf.all.forwarding=1
+  )
+  local nested_bridge_networks_enabled=false
+  local nested_network_preflight_image="${DEVBOX_NESTED_NETWORK_PREFLIGHT_IMAGE:-docker.io/library/alpine:3.22}"
+
+  cleanup_failed_create() {
+    echo "==> Removing incomplete container '$NAME'" >&2
+    if ! timeout 10 podman rm -f "$NAME" >/dev/null 2>&1; then
+      echo "==> WARNING: could not remove incomplete container '$NAME'" >&2
+    fi
+  }
+  trap 'cleanup_failed_create; exit 130' INT TERM
+
   echo "==> Creating container '$NAME'"
-  podman run -d \
-    --user sandbox \
-    --userns "keep-id:uid=$sandbox_uid,gid=$sandbox_gid" \
-    --name "$NAME" \
-    --label "$SOURCE_FINGERPRINT_LABEL=$source_fingerprint" \
-    --stop-timeout 0 \
-    --device /dev/fuse \
-    --device /dev/net/tun \
-    --security-opt label=disable \
-    "${params[@]}" \
-    "devbox:latest"
+  local run_output
+  if run_output="$(
+    podman "${base_run_args[@]}" "${nested_bridge_sysctls[@]}" \
+      "${params[@]}" "devbox:latest" 2>&1
+  )"; then
+    printf '%s\n' "$run_output"
+    nested_bridge_networks_enabled=true
+  elif nested_network_sysctl_failure "$run_output"; then
+    echo "==> Outer Podman rejected the nested-bridge-network sysctls; retrying without them" >&2
+    printf '%s\n' "$run_output" >&2
+    cleanup_failed_create
+    if ! run_output="$(podman "${base_run_args[@]}" "${params[@]}" "devbox:latest" 2>&1)"; then
+      printf '%s\n' "$run_output" >&2
+      cleanup_failed_create
+      trap - INT TERM
+      return 1
+    fi
+    printf '%s\n' "$run_output"
+    echo "==> Nested Podman will use its pasta default network only; user-defined bridge networks (e.g. Testcontainers Network aliases) won't be available. Published ports still work -- see 'devbox-docker-api-check'." >&2
+  else
+    printf '%s\n' "$run_output" >&2
+    cleanup_failed_create
+    trap - INT TERM
+    return 1
+  fi
 
   # --userns=keep-id gives this container's own user namespace a limited
   # range of usable IDs (0..N, where N is determined by the invoking host
@@ -428,8 +607,26 @@ EOF
   # https://github.com/containers/podman/blob/main/contrib/podmanimage/stable/Dockerfile
   echo "==> Configuring nested Podman's subordinate UID/GID delegation"
   local max_uid max_gid
-  max_uid="$(podman exec "$NAME" awk '{ if ($1 + $3 - 1 > max) max = $1 + $3 - 1 } END { print max }' /proc/self/uid_map)"
-  max_gid="$(podman exec "$NAME" awk '{ if ($1 + $3 - 1 > max) max = $1 + $3 - 1 } END { print max }' /proc/self/gid_map)"
+  # shellcheck disable=SC2016
+  if ! max_uid="$(timeout 30 podman exec "$NAME" awk '{ if ($1 + $3 - 1 > max) max = $1 + $3 - 1 } END { print max }' /proc/self/uid_map)"; then
+    cleanup_failed_create
+    trap - INT TERM
+    return 1
+  fi
+  # shellcheck disable=SC2016
+  if ! max_gid="$(timeout 30 podman exec "$NAME" awk '{ if ($1 + $3 - 1 > max) max = $1 + $3 - 1 } END { print max }' /proc/self/gid_map)"; then
+    cleanup_failed_create
+    trap - INT TERM
+    return 1
+  fi
+  if [[ ! "$max_uid" =~ ^[0-9]+$ || ! "$max_gid" =~ ^[0-9]+$ ]] \
+    || [ "$max_uid" -le "$sandbox_uid" ] \
+    || [ "$max_gid" -le "$sandbox_gid" ]; then
+    echo "==> Nested Podman reported invalid subordinate-ID bounds" >&2
+    cleanup_failed_create
+    trap - INT TERM
+    return 1
+  fi
   subid_ranges() { # id max -> "sandbox:..." subuid/subgid lines around $id
     local id="$1" max="$2"
     if [ "$id" -gt 1 ]; then
@@ -439,9 +636,23 @@ EOF
       echo "sandbox:$((id + 1)):$((max - id))"
     fi
   }
-  podman exec -u 0:0 "$NAME" sed -i '/^sandbox:/d' /etc/subuid /etc/subgid
-  subid_ranges "$sandbox_uid" "$max_uid" | podman exec -i -u 0:0 "$NAME" tee -a /etc/subuid >/dev/null
-  subid_ranges "$sandbox_gid" "$max_gid" | podman exec -i -u 0:0 "$NAME" tee -a /etc/subgid >/dev/null
+  if ! timeout 30 podman exec -u 0:0 "$NAME" sed -i '/^sandbox:/d' /etc/subuid /etc/subgid; then
+    cleanup_failed_create
+    trap - INT TERM
+    return 1
+  fi
+  if ! subid_ranges "$sandbox_uid" "$max_uid" \
+    | timeout 30 podman exec -i -u 0:0 "$NAME" tee -a /etc/subuid >/dev/null; then
+    cleanup_failed_create
+    trap - INT TERM
+    return 1
+  fi
+  if ! subid_ranges "$sandbox_gid" "$max_gid" \
+    | timeout 30 podman exec -i -u 0:0 "$NAME" tee -a /etc/subgid >/dev/null; then
+    cleanup_failed_create
+    trap - INT TERM
+    return 1
+  fi
 
   # Podman auto-creates missing parent directories for bind-mounted
   # files/dirs (e.g. the opencode model.json mount above) as root, ignoring
@@ -451,9 +662,100 @@ EOF
   # boundary, so this only touches the container's own filesystem, never
   # files on the host).
   echo "==> Fixing ownership of any root-owned bind-mount parent directories"
-  podman exec -u 0:0 "$NAME" \
+  timeout 30 podman exec -u 0:0 "$NAME" \
     find /sandbox -xdev \( ! -uid "$sandbox_uid" -o ! -gid "$sandbox_gid" \) \
     -exec chown -h "$sandbox_uid:$sandbox_gid" {} + 2>/dev/null || true
+
+  if [[ "$nested_bridge_networks_enabled" == true ]]; then
+    echo "==> Verifying nested rootless-network sysctls"
+    # shellcheck disable=SC2016
+    if ! timeout 30 podman exec "$NAME" podman unshare --rootless-netns sh -c '
+      set -eu
+      for requirement in \
+        net/ipv4/conf/default/route_localnet=1 \
+        net/ipv4/conf/default/arp_notify=1 \
+        net/ipv4/conf/default/rp_filter=2 \
+        net/ipv4/ip_forward=1 \
+        net/ipv6/conf/default/accept_dad=0 \
+        net/ipv6/conf/default/accept_ra=0 \
+        net/ipv6/conf/all/forwarding=1; do
+        path="/proc/sys/${requirement%%=*}"
+        expected="${requirement#*=}"
+        actual="$(tr -d "[:space:]" < "$path")"
+        if [ "$actual" != "$expected" ]; then
+          printf "%s is %s (want %s)\\n" "$path" "$actual" "$expected" >&2
+          exit 1
+        fi
+      done
+    '; then
+      echo "==> Nested rootless-network sysctls are not usable; keeping pasta-only API networking" >&2
+      nested_bridge_networks_enabled=false
+    fi
+  fi
+
+  if [[ "$nested_bridge_networks_enabled" == true ]]; then
+    echo "==> Probing nested user-defined netavark network and published-port support"
+    local preflight_network="devbox-api-preflight-$$"
+    local preflight_container_id=""
+    local preflight_failed=false
+    if ! timeout 30 podman exec "$NAME" podman network create \
+      "$preflight_network" >/dev/null; then
+      preflight_failed=true
+    else
+      if ! preflight_container_id="$(timeout 30 podman exec "$NAME" podman create \
+        --network "$preflight_network" --publish :80 \
+        "$nested_network_preflight_image" true)" \
+        || [[ -z "$preflight_container_id" ]]; then
+        preflight_failed=true
+      elif ! timeout 120 podman exec "$NAME" podman start --attach \
+        "$preflight_container_id"; then
+        preflight_failed=true
+      fi
+      if [[ -n "$preflight_container_id" ]]; then
+        local preflight_container_removed=false
+        for _ in {1..3}; do
+          if timeout 5 podman exec "$NAME" podman rm -f \
+            "$preflight_container_id" >/dev/null 2>&1; then
+            preflight_container_removed=true
+            break
+          fi
+          sleep 0.2
+        done
+        if [[ "$preflight_container_removed" == false ]]; then
+          echo "==> WARNING: could not remove the nested network preflight container" >&2
+          preflight_failed=true
+        fi
+      fi
+      local preflight_network_removed=false
+      for _ in {1..3}; do
+        if timeout 5 podman exec "$NAME" podman network rm \
+          "$preflight_network" >/dev/null; then
+          preflight_network_removed=true
+          break
+        fi
+        sleep 0.2
+      done
+      if [[ "$preflight_network_removed" == false ]]; then
+        echo "==> WARNING: could not remove the nested network preflight network" >&2
+        preflight_failed=true
+      fi
+    fi
+    if [[ "$preflight_failed" == true ]]; then
+      echo "==> Nested netavark bridge probing failed; keeping pasta-only API networking" >&2
+      nested_bridge_networks_enabled=false
+    fi
+  fi
+
+  if [[ "$nested_bridge_networks_enabled" == true ]]; then
+    echo "==> Enabling nested netavark bridge mode for Docker API network aliases"
+    if ! timeout 30 podman exec -u 0:0 "$NAME" sed -i \
+      's/^netns = "pasta"$/netns = "bridge"/' \
+      /sandbox/.config/containers/containers.conf; then
+      cleanup_failed_create
+      trap - INT TERM
+      return 1
+    fi
+  fi
 
   # Git identity: a fresh sandbox account has no Git identity configured,
   # so an uninformed `git commit` inside the container fails with Git's
@@ -515,13 +817,58 @@ EOF
     echo "      gh auth login && gh auth setup-git" >&2
     echo "    Or set GH_TOKEN/GITHUB_TOKEN, or log in with 'gh auth login' on the host, before starting devbox." >&2
   fi
+  # The entrypoint waits for this marker before starting the API service so
+  # Podman sees the dynamically computed subordinate-ID ranges above.
+  if ! timeout 30 podman exec -u 0:0 "$NAME" touch "$SUBID_READY_FILE"; then
+    echo "==> Failed to signal nested Podman that subordinate IDs are ready" >&2
+    cleanup_failed_create
+    trap - INT TERM
+    return 1
+  fi
+
+  trap - INT TERM
 }
 
 enter_container() {
-  if [ "$(podman inspect -f '{{.State.Running}}' "$NAME" 2>/dev/null)" != "true" ]; then
-    echo "==> Starting container '$NAME'"
-    podman start "$NAME" >/dev/null
+  if ! acquire_devbox_lock; then
+    return 1
   fi
+
+  local enter_status
+  if [ "$(podman inspect -f '{{.State.Running}}' "$NAME" 2>/dev/null)" != "true" ]; then
+    if container_exists; then
+      echo "==> Starting container '$NAME'"
+      if timeout 30 podman start "$NAME" >/dev/null; then
+        :
+      else
+        enter_status=$?
+        release_devbox_lock
+        return "$enter_status"
+      fi
+    else
+      enter_status=$?
+      if [ "$enter_status" -ne 1 ]; then
+        release_devbox_lock
+        return "$enter_status"
+      fi
+      echo "==> Container '$NAME' disappeared before it could be entered; creating it" >&2
+      if create_container_locked; then
+        enter_status=0
+      else
+        enter_status=$?
+        release_devbox_lock
+        return "$enter_status"
+      fi
+    fi
+  fi
+  if wait_for_docker_api; then
+    :
+  else
+    enter_status=$?
+    release_devbox_lock
+    return "$enter_status"
+  fi
+  release_devbox_lock
   echo "==> Entering container '$NAME'"
   local exec_opts=("-i")
   if [ -t 0 ] && [ -t 1 ]; then
@@ -536,21 +883,48 @@ enter_container() {
 
 case "$ACTION" in
   remove)
-    remove_container
+    if ! acquire_devbox_lock; then
+      exit 1
+    fi
+    if remove_container; then
+      enter_status=0
+    else
+      enter_status=$?
+    fi
+    release_devbox_lock
+    exit "$enter_status"
     ;;
   recreate)
-    remove_container
-    create_container
+    if ! acquire_devbox_lock; then
+      exit 1
+    fi
+    if remove_container; then
+      if create_container; then
+        enter_status=0
+      else
+        enter_status=$?
+      fi
+    else
+      enter_status=$?
+    fi
+    if [ "$enter_status" -ne 0 ]; then
+      release_devbox_lock
+      exit "$enter_status"
+    fi
     enter_container "${COMMAND[@]}"
     ;;
   run)
-    if ! podman container exists "$NAME" 2>/dev/null; then
-      create_container
-    else
+    if container_exists; then
       expected_source_fingerprint="$(container_context_fingerprint)"
       if container_is_stale "$expected_source_fingerprint"; then
         warn_stale_container
       fi
+    else
+      enter_status=$?
+      if [ "$enter_status" -ne 1 ]; then
+        exit "$enter_status"
+      fi
+      create_container
     fi
     enter_container "${COMMAND[@]}"
     ;;

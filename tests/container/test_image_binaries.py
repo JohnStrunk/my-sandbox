@@ -30,6 +30,8 @@ BINARIES = [
     ("ps", ["ps", "--version"]),
     ("pgrep", ["pgrep", "--version"]),
     ("podman", ["podman", "--version"]),
+    ("pasta", ["pasta", "--version"]),
+    ("devbox-docker-api-check", ["devbox-docker-api-check", "--help"]),
 ]
 
 
