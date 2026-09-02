@@ -34,7 +34,8 @@ This repository provides:
     [tokenjuice](https://github.com/vincentkoc/tokenjuice)'s OpenCode plugin
     pre-installed to compact noisy terminal output before it reaches context.
   - **Linters & Utilities**: `pre-commit`, `ripgrep`, `jq`, `shellcheck`,
-    `hadolint`, `markdownlint-cli2`, and `ffmpeg`.
+    `hadolint`, `markdownlint-cli2`, `ffmpeg`, and process diagnostics
+    (`ps`, `pgrep`) via `procps-ng`.
 - **Automatic Host Credential & Config Passthrough**: `devbox` detects and
   bind-mounts existing host configurations (GitHub tokens, Google Cloud ADC,
   Atlassian CLI, Google Workspace, LiteMaaS API keys, and OpenCode

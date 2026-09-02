@@ -27,6 +27,8 @@ BINARIES = [
     ("hadolint", ["hadolint", "--version"]),
     ("markdownlint-cli2", ["markdownlint-cli2", "--help"]),
     ("ffmpeg", ["ffmpeg", "-version"]),
+    ("ps", ["ps", "--version"]),
+    ("pgrep", ["pgrep", "--version"]),
     ("podman", ["podman", "--version"]),
 ]
 
