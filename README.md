@@ -132,6 +132,7 @@ Git's credential helper so `git clone`/`fetch`/`push` against
 `https://github.com/...` URLs work without SSH keys or an agent. Otherwise, it
 prints a warning explaining how to run `gh auth login && gh auth setup-git`
 manually.
+
 ### Persistent Caches
 
 `devbox` backs a few directories that are otherwise disposable-but-expensive
