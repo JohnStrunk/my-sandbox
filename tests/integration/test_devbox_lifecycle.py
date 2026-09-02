@@ -9,7 +9,10 @@ from tests.conftest import run_bash_script
 
 @pytest.mark.integration
 def test_devbox_lifecycle_create_exec_recreate_remove(
-    devbox_path: Path, devbox_image: str, tmp_path: Path
+    devbox_path: Path,
+    devbox_image: str,
+    tmp_path: Path,
+    isolated_env: dict[str, str],
 ):
     # Unique directory name for this test run
     test_dir = tmp_path / "test_workspace"
@@ -22,6 +25,7 @@ def test_devbox_lifecycle_create_exec_recreate_remove(
         res_create = run_bash_script(
             devbox_path,
             ["bash", "-c", "echo 'hello from container' > test_output.txt"],
+            env=isolated_env,
             cwd=test_dir,
             timeout=300,
         )
@@ -39,6 +43,7 @@ def test_devbox_lifecycle_create_exec_recreate_remove(
         res_exec = run_bash_script(
             devbox_path,
             ["cat", "test_output.txt"],
+            env=isolated_env,
             cwd=test_dir,
             timeout=60,
         )
@@ -51,6 +56,7 @@ def test_devbox_lifecycle_create_exec_recreate_remove(
         res_recreate = run_bash_script(
             devbox_path,
             ["--recreate", "echo", "recreated"],
+            env=isolated_env,
             cwd=test_dir,
             timeout=300,
         )
@@ -64,6 +70,7 @@ def test_devbox_lifecycle_create_exec_recreate_remove(
         res_remove = run_bash_script(
             devbox_path,
             ["--remove"],
+            env=isolated_env,
             cwd=test_dir,
             timeout=30,
         )
