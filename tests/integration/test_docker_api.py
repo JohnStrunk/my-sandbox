@@ -192,12 +192,13 @@ def _remove_devbox(devbox_path: Path, test_dir: Path, env: dict[str, str]) -> No
     if result.returncode != 0:
         subprocess.run(
             ["podman", "rm", "-f", f"devbox-{test_dir.name}"],
+            env=env,
             capture_output=True,
             check=False,
         )
 
 
-def _assert_devbox_is_unprivileged(test_dir: Path) -> None:
+def _assert_devbox_is_unprivileged(test_dir: Path, env: dict[str, str]) -> None:
     result = subprocess.run(
         [
             "podman",
@@ -206,6 +207,7 @@ def _assert_devbox_is_unprivileged(test_dir: Path) -> None:
             "{{.HostConfig.Privileged}}",
             f"devbox-{test_dir.name}",
         ],
+        env=env,
         capture_output=True,
         text=True,
         check=False,
@@ -296,7 +298,7 @@ def test_docker_api_published_port(
         )
         assert ping.returncode == 0, ping.stderr
         assert ping.stdout.strip().splitlines()[-1] == "OK"
-        _assert_devbox_is_unprivileged(test_dir)
+        _assert_devbox_is_unprivileged(test_dir, isolated_env)
 
         _install_testcontainers(devbox_path, test_dir, isolated_env)
         result = _run_node_smoke(devbox_path, test_dir, "http-smoke.cjs", isolated_env)
