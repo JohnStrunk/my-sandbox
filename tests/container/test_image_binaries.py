@@ -13,6 +13,7 @@ BINARIES = [
     ("node", ["node", "--version"]),
     ("npm", ["npm", "--version"]),
     ("npx", ["npx", "--version"]),
+    ("playwright-cli", ["playwright-cli", "--version"]),
     ("gh", ["gh", "--version"]),
     ("glab", ["glab", "--version"]),
     ("gcloud", ["gcloud", "--version"]),
@@ -54,3 +55,18 @@ def test_container_user_identity(devbox_image: str):
     res = run_in_devbox(devbox_image, ["id", "-u", "-n"], user="sandbox")
     assert res.returncode == 0
     assert res.stdout.strip() == "sandbox"
+
+
+@pytest.mark.container
+def test_playwright_browser_launches(devbox_image: str):
+    res = run_in_devbox(
+        devbox_image,
+        ["playwright-cli", "open", "about:blank"],
+        user="sandbox",
+        timeout=60,
+    )
+    assert res.returncode == 0, (
+        "Playwright failed to launch the bundled Chromium browser.\n"
+        f"Stdout: {res.stdout}\nStderr: {res.stderr}"
+    )
+    assert "Page URL: about:blank" in res.stdout

@@ -31,7 +31,7 @@ This repository provides:
   box, including published container ports.
 - **Comprehensive Toolchain**:
   - **Languages & Runtimes**: Go, Rust, Python packaging via `uv` and `uvx`,
-    Node.js, and Playwright with full browser dependencies.
+    Node.js, and Playwright CLI with a bundled Chromium browser.
   - **Cloud & Productivity CLIs**: GitHub CLI (`gh`), GitLab CLI (`glab`),
     Google Cloud SDK (`gcloud`), Google Workspace CLI (`gws`), Atlassian CLI
     (`acli`), Google Antigravity (`agy`), and OpenCode (`opencode`), with

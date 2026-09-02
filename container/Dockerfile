@@ -23,6 +23,7 @@ RUN dnf install -y --setopt=install_weak_deps=False \
     nodejs22-full-i18n \
     nodejs \
     npm \
+    nss \
     openssl \
     procps-ng \
     ripgrep \
@@ -41,6 +42,11 @@ RUN update-ca-trust \
 ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
     REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
     NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
+
+# Keep Playwright's browser files available to the non-root runtime user and
+# use the bundled Chromium build instead of an absent system Chrome install.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
+    PLAYWRIGHT_MCP_BROWSER=chromium
 
 # Keep image, CI, and pre-commit tool pins in one machine-readable manifest.
 ARG TARGETARCH=amd64
@@ -80,6 +86,9 @@ ENV UV_CACHE_DIR=/sandbox/.uv_cache
 
 # markdownlint-cli2 version must match the rev in .pre-commit-config.yaml -
 # its pre-commit hook uses `language: system` and runs this binary directly.
+# @playwright/cli bundles the matching Playwright package. Use its installer
+# rather than `npx playwright`, which can resolve an unrelated package when
+# this image is not built from an npm project.
 RUN markdownlint_version="$(jq -er '.tools.markdownlint_cli2.version' /tmp/devbox-tool-versions.json)" \
     && playwright_version="$(jq -er '.tools.playwright_cli.version' /tmp/devbox-tool-versions.json)" \
     && markdownlint_version="${markdownlint_version#v}" \
@@ -87,7 +96,8 @@ RUN markdownlint_version="$(jq -er '.tools.markdownlint_cli2.version' /tmp/devbo
     && npm install -g --no-fund \
     "markdownlint-cli2@${markdownlint_version}" \
     "@playwright/cli@${playwright_version}" \
-    && npx -y playwright install
+    && playwright-cli install-browser chrome-for-testing \
+    && chmod -R a+rX "${PLAYWRIGHT_BROWSERS_PATH}"
 
 # Install Google Antigravity CLI
 RUN agy_version="$(jq -er '.tools.antigravity_cli.version' /tmp/devbox-tool-versions.json)" \
