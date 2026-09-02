@@ -1,5 +1,6 @@
 import hashlib
 import os
+import shlex
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -51,6 +52,35 @@ CREDENTIAL_ENV_VARS = (
     "VERTEX_LOCATION",
 )
 
+# Environment overrides that can make a CLI read configuration or credentials
+# from a host path even when `$HOME` is isolated. Tests may set these
+# explicitly when that behavior is what they are verifying.
+HOST_CONFIG_ENV_VARS = (
+    "AWS_CONFIG_FILE",
+    "AWS_SHARED_CREDENTIALS_FILE",
+    "AZURE_CONFIG_DIR",
+    "CLOUDSDK_CONFIG",
+    "CONTAINERS_CONF",
+    "CONTAINERS_REGISTRIES_CONF",
+    "CONTAINERS_STORAGE_CONF",
+    "DOCKER_CONFIG",
+    "GH_CONFIG_DIR",
+    "GIT_CONFIG_GLOBAL",
+    "GIT_CONFIG_SYSTEM",
+    "GIT_SSH_COMMAND",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "GLAB_CONFIG_DIR",
+    "KUBECONFIG",
+    "NETRC",
+    "NPM_CONFIG_USERCONFIG",
+    "OPENCODE_CONFIG",
+    "OPENCODE_CONFIG_DIR",
+    "PIP_CONFIG_FILE",
+    "SSH_AUTH_SOCK",
+)
+
+ISOLATION_ENV_VARS = CREDENTIAL_ENV_VARS + HOST_CONFIG_ENV_VARS
+
 
 @pytest.fixture(autouse=True)
 def _isolated_test_environment(
@@ -66,18 +96,18 @@ def _isolated_test_environment(
     """
     if request.node.get_closest_marker("e2e_inference") is not None:
         return
-    for name in CREDENTIAL_ENV_VARS:
+    for name in ISOLATION_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture
 def host_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Simulate a host machine that has every optional credential set.
+    """Simulate a host machine with credentials and config overrides set.
 
     Used to verify that isolated tests/launchers don't accidentally forward
-    credentials they weren't explicitly given.
+    host state they weren't explicitly given.
     """
-    for name in CREDENTIAL_ENV_VARS:
+    for name in ISOLATION_ENV_VARS:
         monkeypatch.setenv(name, f"host-{name.lower()}")
 
 
@@ -102,16 +132,56 @@ def isolated_env(host_credentials: None, isolated_home: Path) -> dict[str, str]:
     host home-directory state, unless a test adds them explicitly.
     """
     env = os.environ.copy()
-    for name in CREDENTIAL_ENV_VARS:
+    host_data_home = Path(
+        env.get("XDG_DATA_HOME") or Path(env["HOME"]) / ".local" / "share"
+    )
+    for name in ISOLATION_ENV_VARS:
         env.pop(name, None)
     env["HOME"] = str(isolated_home)
+    isolated_xdg = isolated_home.parent / "isolated-xdg"
     for xdg_var, subdir in (
         ("XDG_CONFIG_HOME", "config"),
         ("XDG_DATA_HOME", "share"),
         ("XDG_STATE_HOME", "state"),
         ("XDG_CACHE_HOME", "cache"),
     ):
-        env[xdg_var] = str(isolated_home / subdir)
+        env[xdg_var] = str(isolated_xdg / subdir)
+
+    # Avoid host-specific rootless Podman defaults while retaining the host
+    # image store through the wrapper below. In particular, some runtimes
+    # attempt to write the ping-group sysctl unless default sysctls are
+    # explicitly disabled in the test config.
+    containers_config_dir = isolated_xdg / "config" / "containers"
+    containers_config_dir.mkdir(parents=True, exist_ok=True)
+    containers_config = containers_config_dir / "containers.conf"
+    containers_config.write_text(
+        "[containers]\n"
+        'cgroups = "disabled"\n'
+        'volumes = ["/proc:/proc"]\n'
+        "default_sysctls = []\n"
+        'utsns = "host"\n\n'
+        "[network]\n"
+        'default_rootless_network_cmd = "slirp4netns"\n'
+    )
+    env["CONTAINERS_CONF"] = str(containers_config)
+
+    # Keep the host Podman image store visible to real launcher integration
+    # tests without exposing any host CLI configuration or credential files.
+    # Unit tests that install a mock `podman` prepend their own bin directory
+    # later, so this wrapper is only used by tests that intentionally run the
+    # real outer Podman runtime.
+    podman_path = shutil.which("podman")
+    if podman_path:
+        isolated_bin = isolated_home.parent / "isolated-bin"
+        isolated_bin.mkdir(exist_ok=True)
+        podman_wrapper = isolated_bin / "podman"
+        podman_wrapper.write_text(
+            "#!/usr/bin/env bash\n"
+            f"exec {shlex.quote(podman_path)} --root "
+            f'{shlex.quote(str(host_data_home / "containers" / "storage"))} "$@"\n'
+        )
+        podman_wrapper.chmod(podman_wrapper.stat().st_mode | 0o111)
+        env["PATH"] = f"{isolated_bin}:{env.get('PATH', '')}"
     return env
 
 

@@ -14,12 +14,18 @@ from pathlib import Path
 
 import pytest
 
-from tests.conftest import CREDENTIAL_ENV_VARS
+from tests.conftest import CREDENTIAL_ENV_VARS, HOST_CONFIG_ENV_VARS, ISOLATION_ENV_VARS
 
 
 @pytest.mark.unit
 def test_credential_env_vars_are_absent_by_default() -> None:
     for name in CREDENTIAL_ENV_VARS:
+        assert os.getenv(name) is None, f"{name} leaked into an isolated test"
+
+
+@pytest.mark.unit
+def test_host_config_overrides_are_absent_by_default() -> None:
+    for name in HOST_CONFIG_ENV_VARS:
         assert os.getenv(name) is None, f"{name} leaked into an isolated test"
 
 
@@ -49,7 +55,7 @@ def test_isolation_holds_even_when_host_process_has_credentials(
     them.
     """
     env = os.environ.copy()
-    for name in CREDENTIAL_ENV_VARS:
+    for name in ISOLATION_ENV_VARS:
         env[name] = f"host-{name.lower()}"
 
     res = subprocess.run(
@@ -62,6 +68,8 @@ def test_isolation_holds_even_when_host_process_has_credentials(
             "no:cacheprovider",
             "tests/unit/test_isolated_test_environment.py::"
             "test_credential_env_vars_are_absent_by_default",
+            "tests/unit/test_isolated_test_environment.py::"
+            "test_host_config_overrides_are_absent_by_default",
         ],
         cwd=repo_root,
         env=env,
