@@ -22,9 +22,10 @@ This repository provides:
 - **Nested Podman-in-Podman**: Build and run containers inside the devbox
   without host root permissions. Uses `fuse-overlayfs` and dynamic subordinate
   UID/GID delegation (`/etc/subuid` and `/etc/subgid`).
-- **Persistent Caches**: `uv`, pre-commit, and nested Podman/Buildah image
-  storage survive `devbox --recreate`, so recreating a container doesn't
-  repeat downloads or image builds whose inputs haven't changed.
+- **Persistent Shared Data**: The knowledge base plus `uv`, pre-commit, and
+  nested Podman/Buildah image storage survive `devbox --recreate`, so
+  recreating a container doesn't lose the knowledge base or repeat downloads
+  and image builds whose inputs haven't changed.
 - **Nested Docker-Compatible API**: Every devbox starts a rootless Podman
   API service reachable at a stable `DOCKER_HOST`, so Docker API clients like
   [Testcontainers](https://testcontainers.com) or Dockerode work out of the
@@ -140,30 +141,34 @@ Git's credential helper so `git clone`/`fetch`/`push` against
 prints a warning explaining how to run `gh auth login && gh auth setup-git`
 manually.
 
-### Persistent Caches
+### Persistent Storage
 
-`devbox` backs a few directories that are otherwise disposable-but-expensive
-with storage that survives `devbox --recreate` (and container removal in
-general), so recreating a container doesn't repeat downloads or nested image
-builds whose inputs haven't changed:
+`devbox` backs a few directories with storage that survives
+`devbox --recreate` (and container removal in general). This keeps the
+knowledge base available to every devbox instance and avoids repeating
+downloads or nested image builds whose inputs haven't changed:
 
 | Path | Backing | Notes |
 | --- | --- | --- |
+| `/sandbox/kb` | Podman named volume `devbox-kb` | Shared knowledge-base checkout. |
 | `/sandbox/.uv_cache` | Podman named volume `devbox-uv-cache` | `uv`/`uvx` package downloads. |
 | `/sandbox/.cache/pre-commit` | Podman named volume `devbox-precommit-cache` | Pre-commit hook environments. |
 | `/sandbox/.local/share/containers/storage` | Host directory `${XDG_CACHE_HOME:-~/.cache}/devbox/containers-storage` | Nested Podman/Buildah's own image and layer storage. |
 
-The `uv` and pre-commit caches use Podman-managed named volumes because their
-exact host-side location doesn't matter. Nested Podman/Buildah's storage
-instead uses a plain host directory so its size can be inspected and pruned
-with ordinary tools (`du -sh`, `rm -rf`) without needing `podman volume`
-commands.
+The knowledge base, `uv`, and pre-commit caches use Podman-managed named
+volumes because their exact host-side location doesn't matter. Nested
+Podman/Buildah's storage instead uses a plain host directory so its size can be
+inspected and pruned with ordinary tools (`du -sh`, `rm -rf`) without needing
+`podman volume` commands.
 
-All three are shared across _every_ devbox instance, not just one project's
+All four are shared across _every_ devbox instance, not just one project's
 container, so they persist even across `devbox --remove`; only deleting the
 volume/directory itself clears them:
 
 ```shell
+# Shared knowledge base
+podman volume rm devbox-kb
+
 # uv and pre-commit caches
 podman volume rm devbox-uv-cache devbox-precommit-cache
 
