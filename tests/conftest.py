@@ -132,9 +132,6 @@ def isolated_env(host_credentials: None, isolated_home: Path) -> dict[str, str]:
     host home-directory state, unless a test adds them explicitly.
     """
     env = os.environ.copy()
-    host_data_home = Path(
-        env.get("XDG_DATA_HOME") or Path(env["HOME"]) / ".local" / "share"
-    )
     for name in ISOLATION_ENV_VARS:
         env.pop(name, None)
     env["HOME"] = str(isolated_home)
@@ -147,24 +144,11 @@ def isolated_env(host_credentials: None, isolated_home: Path) -> dict[str, str]:
     ):
         env[xdg_var] = str(isolated_xdg / subdir)
 
-    # Avoid host-specific rootless Podman defaults while retaining the host
-    # image store through the wrapper below. In particular, some runtimes
-    # attempt to write the ping-group sysctl unless default sysctls are
-    # explicitly disabled in the test config.
-    containers_config_dir = isolated_xdg / "config" / "containers"
-    containers_config_dir.mkdir(parents=True, exist_ok=True)
-    containers_config = containers_config_dir / "containers.conf"
-    containers_config.write_text(
-        "[containers]\n"
-        'cgroups = "disabled"\n'
-        'volumes = ["/proc:/proc"]\n'
-        "default_sysctls = []\n"
-        'utsns = "host"\n'
-    )
-    env["CONTAINERS_CONF"] = str(containers_config)
-
-    # Keep the host Podman image store visible to real launcher integration
-    # tests without exposing any host CLI configuration or credential files.
+    # Keep the host Podman image store and runtime configuration visible to
+    # real launcher integration tests without exposing that host state to the
+    # test process or to containers. The wrapper restores only the runtime's
+    # non-secret HOME/XDG settings; the credential/config override variables
+    # above remain scrubbed.
     # Unit tests that install a mock `podman` prepend their own bin directory
     # later, so this wrapper is only used by tests that intentionally run the
     # real outer Podman runtime.
@@ -173,11 +157,19 @@ def isolated_env(host_credentials: None, isolated_home: Path) -> dict[str, str]:
         isolated_bin = isolated_home.parent / "isolated-bin"
         isolated_bin.mkdir(exist_ok=True)
         podman_wrapper = isolated_bin / "podman"
-        podman_wrapper.write_text(
-            "#!/usr/bin/env bash\n"
-            f"exec {shlex.quote(podman_path)} --root "
-            f'{shlex.quote(str(host_data_home / "containers" / "storage"))} "$@"\n'
-        )
+        host_env = os.environ.copy()
+        wrapper_lines = ["#!/usr/bin/env bash\n"]
+        if host_env.get("HOME"):
+            wrapper_lines.append(f"export HOME={shlex.quote(host_env['HOME'])}\n")
+        else:
+            wrapper_lines.append("unset HOME\n")
+        for name in ("XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR"):
+            if host_env.get(name):
+                wrapper_lines.append(f"export {name}={shlex.quote(host_env[name])}\n")
+            else:
+                wrapper_lines.append(f"unset {name}\n")
+        wrapper_lines.append(f'exec {shlex.quote(podman_path)} "$@"\n')
+        podman_wrapper.write_text("".join(wrapper_lines))
         podman_wrapper.chmod(podman_wrapper.stat().st_mode | 0o111)
         env["PATH"] = f"{isolated_bin}:{env.get('PATH', '')}"
     return env
