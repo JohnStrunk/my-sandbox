@@ -159,9 +159,7 @@ def isolated_env(host_credentials: None, isolated_home: Path) -> dict[str, str]:
         'cgroups = "disabled"\n'
         'volumes = ["/proc:/proc"]\n'
         "default_sysctls = []\n"
-        'utsns = "host"\n\n'
-        "[network]\n"
-        'default_rootless_network_cmd = "slirp4netns"\n'
+        'utsns = "host"\n'
     )
     env["CONTAINERS_CONF"] = str(containers_config)
 
