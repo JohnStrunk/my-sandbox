@@ -248,11 +248,14 @@ def test_devbox_launcher_uses_isolated_home(
     run_call = next((c for c in calls if c and c[0] == "run" and "-d" in c), None)
     assert run_call is not None
     volumes = [run_call[i + 1] for i, arg in enumerate(run_call) if arg == "--volume"]
-    # Only the bind-mounted project directory and repo-local opencode.json
-    # are expected; no host config/credential directories should be mounted.
-    assert len(volumes) == 2
+    volume_destinations = {volume.rsplit(":", 1)[-1] for volume in volumes}
+    # Project data, cache volumes, and repo-local config are expected; no
+    # host config/credential directories should be mounted.
     assert any(f"{run_dir}:/sandbox/" in v for v in volumes)
+    assert {"/sandbox/.uv_cache", "/sandbox/.cache/pre-commit"} <= (volume_destinations)
+    assert "/sandbox/.local/share/containers/storage" in volume_destinations
     assert any(v.endswith(":/sandbox/opencode.json") for v in volumes)
+    assert not any(str(isolated_home) in volume for volume in volumes)
 
 
 @pytest.mark.unit

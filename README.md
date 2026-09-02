@@ -228,7 +228,7 @@ the test extras and invoke pytest through `uv` -- this is the one documented
 way to run the suite, locally and in CI:
 
 ```shell
-uv run --extra test pytest
+uv run --extra test pytest -m "not e2e_inference"
 ```
 
 Tests are organized with markers:
@@ -249,9 +249,12 @@ credentials.
 Every test except `e2e_inference` runs inside a credential-isolated
 environment (see `tests/conftest.py`): an autouse fixture scrubs known
 provider/integration credential environment variables
-(`CREDENTIAL_ENV_VARS`) before each test, and the `isolated_env`/
+(`CREDENTIAL_ENV_VARS`) and host config override variables
+(`HOST_CONFIG_ENV_VARS`) before each test, and the `isolated_env`/
 `isolated_home` fixtures give `devbox`-launching tests a fresh, empty `$HOME`
-and XDG directories. This means:
+and XDG directories. Real launcher integration tests reuse only the host
+Podman image store through an explicit local wrapper; no host CLI config or
+credential paths are exposed. This means:
 
 - Unit and container/integration tests produce the same result whether or
   not the machine running them has `GEMINI_API_KEY`, a `gh auth login`
