@@ -34,7 +34,8 @@ jobs:
         # zizmor: ignore[cache-poisoning]
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          save-cache: ${{ github.ref == 'refs/heads/main' }}
+          # The test job is the single owner of the shared setup-uv cache.
+          save-cache: false
 
       - name: Validate tool versions
         run: python3 scripts/validate_tool_versions.py
@@ -128,8 +129,6 @@ jobs:
         with:
           path: ${{ runner.temp }}/podman-storage.tar.zst
           key: podman-storage-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.podman-version.outputs.version }}-${{ hashFiles('container/**') }}
-          restore-keys: |
-            podman-storage-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.podman-version.outputs.version }}-
 
       - name: Restore cached Podman layers
         if: steps.podman-cache.outputs.cache-matched-key != ''
