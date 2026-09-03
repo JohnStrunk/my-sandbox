@@ -461,6 +461,39 @@ EOF
     )
   fi
 
+  # Pricetag configuration for Anthropic and OpenAI-compatible APIs
+  if [ -n "${PRICETAG_URL:-}" ] && [ -n "${PRICETAG_API_KEY:-}" ]; then
+    params+=(
+      --env "PRICETAG_URL=${PRICETAG_URL:-}" \
+      --env "PRICETAG_API_KEY=${PRICETAG_API_KEY:-}" \
+    )
+    opencode_config+=(
+      "$(cat <<'EOF'
+{
+  "provider": {
+    "pt-anthropic": {
+      "npm": "@ai-sdk/anthropic",
+      "name": "Pricetag (Anthropic)",
+      "options": {
+        "baseURL": "{env:PRICETAG_URL}",
+        "apiKey": "{env:PRICETAG_API_KEY}"
+      }
+    },
+    "pt-openai": {
+      "npm": "@ai-sdk/openai",
+      "name": "Pricetag (OpenAI)",
+      "options": {
+        "baseURL": "{env:PRICETAG_URL}",
+        "apiKey": "{env:PRICETAG_API_KEY}"
+      }
+    }
+  }
+}
+EOF
+)"
+    )
+  fi
+
   # OpenCode session data and configuration
   if [ -d "$HOME/.local/share/opencode" ]; then
     params+=(

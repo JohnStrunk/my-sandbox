@@ -667,6 +667,88 @@ def test_devbox_anthropic_env(
 
 
 @pytest.mark.unit
+def test_devbox_pricetag_env_and_opencode_config(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, log_file = mock_podman_env
+    env["PRICETAG_URL"] = "https://pricetag.example/v1"
+    env["PRICETAG_API_KEY"] = "mock-pricetag-token"  # pragma: allowlist secret
+
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0
+
+    calls = parse_podman_calls(log_file)
+    run_call = next((c for c in calls if c and c[0] == "run" and "-d" in c), None)
+    assert run_call is not None
+    assert "PRICETAG_URL=https://pricetag.example/v1" in run_call
+    pricetag_api_key_arg = (
+        "PRICETAG_API_KEY=mock-pricetag-token"  # pragma: allowlist secret
+    )
+    assert pricetag_api_key_arg in run_call
+
+    env_values = [
+        run_call[index + 1] for index, arg in enumerate(run_call[:-1]) if arg == "--env"
+    ]
+    config_value = next(
+        value for value in env_values if value.startswith("OPENCODE_CONFIG_CONTENT=")
+    )
+    config = json.loads(config_value.split("=", 1)[1])
+    assert config["provider"] == {
+        "pt-anthropic": {
+            "npm": "@ai-sdk/anthropic",
+            "name": "Pricetag (Anthropic)",
+            "options": {
+                "baseURL": "{env:PRICETAG_URL}",
+                "apiKey": "{env:PRICETAG_API_KEY}",
+            },
+        },
+        "pt-openai": {
+            "npm": "@ai-sdk/openai",
+            "name": "Pricetag (OpenAI)",
+            "options": {
+                "baseURL": "{env:PRICETAG_URL}",
+                "apiKey": "{env:PRICETAG_API_KEY}",
+            },
+        },
+    }
+    assert "mock-pricetag-token" not in config_value
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("missing", ["PRICETAG_URL", "PRICETAG_API_KEY"])
+def test_devbox_does_not_add_pricetag_without_both_credentials(
+    devbox_path: Path, mock_podman_env, tmp_path: Path, missing: str
+):
+    env, log_file = mock_podman_env
+    env["PRICETAG_URL"] = "https://pricetag.example/v1"
+    env["PRICETAG_API_KEY"] = "mock-pricetag-token"  # pragma: allowlist secret
+    env.pop(missing)
+
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0
+
+    calls = parse_podman_calls(log_file)
+    run_call = next((c for c in calls if c and c[0] == "run" and "-d" in c), None)
+    assert run_call is not None
+    assert not any(arg.startswith("PRICETAG_") for arg in run_call)
+
+    env_values = [
+        run_call[index + 1] for index, arg in enumerate(run_call[:-1]) if arg == "--env"
+    ]
+    config_value = next(
+        value for value in env_values if value.startswith("OPENCODE_CONFIG_CONTENT=")
+    )
+    config = json.loads(config_value.split("=", 1)[1])
+    assert "provider" not in config
+
+
+@pytest.mark.unit
 def test_devbox_vertex_env(devbox_path: Path, mock_podman_env, tmp_path: Path):
     env, log_file = mock_podman_env
     env["GOOGLE_CLOUD_PROJECT"] = "my-gcp-project"
