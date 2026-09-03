@@ -461,7 +461,8 @@ EOF
     )
   fi
 
-  # Pricetag configuration for Anthropic and OpenAI-compatible APIs
+  # Route the built-in Anthropic and OpenAI providers through Pricetag. Keeping
+  # their built-in provider IDs preserves OpenCode's models.dev model catalogs.
   if [ -n "${PRICETAG_URL:-}" ] && [ -n "${PRICETAG_API_KEY:-}" ]; then
     params+=(
       --env "PRICETAG_URL=${PRICETAG_URL:-}" \
@@ -471,17 +472,13 @@ EOF
       "$(cat <<'EOF'
 {
   "provider": {
-    "pt-anthropic": {
-      "npm": "@ai-sdk/anthropic",
-      "name": "Pricetag (Anthropic)",
+    "anthropic": {
       "options": {
         "baseURL": "{env:PRICETAG_URL}",
         "apiKey": "{env:PRICETAG_API_KEY}"
       }
     },
-    "pt-openai": {
-      "npm": "@ai-sdk/openai",
-      "name": "Pricetag (OpenAI)",
+    "openai": {
       "options": {
         "baseURL": "{env:PRICETAG_URL}",
         "apiKey": "{env:PRICETAG_API_KEY}"
