@@ -667,7 +667,7 @@ def test_devbox_anthropic_env(
 
 
 @pytest.mark.unit
-def test_devbox_pricetag_env_and_opencode_config(
+def test_devbox_pricetag_env_and_builtin_provider_config(
     devbox_path: Path, mock_podman_env, tmp_path: Path
 ):
     env, log_file = mock_podman_env
@@ -697,17 +697,13 @@ def test_devbox_pricetag_env_and_opencode_config(
     )
     config = json.loads(config_value.split("=", 1)[1])
     assert config["provider"] == {
-        "pt-anthropic": {
-            "npm": "@ai-sdk/anthropic",
-            "name": "Pricetag (Anthropic)",
+        "anthropic": {
             "options": {
                 "baseURL": "{env:PRICETAG_URL}",
                 "apiKey": "{env:PRICETAG_API_KEY}",
             },
         },
-        "pt-openai": {
-            "npm": "@ai-sdk/openai",
-            "name": "Pricetag (OpenAI)",
+        "openai": {
             "options": {
                 "baseURL": "{env:PRICETAG_URL}",
                 "apiKey": "{env:PRICETAG_API_KEY}",
