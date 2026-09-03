@@ -776,6 +776,7 @@ def test_devbox_config_volume_mounts(
     (fake_home / ".config" / "acli").mkdir(parents=True)
     (fake_home / ".config" / "gws").mkdir(parents=True)
     (fake_home / ".config" / "opencode").mkdir(parents=True)
+    (fake_home / ".agents").mkdir()
     expected_data_dir = fake_home / ".local" / "share" / "opencode"
     expected_data_dir.mkdir(parents=True)
 
@@ -792,9 +793,33 @@ def test_devbox_config_volume_mounts(
     assert any(":/sandbox/.config/acli" in v for v in volumes)
     assert any(":/sandbox/.config/gws" in v for v in volumes)
     assert any(":/sandbox/.config/opencode" in v for v in volumes)
+    assert any(f"{fake_home / '.agents'}:/sandbox/.agents" in v for v in volumes)
     assert any(
         f"{expected_data_dir}:/sandbox/.local/share/opencode" in v for v in volumes
     )
+
+
+@pytest.mark.unit
+def test_devbox_does_not_mount_missing_global_agents_directory(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, log_file = mock_podman_env
+    fake_home = tmp_path / "fakehome"
+    fake_home.mkdir()
+    env["HOME"] = str(fake_home)
+
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0
+
+    calls = parse_podman_calls(log_file)
+    run_call = next((c for c in calls if c and c[0] == "run" and "-d" in c), None)
+    assert run_call is not None
+    volumes = [run_call[i + 1] for i, arg in enumerate(run_call) if arg == "--volume"]
+    assert not any(":/sandbox/.agents" in v for v in volumes)
+    assert not (fake_home / ".agents").exists()
 
 
 @pytest.mark.unit
