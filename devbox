@@ -312,6 +312,13 @@ EOF
     )
   fi
 
+  # Make the user's global skills available inside the devbox when present.
+  if [ -d "$HOME/.agents" ]; then
+    params+=(
+      --volume "$HOME/.agents:/sandbox/.agents" \
+    )
+  fi
+
   # Gemini API
   if [ -n "${GEMINI_API_KEY:-}" ]; then
     params+=(
