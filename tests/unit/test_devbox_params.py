@@ -25,6 +25,20 @@ with open(sys.argv[1], "a") as f:
 
 if [ "$1" = "run" ] && [ "$2" = "--rm" ]; then
     if [ "$3" = "-i" ] && [ "$4" = "devbox:latest" ] && [ "$5" = "jq" ]; then
+        if echo "$*" | grep -q 'map(select(.id'; then
+            python3 -c '
+import json
+import sys
+
+value = json.load(sys.stdin)
+print(json.dumps({{
+    item["id"]: {{"name": item["id"]}}
+    for item in value.get("data", [])
+    if isinstance(item.get("id"), str) and item["id"]
+}}))
+'
+            exit 0
+        fi
         python3 -c '
 import json
 import sys
@@ -193,8 +207,27 @@ exit 0
     fake_gh.write_text("#!/usr/bin/env bash\nexit 1\n")
     fake_gh.chmod(fake_gh.stat().st_mode | stat.S_IEXEC)
 
+    fake_curl = bin_dir / "curl"
+    fake_curl.write_text(
+        "#!/usr/bin/env bash\n"
+        '[ "${MOCK_PRICETAG_DISCOVERY_FAIL:-}" = 1 ] && exit 1\n'
+        "printf '%s\\n' \"$MOCK_PRICETAG_MODELS\"\n"
+    )
+    fake_curl.chmod(fake_curl.stat().st_mode | stat.S_IEXEC)
+
     env = isolated_env
     env["PATH"] = f"{bin_dir}:{env.get('PATH', '')}"
+    env["MOCK_PRICETAG_MODELS"] = json.dumps(
+        {
+            "object": "list",
+            "data": [
+                {"id": "gpt-5.6-luna"},
+                {"id": "gpt-5.4"},
+                {"id": "gpt-5.4-mini"},
+                {"id": "gpt-5.3-codex"},
+            ],
+        }
+    )
     return env, log_file
 
 
@@ -667,11 +700,12 @@ def test_devbox_anthropic_env(
 
 
 @pytest.mark.unit
-def test_devbox_pricetag_env_and_builtin_provider_config(
+def test_devbox_pricetag_env_and_provider_config(
     devbox_path: Path, mock_podman_env, tmp_path: Path
 ):
     env, log_file = mock_podman_env
-    env["PRICETAG_URL"] = "https://pricetag.example/v1"
+    env["PRICETAG_ANTHROPIC_URL"] = "https://pricetag-anthropic.example/v1"
+    env["PRICETAG_OPENAI_URL"] = "https://pricetag-openai.example/v1"
     env["PRICETAG_API_KEY"] = "mock-pricetag-token"  # pragma: allowlist secret
 
     run_dir = tmp_path / "workdir"
@@ -683,7 +717,8 @@ def test_devbox_pricetag_env_and_builtin_provider_config(
     calls = parse_podman_calls(log_file)
     run_call = next((c for c in calls if c and c[0] == "run" and "-d" in c), None)
     assert run_call is not None
-    assert "PRICETAG_URL=https://pricetag.example/v1" in run_call
+    assert "PRICETAG_ANTHROPIC_URL=https://pricetag-anthropic.example/v1" in run_call
+    assert "PRICETAG_OPENAI_URL=https://pricetag-openai.example/v1" in run_call
     pricetag_api_key_arg = (
         "PRICETAG_API_KEY=mock-pricetag-token"  # pragma: allowlist secret
     )
@@ -697,16 +732,32 @@ def test_devbox_pricetag_env_and_builtin_provider_config(
     )
     config = json.loads(config_value.split("=", 1)[1])
     assert config["provider"] == {
-        "anthropic": {
+        "pricetag-anthropic": {
+            "npm": "@ai-sdk/anthropic",
+            "name": "PriceTag (Anthropic)",
             "options": {
-                "baseURL": "{env:PRICETAG_URL}",
+                "baseURL": "{env:PRICETAG_ANTHROPIC_URL}",
                 "apiKey": "{env:PRICETAG_API_KEY}",
             },
+            "models": {
+                "gpt-5.6-luna": {"name": "gpt-5.6-luna"},
+                "gpt-5.4": {"name": "gpt-5.4"},
+                "gpt-5.4-mini": {"name": "gpt-5.4-mini"},
+                "gpt-5.3-codex": {"name": "gpt-5.3-codex"},
+            },
         },
-        "openai": {
+        "pricetag-openai": {
+            "npm": "@ai-sdk/openai-compatible",
+            "name": "PriceTag (OpenAI)",
             "options": {
-                "baseURL": "{env:PRICETAG_URL}",
+                "baseURL": "{env:PRICETAG_OPENAI_URL}",
                 "apiKey": "{env:PRICETAG_API_KEY}",
+            },
+            "models": {
+                "gpt-5.6-luna": {"name": "gpt-5.6-luna"},
+                "gpt-5.4": {"name": "gpt-5.4"},
+                "gpt-5.4-mini": {"name": "gpt-5.4-mini"},
+                "gpt-5.3-codex": {"name": "gpt-5.3-codex"},
             },
         },
     }
@@ -714,12 +765,52 @@ def test_devbox_pricetag_env_and_builtin_provider_config(
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("missing", ["PRICETAG_URL", "PRICETAG_API_KEY"])
-def test_devbox_does_not_add_pricetag_without_both_credentials(
-    devbox_path: Path, mock_podman_env, tmp_path: Path, missing: str
+def test_devbox_pricetag_discovery_failure_keeps_provider(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
 ):
     env, log_file = mock_podman_env
-    env["PRICETAG_URL"] = "https://pricetag.example/v1"
+    env["PRICETAG_OPENAI_URL"] = "https://pricetag-openai.example/v1"
+    env["PRICETAG_API_KEY"] = "mock-pricetag-token"  # pragma: allowlist secret
+    env["MOCK_PRICETAG_DISCOVERY_FAIL"] = "1"
+
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0
+    assert "could not discover PriceTag OpenAI models" in res.stderr
+
+    calls = parse_podman_calls(log_file)
+    run_call = next((c for c in calls if c and c[0] == "run" and "-d" in c), None)
+    assert run_call is not None
+    env_values = [
+        run_call[index + 1] for index, arg in enumerate(run_call[:-1]) if arg == "--env"
+    ]
+    config_value = next(
+        value for value in env_values if value.startswith("OPENCODE_CONFIG_CONTENT=")
+    )
+    config = json.loads(config_value.split("=", 1)[1])
+    assert config["provider"]["pricetag-openai"]["models"] == {}
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("url_name", "missing"),
+    [
+        ("PRICETAG_ANTHROPIC_URL", "PRICETAG_ANTHROPIC_URL"),
+        ("PRICETAG_OPENAI_URL", "PRICETAG_OPENAI_URL"),
+        ("PRICETAG_OPENAI_URL", "PRICETAG_API_KEY"),
+    ],
+)
+def test_devbox_does_not_add_pricetag_without_both_credentials(
+    devbox_path: Path,
+    mock_podman_env,
+    tmp_path: Path,
+    url_name: str,
+    missing: str,
+):
+    env, log_file = mock_podman_env
+    env[url_name] = "https://pricetag.example/v1"
     env["PRICETAG_API_KEY"] = "mock-pricetag-token"  # pragma: allowlist secret
     env.pop(missing)
 
