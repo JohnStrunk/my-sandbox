@@ -734,18 +734,10 @@ def test_devbox_pricetag_env_and_provider_config(
     )
     config = json.loads(config_value.split("=", 1)[1])
     assert config["provider"] == {
-        "pricetag-anthropic": {
-            "npm": "@ai-sdk/anthropic",
-            "name": "PriceTag (Anthropic)",
+        "anthropic": {
             "options": {
                 "baseURL": "{env:PRICETAG_ANTHROPIC_URL}",
                 "apiKey": "{env:PRICETAG_API_KEY}",
-            },
-            "models": {
-                "gpt-5.6-luna": {"name": "gpt-5.6-luna"},
-                "gpt-5.4": {"name": "gpt-5.4"},
-                "gpt-5.4-mini": {"name": "gpt-5.4-mini"},
-                "gpt-5.3-codex": {"name": "gpt-5.3-codex"},
             },
         },
         "pricetag-hosted": {
@@ -761,18 +753,10 @@ def test_devbox_pricetag_env_and_provider_config(
                 },
             },
         },
-        "pricetag-openai": {
-            "npm": "@ai-sdk/openai",
-            "name": "PriceTag (OpenAI)",
+        "openai": {
             "options": {
                 "baseURL": "{env:PRICETAG_OPENAI_URL}",
                 "apiKey": "{env:PRICETAG_API_KEY}",
-            },
-            "models": {
-                "gpt-5.6-luna": {"name": "gpt-5.6-luna"},
-                "gpt-5.4": {"name": "gpt-5.4"},
-                "gpt-5.4-mini": {"name": "gpt-5.4-mini"},
-                "gpt-5.3-codex": {"name": "gpt-5.3-codex"},
             },
         },
     }
@@ -780,20 +764,19 @@ def test_devbox_pricetag_env_and_provider_config(
 
 
 @pytest.mark.unit
-def test_devbox_pricetag_discovery_failure_keeps_provider(
+def test_devbox_pricetag_builtin_provider_override_does_not_discover_models(
     devbox_path: Path, mock_podman_env, tmp_path: Path
 ):
     env, log_file = mock_podman_env
     env["PRICETAG_OPENAI_URL"] = "https://pricetag-openai.example/v1"
     env["PRICETAG_API_KEY"] = "mock-pricetag-token"  # pragma: allowlist secret
-    env["MOCK_PRICETAG_DISCOVERY_FAIL"] = "1"
 
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
     res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0
-    assert "could not discover PriceTag OpenAI models" in res.stderr
+    assert "could not discover PriceTag" not in res.stderr
 
     calls = parse_podman_calls(log_file)
     run_call = next((c for c in calls if c and c[0] == "run" and "-d" in c), None)
@@ -805,7 +788,12 @@ def test_devbox_pricetag_discovery_failure_keeps_provider(
         value for value in env_values if value.startswith("OPENCODE_CONFIG_CONTENT=")
     )
     config = json.loads(config_value.split("=", 1)[1])
-    assert config["provider"]["pricetag-openai"]["models"] == {}
+    assert config["provider"]["openai"] == {
+        "options": {
+            "baseURL": "{env:PRICETAG_OPENAI_URL}",
+            "apiKey": "{env:PRICETAG_API_KEY}",
+        }
+    }
 
 
 @pytest.mark.unit
