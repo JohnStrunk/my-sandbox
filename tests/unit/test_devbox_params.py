@@ -747,7 +747,7 @@ def test_devbox_pricetag_env_and_provider_config(
             },
         },
         "pricetag-openai": {
-            "npm": "@ai-sdk/openai-compatible",
+            "npm": "@ai-sdk/openai",
             "name": "PriceTag (OpenAI)",
             "options": {
                 "baseURL": "{env:PRICETAG_OPENAI_URL}",
