@@ -537,6 +537,35 @@ EOF
       )
     fi
 
+    if [ -n "${PRICETAG_HOSTED_URL:-}" ]; then
+      pricetag_enabled=true
+      params+=(
+        --env "PRICETAG_HOSTED_URL=${PRICETAG_HOSTED_URL:-}" \
+      )
+      opencode_config+=(
+        "$(cat <<EOF
+{
+  "provider": {
+    "pricetag-hosted": {
+      "npm": "@ai-sdk/anthropic",
+      "name": "PriceTag (Hosted)",
+      "options": {
+        "baseURL": "{env:PRICETAG_HOSTED_URL}",
+        "apiKey": "{env:PRICETAG_API_KEY}"
+      },
+      "models": {
+        "Inferact/Qwen3.8-Flash-Next-NVFP4": {
+          "name": "Qwen 3.8 Flash Next (free)"
+        }
+      }
+    }
+  }
+}
+EOF
+)"
+      )
+    fi
+
     if [ -n "${PRICETAG_OPENAI_URL:-}" ]; then
       pricetag_enabled=true
       pricetag_openai_models="$(pricetag_openai_models "$PRICETAG_OPENAI_URL")"
