@@ -241,43 +241,6 @@ create_container() {
   return "$create_status"
 }
 
-pricetag_openai_models() {
-  local base_url="$1"
-  local models
-
-  if ! models="$(curl --fail --silent --show-error --location \
-    --connect-timeout 5 --max-time 15 \
-    -H "Authorization: Bearer ${PRICETAG_API_KEY}" \
-    "${base_url%/}/models" | \
-    podman run --rm -i "devbox:latest" jq -c \
-      '(.data // []) | map(select(.id | type == "string" and length > 0) | {key: .id, value: {name: .id}}) | from_entries')"; then
-    echo "==> WARNING: could not discover PriceTag OpenAI models; continuing without a dynamic model catalog" >&2
-    printf '{}'
-    return 0
-  fi
-
-  printf '%s' "$models"
-}
-
-pricetag_anthropic_models() {
-  local base_url="$1"
-  local models
-
-  if ! models="$(curl --fail --silent --show-error --location \
-    --connect-timeout 5 --max-time 15 \
-    -H "x-api-key: ${PRICETAG_API_KEY}" \
-    -H 'anthropic-version: 2023-06-01' \
-    "${base_url%/}/models" | \
-    podman run --rm -i "devbox:latest" jq -c \
-      '(.data // []) | map(select(.id | type == "string" and length > 0) | {key: .id, value: {name: .id}}) | from_entries')"; then
-    echo "==> WARNING: could not discover PriceTag Anthropic models; continuing without a dynamic model catalog" >&2
-    printf '{}'
-    return 0
-  fi
-
-  printf '%s' "$models"
-}
-
 create_container_locked() {
   local source_fingerprint
   source_fingerprint="$(container_context_fingerprint)"
@@ -505,15 +468,12 @@ EOF
     )
   fi
 
-  # Configure optional custom Pricetag providers. The shared API key is
+  # Configure optional Pricetag provider overrides. The shared API key is
   # required for either interface, but each interface has its own endpoint.
   local pricetag_enabled=false
-  local pricetag_anthropic_models='{}'
-  local pricetag_openai_models='{}'
   if [ -n "${PRICETAG_API_KEY:-}" ]; then
     if [ -n "${PRICETAG_ANTHROPIC_URL:-}" ]; then
       pricetag_enabled=true
-      pricetag_anthropic_models="$(pricetag_anthropic_models "$PRICETAG_ANTHROPIC_URL")"
       params+=(
         --env "PRICETAG_ANTHROPIC_URL=${PRICETAG_ANTHROPIC_URL:-}" \
       )
@@ -521,14 +481,11 @@ EOF
         "$(cat <<EOF
 {
   "provider": {
-    "pricetag-anthropic": {
-      "npm": "@ai-sdk/anthropic",
-      "name": "PriceTag (Anthropic)",
+    "anthropic": {
       "options": {
         "baseURL": "{env:PRICETAG_ANTHROPIC_URL}",
         "apiKey": "{env:PRICETAG_API_KEY}"
-      },
-      "models": $pricetag_anthropic_models
+      }
     }
   }
 }
@@ -568,7 +525,6 @@ EOF
 
     if [ -n "${PRICETAG_OPENAI_URL:-}" ]; then
       pricetag_enabled=true
-      pricetag_openai_models="$(pricetag_openai_models "$PRICETAG_OPENAI_URL")"
       params+=(
         --env "PRICETAG_OPENAI_URL=${PRICETAG_OPENAI_URL:-}" \
       )
@@ -576,14 +532,11 @@ EOF
         "$(cat <<EOF
 {
   "provider": {
-    "pricetag-openai": {
-      "npm": "@ai-sdk/openai",
-      "name": "PriceTag (OpenAI)",
+    "openai": {
       "options": {
         "baseURL": "{env:PRICETAG_OPENAI_URL}",
         "apiKey": "{env:PRICETAG_API_KEY}"
-      },
-      "models": $pricetag_openai_models
+      }
     }
   }
 }
