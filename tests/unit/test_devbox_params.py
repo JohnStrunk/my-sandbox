@@ -705,6 +705,7 @@ def test_devbox_pricetag_env_and_provider_config(
 ):
     env, log_file = mock_podman_env
     env["PRICETAG_ANTHROPIC_URL"] = "https://pricetag-anthropic.example/v1"
+    env["PRICETAG_HOSTED_URL"] = "https://pricetag-hosted.example/v1"
     env["PRICETAG_OPENAI_URL"] = "https://pricetag-openai.example/v1"
     env["PRICETAG_API_KEY"] = "mock-pricetag-token"  # pragma: allowlist secret
 
@@ -718,6 +719,7 @@ def test_devbox_pricetag_env_and_provider_config(
     run_call = next((c for c in calls if c and c[0] == "run" and "-d" in c), None)
     assert run_call is not None
     assert "PRICETAG_ANTHROPIC_URL=https://pricetag-anthropic.example/v1" in run_call
+    assert "PRICETAG_HOSTED_URL=https://pricetag-hosted.example/v1" in run_call
     assert "PRICETAG_OPENAI_URL=https://pricetag-openai.example/v1" in run_call
     pricetag_api_key_arg = (
         "PRICETAG_API_KEY=mock-pricetag-token"  # pragma: allowlist secret
@@ -744,6 +746,19 @@ def test_devbox_pricetag_env_and_provider_config(
                 "gpt-5.4": {"name": "gpt-5.4"},
                 "gpt-5.4-mini": {"name": "gpt-5.4-mini"},
                 "gpt-5.3-codex": {"name": "gpt-5.3-codex"},
+            },
+        },
+        "pricetag-hosted": {
+            "npm": "@ai-sdk/anthropic",
+            "name": "PriceTag (Hosted)",
+            "options": {
+                "baseURL": "{env:PRICETAG_HOSTED_URL}",
+                "apiKey": "{env:PRICETAG_API_KEY}",
+            },
+            "models": {
+                "Inferact/Qwen3.8-Flash-Next-NVFP4": {
+                    "name": "Qwen 3.8 Flash Next (free)",
+                },
             },
         },
         "pricetag-openai": {
@@ -798,6 +813,7 @@ def test_devbox_pricetag_discovery_failure_keeps_provider(
     ("url_name", "missing"),
     [
         ("PRICETAG_ANTHROPIC_URL", "PRICETAG_ANTHROPIC_URL"),
+        ("PRICETAG_HOSTED_URL", "PRICETAG_HOSTED_URL"),
         ("PRICETAG_OPENAI_URL", "PRICETAG_OPENAI_URL"),
         ("PRICETAG_OPENAI_URL", "PRICETAG_API_KEY"),
     ],
