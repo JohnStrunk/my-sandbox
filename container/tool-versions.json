@@ -45,7 +45,7 @@
       }
     },
     "antigravity_cli": {
-      "version": "1.1.20",
+      "version": "1.1.21",
       "datasource": "github-releases",
       "depName": "google-antigravity/antigravity-cli",
       "consumers": {
