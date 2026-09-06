@@ -118,7 +118,7 @@
       }
     },
     "ruff": {
-      "version": "0.16.4",
+      "version": "0.16.5",
       "datasource": "pypi",
       "depName": "ruff",
       "consumers": {
@@ -136,7 +136,7 @@
       }
     },
     "renovatebot_hooks": {
-      "version": "44.37.1",
+      "version": "44.48.1",
       "datasource": "github-tags",
       "depName": "renovatebot/pre-commit-hooks",
       "consumers": {
@@ -144,7 +144,7 @@
       }
     },
     "shellcheck": {
-      "version": "0.9.0.6",
+      "version": "0.11.0.1",
       "datasource": "github-tags",
       "depName": "shellcheck-py/shellcheck-py",
       "versioning": "loose",
