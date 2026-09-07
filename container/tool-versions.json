@@ -53,7 +53,7 @@
       }
     },
     "opencode": {
-      "version": "1.18.24",
+      "version": "1.18.25",
       "datasource": "github-releases",
       "depName": "anomalyco/opencode",
       "consumers": {
