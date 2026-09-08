@@ -288,16 +288,21 @@ create_container_locked() {
     --volume "$podman_storage_cache_dir:/sandbox/.local/share/containers/storage" \
   )
 
-  # Allow access to /tmp and /sandbox w/o prompting
+  # Set safe defaults for paths that OpenCode can access from the devbox.
   opencode_config+=(
     "$(cat <<'EOF'
 {
+  "disabled_providers": [
+    "github-copilot",
+    "gitlab",
+    "google-vertex-anthropic"
+  ],
   "permission": {
     "external_directory": {
-      "/tmp/**": "allow",
+      "/home/**": "allow",
+      "/root/**": "deny",
       "/sandbox/**": "allow",
-      "/sandbox/.cache/pre-commit/**": "allow",
-      "/sandbox/.*": "ask"
+      "/tmp/**": "allow"
     }
   }
 }

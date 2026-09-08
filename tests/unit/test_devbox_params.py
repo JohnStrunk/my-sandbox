@@ -386,12 +386,17 @@ def test_devbox_github_mcp_config_from_token(
     config = json.loads(config_value.split("=", 1)[1])
     assert config == {
         "$schema": "https://opencode.ai/config.json",
+        "disabled_providers": [
+            "github-copilot",
+            "gitlab",
+            "google-vertex-anthropic",
+        ],
         "permission": {
             "external_directory": {
-                "/tmp/**": "allow",
+                "/home/**": "allow",
+                "/root/**": "deny",
                 "/sandbox/**": "allow",
-                "/sandbox/.cache/pre-commit/**": "allow",
-                "/sandbox/.*": "ask",
+                "/tmp/**": "allow",
             },
         },
         "mcp": {
@@ -444,12 +449,17 @@ def test_devbox_context7_mcp_config_from_api_key(
     config = json.loads(config_value.split("=", 1)[1])
     assert config == {
         "$schema": "https://opencode.ai/config.json",
+        "disabled_providers": [
+            "github-copilot",
+            "gitlab",
+            "google-vertex-anthropic",
+        ],
         "permission": {
             "external_directory": {
-                "/tmp/**": "allow",
+                "/home/**": "allow",
+                "/root/**": "deny",
                 "/sandbox/**": "allow",
-                "/sandbox/.cache/pre-commit/**": "allow",
-                "/sandbox/.*": "ask",
+                "/tmp/**": "allow",
             },
         },
         "mcp": {
@@ -507,12 +517,17 @@ def test_devbox_does_not_add_github_mcp_without_credentials(
     config = json.loads(config_value.split("=", 1)[1])
     assert config == {
         "$schema": "https://opencode.ai/config.json",
+        "disabled_providers": [
+            "github-copilot",
+            "gitlab",
+            "google-vertex-anthropic",
+        ],
         "permission": {
             "external_directory": {
-                "/tmp/**": "allow",
+                "/home/**": "allow",
+                "/root/**": "deny",
                 "/sandbox/**": "allow",
-                "/sandbox/.cache/pre-commit/**": "allow",
-                "/sandbox/.*": "ask",
+                "/tmp/**": "allow",
             },
         },
     }
@@ -557,12 +572,17 @@ def test_devbox_the_source_mcp_config(
     config = json.loads(config_value.split("=", 1)[1])
     assert config == {
         "$schema": "https://opencode.ai/config.json",
+        "disabled_providers": [
+            "github-copilot",
+            "gitlab",
+            "google-vertex-anthropic",
+        ],
         "permission": {
             "external_directory": {
-                "/tmp/**": "allow",
+                "/home/**": "allow",
+                "/root/**": "deny",
                 "/sandbox/**": "allow",
-                "/sandbox/.cache/pre-commit/**": "allow",
-                "/sandbox/.*": "ask",
+                "/tmp/**": "allow",
             },
         },
         "mcp": {
