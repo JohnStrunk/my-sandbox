@@ -497,7 +497,8 @@ EOF
     )
   fi
 
-  # OCTO Open Models configuration. Both values are required so an incomplete
+  # OCTO Open Models configuration. Model metadata mirrors the provider's
+  # published setup/models.json. Both values are required so an incomplete
   # setup cannot create a provider that fails later when OpenCode starts.
   if [ -n "${OCTO_OPEN_URL:-}" ] && [ -n "${OCTO_OPEN_KEY:-}" ]; then
     params+=(
@@ -519,20 +520,32 @@ EOF
         "qwen38-27b-frontier": {
           "name": "Qwen 3.8 27B FP8 (Frontier)",
           "limit": {
-            "context": 131072
-          }
+            "context": 131072,
+            "output": 8192
+          },
+          "tool_call": true,
+          "reasoning": true,
+          "temperature": true
         },
         "qwen38-flash-next": {
           "name": "Qwen 3.8 Flash Next NVFP4 (Core)",
           "limit": {
-            "context": 262144
-          }
+            "context": 262144,
+            "output": 8192
+          },
+          "tool_call": true,
+          "reasoning": true,
+          "temperature": true
         },
         "qwen38-27b-fast": {
           "name": "Qwen 3.8 27B NVFP4 (Bulk)",
           "limit": {
-            "context": 32768
-          }
+            "context": 32768,
+            "output": 8192
+          },
+          "tool_call": true,
+          "reasoning": true,
+          "temperature": true
         }
       }
     }
@@ -601,7 +614,8 @@ EOF
         "Inferact/Qwen3.8-Flash-Next-NVFP4": {
           "name": "Qwen 3.8 Flash Next (free)",
           "limit": {
-            "context": 262144
+            "context": 262144,
+            "output": 8192
           }
         }
       }
