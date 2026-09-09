@@ -890,8 +890,12 @@ def test_devbox_vertex_env(devbox_path: Path, mock_podman_env, tmp_path: Path):
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("host_tokenjuice_plugin", [False, True])
 def test_devbox_config_volume_mounts(
-    devbox_path: Path, mock_podman_env, tmp_path: Path
+    devbox_path: Path,
+    mock_podman_env,
+    tmp_path: Path,
+    host_tokenjuice_plugin: bool,
 ):
     env, log_file = mock_podman_env
     fake_home = tmp_path / "fakehome"
@@ -902,6 +906,10 @@ def test_devbox_config_volume_mounts(
     (fake_home / ".config" / "acli").mkdir(parents=True)
     (fake_home / ".config" / "gws").mkdir(parents=True)
     (fake_home / ".config" / "opencode").mkdir(parents=True)
+    if host_tokenjuice_plugin:
+        host_plugin = fake_home / ".config" / "opencode" / "plugins" / "tokenjuice.js"
+        host_plugin.parent.mkdir()
+        host_plugin.write_text("host tokenjuice plugin")
     (fake_home / ".agents").mkdir()
     expected_data_dir = fake_home / ".local" / "share" / "opencode"
     expected_data_dir.mkdir(parents=True)
@@ -923,6 +931,18 @@ def test_devbox_config_volume_mounts(
     assert any(
         f"{expected_data_dir}:/sandbox/.local/share/opencode" in v for v in volumes
     )
+
+    env_values = [
+        run_call[index + 1] for index, arg in enumerate(run_call[:-1]) if arg == "--env"
+    ]
+    config_value = next(
+        value for value in env_values if value.startswith("OPENCODE_CONFIG_CONTENT=")
+    )
+    config = json.loads(config_value.split("=", 1)[1])
+    if host_tokenjuice_plugin:
+        assert "plugin" not in config
+    else:
+        assert config["plugin"] == ["file:///usr/local/share/tokenjuice/opencode.js"]
 
 
 @pytest.mark.unit

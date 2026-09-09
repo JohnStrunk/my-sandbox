@@ -30,6 +30,7 @@ RUN dnf install -y --setopt=install_weak_deps=False \
     ShellCheck \
     shadow-utils \
     sudo \
+    which \
     && dnf clean all \
     && rm -rf /var/cache/dnf
 
@@ -333,10 +334,13 @@ RUN pre_commit_version="$(jq -er '.tools.pre_commit.version' /tmp/devbox-tool-ve
 # tool output (bash, grep, etc.) is compacted by default. Runs as sandbox (via
 # runuser, which resolves its HOME from /etc/passwd) so the generated
 # ~/.config/opencode/plugins/tokenjuice.js is owned by that user, matching the
-# other /sandbox/.config content above. A host-mounted ~/.config/opencode
-# directory (see devbox) takes precedence over this baked-in plugin, the same
-# as the other OpenCode configuration and state defaults set up above.
-RUN /usr/sbin/runuser -u sandbox -- tokenjuice install opencode
+# other /sandbox/.config content above. Keep a second copy outside the
+# OpenCode config mount so devbox can explicitly load it when a host-mounted
+# ~/.config/opencode directory hides the baked-in plugin (see devbox).
+RUN /usr/sbin/runuser -u sandbox -- tokenjuice install opencode \
+    && install -D -m 0644 \
+      /sandbox/.config/opencode/plugins/tokenjuice.js \
+      /usr/local/share/tokenjuice/opencode.js
 
 # Two more settings from podman's own reference Podman-in-Podman image
 # (https://github.com/containers/image_build/blob/main/podman/Containerfile),

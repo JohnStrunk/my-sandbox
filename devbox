@@ -263,6 +263,24 @@ create_container_locked() {
   # every integration can contribute any config item.
   local opencode_config=()
 
+  # A host OpenCode config mount hides the image's global plugin directory.
+  # Load the image copy explicitly in that case without modifying the host
+  # configuration. If the host already installed tokenjuice, let OpenCode's
+  # normal plugin discovery load that copy instead of registering a duplicate.
+  if [ -d "$HOME/.config/opencode" ] \
+    && [ ! -f "$HOME/.config/opencode/plugins/tokenjuice.js" ]; then
+    opencode_config+=(
+      "$(cat <<'EOF'
+{
+  "plugin": [
+    "file:///usr/local/share/tokenjuice/opencode.js"
+  ]
+}
+EOF
+)"
+    )
+  fi
+
   # Bind-mount the current working directory into the container at /sandbox/<dirname>
   params+=(
     --volume "$BIND_DIR:$WORKDIR" \

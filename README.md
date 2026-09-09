@@ -228,14 +228,18 @@ devbox container is created:
 | The Source | Search and fetch capabilities for The Source, Red Hat's intranet. | All of `IGLOO_MCP_COMMUNITY`, `IGLOO_MCP_COMMUNITY_KEY`, `IGLOO_MCP_APP_PASS`, `IGLOO_MCP_APP_ID`, `IGLOO_MCP_USERNAME`, and `IGLOO_MCP_PASSWORD`. |
 | Context7 | Up-to-date documentation and code examples for software libraries. | `CONTEXT7_API_KEY`. |
 | Ripwire | Local repository context mapping and code-navigation tools through CLI and MCP. | Always enabled; included in the devbox image. |
+| Tokenjuice | Deterministic compaction of noisy terminal output before it reaches OpenCode context. | Always enabled; included in the devbox image. |
 | Anthropic | Direct Anthropic models, including Anthropic-compatible endpoints. | `ANTHROPIC_API_KEY` enables the built-in provider; optional `ANTHROPIC_BASE_URL` selects a custom endpoint. |
 
 Runtime integrations can contribute any top-level OpenCode config property, with
 multiple MCP integrations combined under one `mcp` object in
 `OPENCODE_CONFIG_CONTENT`. The user's global `~/.config/opencode`
-configuration remains unchanged. Since the container is persistent, use
-`devbox --recreate` after adding or changing host credentials or integration
-triggers.
+configuration remains unchanged. If that directory is mounted from the host,
+the launcher explicitly loads tokenjuice's image copy from
+`/usr/local/share/tokenjuice/opencode.js` so the mount cannot hide it; an
+existing host tokenjuice plugin is not registered a second time. Since the
+container is persistent, use `devbox --recreate` after adding or changing host
+credentials or integration triggers.
 
 OpenCode automatically discovers its built-in Anthropic provider from
 `ANTHROPIC_API_KEY` and the Anthropic SDK uses `ANTHROPIC_BASE_URL` for a custom
