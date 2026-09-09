@@ -4,8 +4,14 @@ from tests.conftest import run_in_devbox
 
 
 @pytest.mark.container
-def test_tokenjuice_opencode_plugin_installed(devbox_image: str):
-    plugin_path = "/sandbox/.config/opencode/plugins/tokenjuice.js"
+@pytest.mark.parametrize(
+    "plugin_path",
+    (
+        "/sandbox/.config/opencode/plugins/tokenjuice.js",
+        "/usr/local/share/tokenjuice/opencode.js",
+    ),
+)
+def test_tokenjuice_opencode_plugin_installed(devbox_image: str, plugin_path: str):
     res = run_in_devbox(
         devbox_image,
         ["cat", plugin_path],
