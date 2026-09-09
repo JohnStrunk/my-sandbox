@@ -781,6 +781,7 @@ def test_devbox_pricetag_env_and_provider_config(
             "models": {
                 "Inferact/Qwen3.8-Flash-Next-NVFP4": {
                     "name": "Qwen 3.8 Flash Next (free)",
+                    "limit": {"context": 262144},
                 },
             },
         },
@@ -792,6 +793,92 @@ def test_devbox_pricetag_env_and_provider_config(
         },
     }
     assert "mock-pricetag-token" not in config_value
+
+
+@pytest.mark.unit
+def test_devbox_octo_open_env_and_provider_config(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, log_file = mock_podman_env
+    env["OCTO_OPEN_URL"] = "https://octo-gateway.example/v1"
+    env["OCTO_OPEN_KEY"] = "mock-octo-token"  # pragma: allowlist secret
+
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0
+
+    calls = parse_podman_calls(log_file)
+    run_call = next((c for c in calls if c and c[0] == "run" and "-d" in c), None)
+    assert run_call is not None
+    assert "OCTO_OPEN_URL=https://octo-gateway.example/v1" in run_call
+    assert "OCTO_OPEN_KEY=mock-octo-token" in run_call  # pragma: allowlist secret
+
+    env_values = [
+        run_call[index + 1] for index, arg in enumerate(run_call[:-1]) if arg == "--env"
+    ]
+    config_value = next(
+        value for value in env_values if value.startswith("OPENCODE_CONFIG_CONTENT=")
+    )
+    config = json.loads(config_value.split("=", 1)[1])
+    assert config["provider"]["octo-open"] == {
+        "npm": "@ai-sdk/openai-compatible",
+        "name": "OCTO Open Models",
+        "options": {
+            "baseURL": "{env:OCTO_OPEN_URL}",
+            "apiKey": "{env:OCTO_OPEN_KEY}",
+        },
+        "models": {
+            "qwen38-27b-frontier": {
+                "name": "Qwen 3.8 27B FP8 (Frontier)",
+                "limit": {"context": 131072},
+            },
+            "qwen38-flash-next": {
+                "name": "Qwen 3.8 Flash Next NVFP4 (Core)",
+                "limit": {"context": 262144},
+            },
+            "qwen38-27b-fast": {
+                "name": "Qwen 3.8 27B NVFP4 (Bulk)",
+                "limit": {"context": 32768},
+            },
+        },
+    }
+    assert "mock-octo-token" not in config_value  # pragma: allowlist secret
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("missing", ["OCTO_OPEN_URL", "OCTO_OPEN_KEY"])
+def test_devbox_does_not_add_octo_open_without_both_credentials(
+    devbox_path: Path,
+    mock_podman_env,
+    tmp_path: Path,
+    missing: str,
+):
+    env, log_file = mock_podman_env
+    env["OCTO_OPEN_URL"] = "https://octo-gateway.example/v1"
+    env["OCTO_OPEN_KEY"] = "mock-octo-token"  # pragma: allowlist secret
+    env.pop(missing)
+
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0
+
+    calls = parse_podman_calls(log_file)
+    run_call = next((c for c in calls if c and c[0] == "run" and "-d" in c), None)
+    assert run_call is not None
+    assert not any(arg.startswith("OCTO_OPEN_") for arg in run_call)
+
+    env_values = [
+        run_call[index + 1] for index, arg in enumerate(run_call[:-1]) if arg == "--env"
+    ]
+    config_value = next(
+        value for value in env_values if value.startswith("OPENCODE_CONFIG_CONTENT=")
+    )
+    config = json.loads(config_value.split("=", 1)[1])
+    assert "octo-open" not in config.get("provider", {})
 
 
 @pytest.mark.unit

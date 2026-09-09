@@ -497,6 +497,52 @@ EOF
     )
   fi
 
+  # OCTO Open Models configuration. Both values are required so an incomplete
+  # setup cannot create a provider that fails later when OpenCode starts.
+  if [ -n "${OCTO_OPEN_URL:-}" ] && [ -n "${OCTO_OPEN_KEY:-}" ]; then
+    params+=(
+      --env "OCTO_OPEN_URL=${OCTO_OPEN_URL:-}" \
+      --env "OCTO_OPEN_KEY=${OCTO_OPEN_KEY:-}" \
+    )
+    opencode_config+=(
+      "$(cat <<'EOF'
+{
+  "provider": {
+    "octo-open": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "OCTO Open Models",
+      "options": {
+        "baseURL": "{env:OCTO_OPEN_URL}",
+        "apiKey": "{env:OCTO_OPEN_KEY}"
+      },
+      "models": {
+        "qwen38-27b-frontier": {
+          "name": "Qwen 3.8 27B FP8 (Frontier)",
+          "limit": {
+            "context": 131072
+          }
+        },
+        "qwen38-flash-next": {
+          "name": "Qwen 3.8 Flash Next NVFP4 (Core)",
+          "limit": {
+            "context": 262144
+          }
+        },
+        "qwen38-27b-fast": {
+          "name": "Qwen 3.8 27B NVFP4 (Bulk)",
+          "limit": {
+            "context": 32768
+          }
+        }
+      }
+    }
+  }
+}
+EOF
+)"
+    )
+  fi
+
   # Anthropic configuration
   if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
     params+=(
@@ -553,7 +599,10 @@ EOF
       },
       "models": {
         "Inferact/Qwen3.8-Flash-Next-NVFP4": {
-          "name": "Qwen 3.8 Flash Next (free)"
+          "name": "Qwen 3.8 Flash Next (free)",
+          "limit": {
+            "context": 262144
+          }
         }
       }
     }

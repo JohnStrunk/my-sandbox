@@ -230,6 +230,7 @@ devbox container is created:
 | Ripwire | Local repository context mapping and code-navigation tools through CLI and MCP. | Always enabled; included in the devbox image. |
 | Tokenjuice | Deterministic compaction of noisy terminal output before it reaches OpenCode context. | Always enabled; included in the devbox image. |
 | Anthropic | Direct Anthropic models, including Anthropic-compatible endpoints. | `ANTHROPIC_API_KEY` enables the built-in provider; optional `ANTHROPIC_BASE_URL` selects a custom endpoint. |
+| OCTO Open Models | OpenAI-compatible Qwen 3.8 Frontier, Core, and Bulk models. | Both `OCTO_OPEN_URL` (gateway `/v1` URL) and `OCTO_OPEN_KEY`. |
 
 Runtime integrations can contribute any top-level OpenCode config property, with
 multiple MCP integrations combined under one `mcp` object in
@@ -240,6 +241,12 @@ the launcher explicitly loads tokenjuice's image copy from
 existing host tokenjuice plugin is not registered a second time. Since the
 container is persistent, use `devbox --recreate` after adding or changing host
 credentials or integration triggers.
+
+When both Octo variables are set, select the models with these OpenCode IDs:
+`octo-open/qwen38-27b-frontier`, `octo-open/qwen38-flash-next`, and
+`octo-open/qwen38-27b-fast`. The portal and key setup are available at
+<https://octo-app-octo-models.apps.emerg.pcbk.p1.openshiftapps.com/>; use its
+gateway `/v1` URL as `OCTO_OPEN_URL`.
 
 OpenCode automatically discovers its built-in Anthropic provider from
 `ANTHROPIC_API_KEY` and the Anthropic SDK uses `ANTHROPIC_BASE_URL` for a custom
