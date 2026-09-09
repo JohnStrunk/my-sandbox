@@ -8,6 +8,12 @@ import pytest
 
 from tests.conftest import CREDENTIAL_ENV_VARS, run_bash_script
 
+RIPWIRE_MCP = {
+    "type": "local",
+    "command": ["ripwire", "--mcp"],
+    "enabled": True,
+}
+
 
 @pytest.fixture
 def mock_podman_env(tmp_path: Path, isolated_env):
@@ -399,6 +405,7 @@ def test_devbox_github_mcp_config_from_token(
             },
         },
         "mcp": {
+            "ripwire": RIPWIRE_MCP,
             "devbox-github": {
                 "type": "remote",
                 "url": "https://api.githubcopilot.com/mcp/",
@@ -462,6 +469,7 @@ def test_devbox_context7_mcp_config_from_api_key(
             },
         },
         "mcp": {
+            "ripwire": RIPWIRE_MCP,
             "context7": {
                 "type": "remote",
                 "url": "https://mcp.context7.com/mcp",
@@ -529,6 +537,9 @@ def test_devbox_does_not_add_github_mcp_without_credentials(
                 "/tmp/**": "allow",
             },
         },
+        "mcp": {
+            "ripwire": RIPWIRE_MCP,
+        },
     }
 
 
@@ -585,6 +596,7 @@ def test_devbox_the_source_mcp_config(
             },
         },
         "mcp": {
+            "ripwire": RIPWIRE_MCP,
             "the-source": {
                 "enabled": True,
                 "type": "local",
@@ -650,7 +662,7 @@ def test_devbox_merges_mcp_configurations(
         value for value in env_values if value.startswith("OPENCODE_CONFIG_CONTENT=")
     )
     config = json.loads(config_value.split("=", 1)[1])
-    assert set(config["mcp"]) == {"devbox-github", "the-source"}
+    assert set(config["mcp"]) == {"ripwire", "devbox-github", "the-source"}
     assert config["mcp"]["devbox-github"]["headers"] == {
         "Authorization": "Bearer {env:GH_TOKEN}"
     }

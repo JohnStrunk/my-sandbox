@@ -21,6 +21,7 @@ BINARIES = [
     ("acli", ["acli", "--version"]),
     ("agy", ["agy", "--help"]),
     ("opencode", ["opencode", "--version"]),
+    ("ripwire", ["ripwire", "--version"]),
     ("tokenjuice", ["tokenjuice", "--version"]),
     ("rg", ["rg", "--version"]),
     ("jq", ["jq", "--version"]),

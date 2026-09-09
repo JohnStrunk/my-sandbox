@@ -310,6 +310,24 @@ EOF
 )"
   )
 
+  # Ripwire MCP integration. The CLI and skills are always present in the
+  # image, so this local stdio server does not need credentials or network
+  # access after the image has been built.
+  opencode_config+=(
+    "$(cat <<'EOF'
+{
+  "mcp": {
+    "ripwire": {
+      "type": "local",
+      "command": ["ripwire", "--mcp"],
+      "enabled": true
+    }
+  }
+}
+EOF
+)"
+  )
+
   # Atlassian CLI (acli) configuration
   if [ -d "$HOME/.config/acli" ]; then
     params+=(
