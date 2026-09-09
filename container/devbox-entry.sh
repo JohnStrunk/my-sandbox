@@ -39,6 +39,41 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 143' INT TERM
 
+sync_ripwire_skills() {
+  local source_dir=/usr/local/share/ripwire/skills
+  local home_dir="${HOME:-/sandbox}"
+  local target_dir="${AGENTS_HOME:-$home_dir/.agents}/skills"
+
+  [[ -d "$source_dir" ]] || return 0
+  if ! mkdir -p "$target_dir"; then
+    printf 'devbox-entry: could not create ripwire skill directory %s\n' \
+      "$target_dir" >&2
+    return 0
+  fi
+
+  # The launcher may bind-mount a host .agents directory over the image's
+  # default skill root. Copy real files instead of the upstream installer's
+  # symlinks so the mounted host directory does not retain container paths.
+  for existing in "$target_dir"/ripwire-*; do
+    [[ -e "$existing" || -L "$existing" ]] || continue
+    rm -rf "$existing"
+  done
+  for source in "$source_dir"/ripwire-*/; do
+    [[ -d "$source" ]] || continue
+    if [[ -f "$source/SKILL.md" ]] \
+      && grep -q '^audience: contributor' "$source/SKILL.md"; then
+      continue
+    fi
+    if ! cp -R "$source" "$target_dir/"; then
+      printf 'devbox-entry: could not copy ripwire skills into %s\n' \
+        "$target_dir" >&2
+      return 0
+    fi
+  done
+}
+
+sync_ripwire_skills
+
 wait_for_socket() {
   for _ in {1..100}; do
     if [[ -S "$docker_socket" ]]; then

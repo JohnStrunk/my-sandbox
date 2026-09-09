@@ -18,6 +18,8 @@ def test_devbox_lifecycle_create_exec_recreate_remove(
     test_dir = tmp_path / "test_workspace"
     test_dir.mkdir()
     container_name = f"devbox-{test_dir.name}"
+    host_agents = Path(isolated_env["HOME"]) / ".agents"
+    (host_agents / "skills").mkdir(parents=True)
 
     try:
         # 1. First run: should create container and execute command
@@ -35,6 +37,17 @@ def test_devbox_lifecycle_create_exec_recreate_remove(
         assert "Creating container" in res_create.stdout
         assert test_file.exists()
         assert test_file.read_text().strip() == "hello from container"
+
+        ripwire_version = run_bash_script(
+            devbox_path,
+            ["ripwire", "--version"],
+            env=isolated_env,
+            cwd=test_dir,
+            timeout=60,
+        )
+        assert ripwire_version.returncode == 0
+        assert "0.5.0" in ripwire_version.stdout
+        assert (host_agents / "skills" / "ripwire-orient" / "SKILL.md").is_file()
 
         # Check ownership on host: file should be owned by the current host user
         assert test_file.stat().st_uid == os.getuid()

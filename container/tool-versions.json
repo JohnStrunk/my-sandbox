@@ -60,6 +60,14 @@
         "docker": true
       }
     },
+    "ripwire": {
+      "version": "0.5.0",
+      "datasource": "github-releases",
+      "depName": "redhat-et/ripwire",
+      "consumers": {
+        "docker": true
+      }
+    },
     "tokenjuice": {
       "version": "0.8.1",
       "datasource": "npm",

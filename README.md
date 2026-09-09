@@ -35,9 +35,10 @@ This repository provides:
     Node.js, and Playwright CLI with a bundled Chromium browser.
   - **Cloud & Productivity CLIs**: GitHub CLI (`gh`), GitLab CLI (`glab`),
     Google Cloud SDK (`gcloud`), Google Workspace CLI (`gws`), Atlassian CLI
-    (`acli`), Google Antigravity (`agy`), and OpenCode (`opencode`), with
-    [tokenjuice](https://github.com/vincentkoc/tokenjuice)'s OpenCode plugin
-    pre-installed to compact noisy terminal output before it reaches context.
+    (`acli`), Google Antigravity (`agy`), OpenCode (`opencode`), and ripwire
+    (`ripwire`), with [tokenjuice](https://github.com/vincentkoc/tokenjuice)'s
+    OpenCode plugin pre-installed to compact noisy terminal output before it
+    reaches context.
   - **Linters & Utilities**: `pre-commit`, `ripgrep`, `jq`, `shellcheck`,
     `hadolint`, `markdownlint-cli2`, `ffmpeg`, and process diagnostics
     (`ps`, `pgrep`) via `procps-ng`.
@@ -226,6 +227,7 @@ devbox container is created:
 | GitHub | GitHub repository, issue, pull request, and code search capabilities. | At least one of `GH_TOKEN`, `GITHUB_TOKEN`, or an authenticated host `gh` CLI. |
 | The Source | Search and fetch capabilities for The Source, Red Hat's intranet. | All of `IGLOO_MCP_COMMUNITY`, `IGLOO_MCP_COMMUNITY_KEY`, `IGLOO_MCP_APP_PASS`, `IGLOO_MCP_APP_ID`, `IGLOO_MCP_USERNAME`, and `IGLOO_MCP_PASSWORD`. |
 | Context7 | Up-to-date documentation and code examples for software libraries. | `CONTEXT7_API_KEY`. |
+| Ripwire | Local repository context mapping and code-navigation tools through CLI and MCP. | Always enabled; included in the devbox image. |
 | Anthropic | Direct Anthropic models, including Anthropic-compatible endpoints. | `ANTHROPIC_API_KEY` enables the built-in provider; optional `ANTHROPIC_BASE_URL` selects a custom endpoint. |
 
 Runtime integrations can contribute any top-level OpenCode config property, with
