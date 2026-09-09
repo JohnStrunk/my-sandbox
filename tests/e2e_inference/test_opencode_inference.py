@@ -1,6 +1,4 @@
-import json
 import os
-from pathlib import Path
 
 import pytest
 import requests
@@ -9,17 +7,14 @@ from tests.conftest import run_in_devbox
 
 
 @pytest.mark.e2e_inference
-def test_litemaas_inference_e2e(opencode_json_path: Path):
+def test_litemaas_inference_e2e():
     api_key = os.getenv("LITEMAAS_API_KEY")
     if not api_key:
         pytest.skip(
             "LITEMAAS_API_KEY not set. Set it to run LiteMaaS E2E inference test."
         )
 
-    data = json.loads(opencode_json_path.read_text())
-    litemaas_config = data.get("provider", {}).get("litemaas", {})
-    base_url = litemaas_config.get("options", {}).get("baseURL")
-    assert base_url, "LiteMaaS baseURL missing in opencode.json"
+    base_url = "https://litemaas.rhoai.rh-aiservices-bu.com/v1"
 
     headers = {
         "Authorization": f"Bearer {api_key}",

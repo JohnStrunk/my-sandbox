@@ -577,12 +577,6 @@ EOF
       --volume "$HOME/.local/state/opencode/model.json:/sandbox/.local/state/opencode/model.json" \
     )
   fi
-  if [ -f "$HERE/opencode.json" ]; then
-    params+=(
-      --volume "$HERE/opencode.json:/sandbox/opencode.json" \
-    )
-  fi
-
   # Vertex AI configuration
   if [ -n "${GOOGLE_CLOUD_PROJECT:-}" ] && [ -n "${VERTEX_LOCATION:-}" ]; then
     params+=(

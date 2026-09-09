@@ -231,9 +231,9 @@ devbox container is created:
 Runtime integrations can contribute any top-level OpenCode config property, with
 multiple MCP integrations combined under one `mcp` object in
 `OPENCODE_CONFIG_CONTENT`. The user's global `~/.config/opencode`
-configuration and the project's `opencode.json` remain unchanged. Since the
-container is persistent, use `devbox --recreate` after adding or changing host
-credentials or integration triggers.
+configuration remains unchanged. Since the container is persistent, use
+`devbox --recreate` after adding or changing host credentials or integration
+triggers.
 
 OpenCode automatically discovers its built-in Anthropic provider from
 `ANTHROPIC_API_KEY` and the Anthropic SDK uses `ANTHROPIC_BASE_URL` for a custom
@@ -257,7 +257,6 @@ an Anthropic model with `anthropic/<model-id>`.
 │   ├── devbox-entry.sh        # Devbox container entrypoint
 │   └── tool-versions.json     # Canonical image and CI tool versions
 ├── devbox                     # Main launcher script
-├── opencode.json              # OpenCode model and provider configuration
 ├── scripts/
 │   ├── fast-check.sh          # Fast lint + unit test validation
 │   └── validate_tool_versions.py # Version consumer consistency check
