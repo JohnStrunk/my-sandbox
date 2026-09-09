@@ -190,11 +190,6 @@ def devbox_path(repo_root: Path) -> Path:
 
 
 @pytest.fixture(scope="session")
-def opencode_json_path(repo_root: Path) -> Path:
-    return repo_root / "opencode.json"
-
-
-@pytest.fixture(scope="session")
 def dockerfile_path(repo_root: Path) -> Path:
     return repo_root / "container" / "Dockerfile"
 
