@@ -781,7 +781,7 @@ def test_devbox_pricetag_env_and_provider_config(
             "models": {
                 "Inferact/Qwen3.8-Flash-Next-NVFP4": {
                     "name": "Qwen 3.8 Flash Next (free)",
-                    "limit": {"context": 262144},
+                    "limit": {"context": 262144, "output": 8192},
                 },
             },
         },
@@ -832,15 +832,24 @@ def test_devbox_octo_open_env_and_provider_config(
         "models": {
             "qwen38-27b-frontier": {
                 "name": "Qwen 3.8 27B FP8 (Frontier)",
-                "limit": {"context": 131072},
+                "limit": {"context": 131072, "output": 8192},
+                "tool_call": True,
+                "reasoning": True,
+                "temperature": True,
             },
             "qwen38-flash-next": {
                 "name": "Qwen 3.8 Flash Next NVFP4 (Core)",
-                "limit": {"context": 262144},
+                "limit": {"context": 262144, "output": 8192},
+                "tool_call": True,
+                "reasoning": True,
+                "temperature": True,
             },
             "qwen38-27b-fast": {
                 "name": "Qwen 3.8 27B NVFP4 (Bulk)",
-                "limit": {"context": 32768},
+                "limit": {"context": 32768, "output": 8192},
+                "tool_call": True,
+                "reasoning": True,
+                "temperature": True,
             },
         },
     }
