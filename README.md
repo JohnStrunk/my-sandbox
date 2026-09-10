@@ -240,7 +240,10 @@ the launcher explicitly loads tokenjuice's image copy from
 `/usr/local/share/tokenjuice/opencode.js` so the mount cannot hide it; an
 existing host tokenjuice plugin is not registered a second time. Since the
 container is persistent, use `devbox --recreate` after adding or changing host
-credentials or integration triggers.
+credentials or integration triggers. On creation, the launcher also runs
+`opencode models --refresh` inside the container so the first model picker uses
+the current Models.dev catalog. If the refresh command fails, devbox reports a
+warning and leaves any existing cache in place.
 
 When both Octo variables are set, select the models with these OpenCode IDs:
 `octo-open/qwen38-27b-frontier`, `octo-open/qwen38-flash-next`, and

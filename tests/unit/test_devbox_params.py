@@ -192,6 +192,11 @@ if [ "$1" = "exec" ]; then
             exit 1
         fi
     fi
+    if [ "$3" = "opencode" ] && [ "$4" = "models" ] && [ "$5" = "--refresh" ]; then
+        if [ "${{MOCK_OPENCODE_REFRESH_FAILS:-}}" = "1" ]; then
+            exit 1
+        fi
+    fi
     if [ "$3" = "podman" ] && [ "$4" = "create" ]; then
         echo "mock-preflight-container"
         exit 0
@@ -293,6 +298,10 @@ def test_devbox_records_context_fingerprint_on_container(
     assert len(run_labels) == 1
     assert run_labels[0].startswith(
         "io.github.johnstrunk.my-sandbox.devbox-context-fingerprint="
+    )
+    assert any(
+        call and call[0] == "exec" and call[2:] == ["opencode", "models", "--refresh"]
+        for call in calls
     )
 
 
@@ -1336,6 +1345,7 @@ def test_devbox_survives_git_config_set_failure(
     env.pop("MOCK_CONTAINER_GIT_NAME", None)
     env.pop("MOCK_CONTAINER_GIT_EMAIL", None)
     env["MOCK_GIT_CONFIG_SET_FAILS"] = "1"
+    env["MOCK_OPENCODE_REFRESH_FAILS"] = "1"
 
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
@@ -1344,6 +1354,7 @@ def test_devbox_survives_git_config_set_failure(
     assert res.returncode == 0, res.stderr
     assert "Failed to set Git user.name" in res.stderr
     assert "Failed to set Git user.email" in res.stderr
+    assert "OpenCode model catalog refresh command failed" in res.stderr
     assert "Entering container" in res.stdout
 
 
