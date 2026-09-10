@@ -406,7 +406,7 @@ def test_devbox_github_mcp_config_from_token(
         },
         "mcp": {
             "ripwire": RIPWIRE_MCP,
-            "devbox-github": {
+            "github": {
                 "type": "remote",
                 "url": "https://api.githubcopilot.com/mcp/",
                 "enabled": True,
@@ -662,8 +662,8 @@ def test_devbox_merges_mcp_configurations(
         value for value in env_values if value.startswith("OPENCODE_CONFIG_CONTENT=")
     )
     config = json.loads(config_value.split("=", 1)[1])
-    assert set(config["mcp"]) == {"ripwire", "devbox-github", "the-source"}
-    assert config["mcp"]["devbox-github"]["headers"] == {
+    assert set(config["mcp"]) == {"ripwire", "github", "the-source"}
+    assert config["mcp"]["github"]["headers"] == {
         "Authorization": "Bearer {env:GH_TOKEN}"
     }
     assert config["mcp"]["the-source"]["environment"]["IGLOO_MCP_APP_ID"] == (
