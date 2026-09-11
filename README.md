@@ -36,9 +36,7 @@ This repository provides:
   - **Cloud & Productivity CLIs**: GitHub CLI (`gh`), GitLab CLI (`glab`),
     Google Cloud SDK (`gcloud`), Google Workspace CLI (`gws`), Atlassian CLI
     (`acli`), Google Antigravity (`agy`), OpenCode (`opencode`), and ripwire
-    (`ripwire`), with [tokenjuice](https://github.com/vincentkoc/tokenjuice)'s
-    OpenCode plugin pre-installed to compact noisy terminal output before it
-    reaches context.
+    (`ripwire`).
   - **Linters & Utilities**: `pre-commit`, `ripgrep`, `jq`, `shellcheck`,
     `hadolint`, `markdownlint-cli2`, `ffmpeg`, and process diagnostics
     (`ps`, `pgrep`) via `procps-ng`.
@@ -228,18 +226,14 @@ devbox container is created:
 | The Source | Search and fetch capabilities for The Source, Red Hat's intranet. | All of `IGLOO_MCP_COMMUNITY`, `IGLOO_MCP_COMMUNITY_KEY`, `IGLOO_MCP_APP_PASS`, `IGLOO_MCP_APP_ID`, `IGLOO_MCP_USERNAME`, and `IGLOO_MCP_PASSWORD`. |
 | Context7 | Up-to-date documentation and code examples for software libraries. | `CONTEXT7_API_KEY`. |
 | Ripwire | Local repository context mapping and code-navigation tools through CLI and MCP. | Always enabled; included in the devbox image. |
-| Tokenjuice | Deterministic compaction of noisy terminal output before it reaches OpenCode context. | Always enabled; included in the devbox image. |
 | Anthropic | Direct Anthropic models, including Anthropic-compatible endpoints. | `ANTHROPIC_API_KEY` enables the built-in provider; optional `ANTHROPIC_BASE_URL` selects a custom endpoint. |
 | OCTO Open Models | OpenAI-compatible Qwen 3.8 Frontier, Core, and Bulk models. | Both `OCTO_OPEN_URL` (gateway `/v1` URL) and `OCTO_OPEN_KEY`. |
 
 Runtime integrations can contribute any top-level OpenCode config property, with
 multiple MCP integrations combined under one `mcp` object in
 `OPENCODE_CONFIG_CONTENT`. The user's global `~/.config/opencode`
-configuration remains unchanged. If that directory is mounted from the host,
-the launcher explicitly loads tokenjuice's image copy from
-`/usr/local/share/tokenjuice/opencode.js` so the mount cannot hide it; an
-existing host tokenjuice plugin is not registered a second time. Since the
-container is persistent, use `devbox --recreate` after adding or changing host
+configuration remains unchanged. Since the container is persistent, use
+`devbox --recreate` after adding or changing host
 credentials or integration triggers. On creation, the launcher also runs
 `opencode models --refresh` inside the container so the first model picker uses
 the current Models.dev catalog. If the refresh command fails, devbox reports a
