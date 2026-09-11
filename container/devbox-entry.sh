@@ -39,40 +39,45 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 143' INT TERM
 
-sync_ripwire_skills() {
-  local source_dir=/usr/local/share/ripwire/skills
+sync_builtin_skills() {
+  local source_dir="$1"
+  local prefix="$2"
+  local skill_label="$3"
+  local skip_contributors="${4:-false}"
   local home_dir="${HOME:-/sandbox}"
   local target_dir="${AGENTS_HOME:-$home_dir/.agents}/skills"
 
   [[ -d "$source_dir" ]] || return 0
   if ! mkdir -p "$target_dir"; then
-    printf 'devbox-entry: could not create ripwire skill directory %s\n' \
-      "$target_dir" >&2
+    printf 'devbox-entry: could not create %s skill directory %s\n' \
+      "$skill_label" "$target_dir" >&2
     return 0
   fi
 
   # The launcher may bind-mount a host .agents directory over the image's
   # default skill root. Copy real files instead of the upstream installer's
   # symlinks so the mounted host directory does not retain container paths.
-  for existing in "$target_dir"/ripwire-*; do
+  for existing in "$target_dir"/"$prefix"*; do
     [[ -e "$existing" || -L "$existing" ]] || continue
     rm -rf "$existing"
   done
-  for source in "$source_dir"/ripwire-*/; do
+  for source in "$source_dir"/"$prefix"*/; do
     [[ -d "$source" ]] || continue
-    if [[ -f "$source/SKILL.md" ]] \
+    if [[ "$skip_contributors" == true ]] \
+      && [[ -f "$source/SKILL.md" ]] \
       && grep -q '^audience: contributor' "$source/SKILL.md"; then
       continue
     fi
     if ! cp -R "$source" "$target_dir/"; then
-      printf 'devbox-entry: could not copy ripwire skills into %s\n' \
-        "$target_dir" >&2
+      printf 'devbox-entry: could not copy %s skills into %s\n' \
+        "$skill_label" "$target_dir" >&2
       return 0
     fi
   done
 }
 
-sync_ripwire_skills
+sync_builtin_skills /usr/local/share/ripwire/skills ripwire- ripwire true
+sync_builtin_skills /usr/local/share/devbox/skills devbox- devbox
 
 wait_for_socket() {
   for _ in {1..100}; do
