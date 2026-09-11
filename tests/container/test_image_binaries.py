@@ -23,7 +23,6 @@ BINARIES = [
     ("opencode", ["opencode", "--version"]),
     ("ripwire", ["ripwire", "--version"]),
     ("which", ["which", "ripwire"]),
-    ("tokenjuice", ["tokenjuice", "--version"]),
     ("rg", ["rg", "--version"]),
     ("jq", ["jq", "--version"]),
     ("shellcheck", ["shellcheck", "--version"]),
