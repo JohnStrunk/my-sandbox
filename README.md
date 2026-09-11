@@ -47,6 +47,10 @@ This repository provides:
   and endpoints such as Anthropic's directly into the container. When a GitHub
   token is available, it also enables the OpenCode GitHub MCP server without
   modifying any mounted OpenCode configuration file.
+- **Image-Owned Agent Capability Catalog**: The `devbox-tools` skill is staged
+  into every container's active `.agents/skills` directory after host skills
+  are mounted. It is the image-wide place for instructions that cannot live in
+  one project's `AGENTS.md` or README.
 
 ---
 
@@ -250,6 +254,26 @@ OpenCode automatically discovers its built-in Anthropic provider from
 compatible endpoint, so no generated provider configuration is required. Select
 an Anthropic model with `anthropic/<model-id>`.
 
+### Agent Capability Registration
+
+Installing a binary proves runtime availability only. Every agent-facing image
+capability must also be visible to the agent through the image-owned
+`devbox-tools` skill, explicit MCP/plugin/wrapper configuration, or both.
+Capabilities must document their trigger, exact command or integration name,
+safe invocation, fallback, and a test proving that an agent can discover or
+invoke them.
+
+The skill is copied into `/sandbox/.agents/skills` during container startup,
+after the launcher mounts any host `.agents` directory. This keeps the
+capability catalog available for arbitrary project repositories without
+modifying their `AGENTS.md`, README, or mounted OpenCode configuration.
+
+When adding or changing an image capability, recreate persistent containers:
+
+```shell
+devbox --recreate
+```
+
 ---
 
 ## Repository Structure
@@ -263,6 +287,7 @@ an Anthropic model with `anthropic/<model-id>`.
 │   ├── mergify.yml            # Mergify PR automation rules
 │   └── renovate.json5         # Renovate dependency updates
 ├── container/
+│   ├── agent-skills/          # Image-owned agent capability guidance
 │   ├── Dockerfile             # Container definition
 │   ├── devbox-entry.sh        # Devbox container entrypoint
 │   └── tool-versions.json     # Canonical image and CI tool versions

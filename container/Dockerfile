@@ -142,6 +142,11 @@ RUN ripwire_version="$(jq -er '.tools.ripwire.version' /tmp/devbox-tool-versions
     && if [ -d /usr/local/share/ripwire/hooks ]; then chmod +x /usr/local/share/ripwire/hooks/*.sh; fi \
     && rm -rf "/tmp/${ripwire_asset}" "/tmp/${ripwire_asset}.sha256" "${ripwire_root}"
 
+# Stage image-owned agent guidance separately from project-mounted skills. The
+# entrypoint copies this namespace after any host .agents mount is applied.
+COPY agent-skills/ /usr/local/share/devbox/skills/
+RUN chmod -R a+rX /usr/local/share/devbox/skills
+
 # Install Google Cloud CLI
 # https://cloud.google.com/sdk/docs/install-sdk#linux
 # hadolint ignore=DL3041
@@ -221,9 +226,10 @@ RUN /usr/sbin/setcap cap_setuid+eip /usr/bin/newuidmap \
 RUN useradd --create-home --user-group --home-dir /sandbox --shell /bin/bash sandbox \
     && chmod 0400 /etc/shadow
 
-# Activate ripwire's user-facing skills for the image's default agent skill
-# root. The entrypoint refreshes these after any host .agents mount is applied.
+# Activate image-owned user-facing skills for the default agent skill root. The
+# entrypoint refreshes both namespaces after any host .agents mount is applied.
 RUN mkdir -p /sandbox/.agents/skills \
+    && cp -R /usr/local/share/devbox/skills/devbox-* /sandbox/.agents/skills/ \
     && chown -R sandbox:sandbox /sandbox/.agents \
     && /usr/sbin/runuser -u sandbox -- /usr/local/share/ripwire/skills/install.sh --codex
 
