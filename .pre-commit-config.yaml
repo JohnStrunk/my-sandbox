@@ -55,7 +55,7 @@ repos:
         args: ["--strict", "-c", ".github/yamllint-config.yaml"]
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: "v0.16.5"
+    rev: "v0.16.6"
     hooks:
       # Note: lint/fix before format
       - id: ruff-check
@@ -95,7 +95,7 @@ repos:
       - id: validate-mergify-config
 
   - repo: https://github.com/renovatebot/pre-commit-hooks
-    rev: "44.48.3"
+    rev: "44.61.4"
     hooks:
       # Validate Renovate's configuration file
       - id: renovate-config-validator
@@ -120,7 +120,7 @@ repos:
       - id: check-json5
 
   - repo: https://github.com/zizmorcore/zizmor-pre-commit
-    rev: v1.29.0
+    rev: v1.30.0
     hooks:
       - id: zizmor
 
