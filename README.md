@@ -485,3 +485,8 @@ place after bumping a version:
 python3 scripts/verify_provenance.py           # check (non-zero if stale)
 python3 scripts/verify_provenance.py --update  # recompute and rewrite digests
 ```
+
+The check retries transient network errors and fails closed: an asset that
+cannot be fetched (or has not yet been published for a bumped version) is
+reported distinctly from a checksum mismatch, and the command exits non-zero
+either way so CI fails rather than silently passing.

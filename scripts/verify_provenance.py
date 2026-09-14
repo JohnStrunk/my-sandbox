@@ -18,12 +18,16 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import json
+import os
 import re
 import sys
+import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
+from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -31,6 +35,13 @@ DEFAULT_MANIFEST = REPO_ROOT / "container" / "tool-versions.json"
 
 _PLACEHOLDER_PATTERN = re.compile(r"\{([a-z][a-z0-9_.]*)\}")
 _HEX_DIGIT_PATTERN = re.compile(r"[0-9a-f]{64}")
+
+# Network failures must surface as a clear message, never a raw traceback.
+# URLError (incl. HTTPError, connection, and TLS failures) and read-time
+# timeouts/reset errors are all reported as "could not be fetched".
+_FETCH_ERRORS = (URLError, TimeoutError, http.client.HTTPException, OSError)
+_FETCH_ATTEMPTS = 3
+_FETCH_BACKOFF_SECONDS = 2.0
 
 # url -> sha256 hex digest. Injectable so the test suite never touches the
 # network.
@@ -42,7 +53,13 @@ class ProvenanceError(RuntimeError):
 
 
 def _render_url(template: str, spec: dict[str, Any]) -> str:
-    values: dict[str, Any] = {"version": spec.get("version")}
+    version = spec.get("version")
+    if isinstance(version, str):
+        # The Dockerfile strips a leading 'v' before building the asset URL
+        # (see container/Dockerfile); mirror that so a 'v'-prefixed version
+        # does not 404 a perfectly good release.
+        version = version.removeprefix("v")
+    values: dict[str, Any] = {"version": version}
     agent_skill = spec.get("agent_skill")
     if isinstance(agent_skill, dict):
         values["agent_skill.commit"] = agent_skill.get("commit")
@@ -99,13 +116,33 @@ def load_manifest(manifest_path: Path) -> dict[str, Any]:
     return tools
 
 
-def fetch_sha256(url: str) -> str:
+def _fetch_once(url: str) -> str:
     request = Request(url, headers={"User-Agent": "devbox-provenance"})
     digest = hashlib.sha256()
     with urlopen(request, timeout=60) as response:  # noqa: S310 - manifest-pinned https URLs
         for chunk in iter(lambda: response.read(1 << 16), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _no_retry(reason: BaseException) -> bool:
+    # A permanent client-side failure (missing asset) will not succeed on a
+    # retry, so fail fast rather than hammering the registry.
+    code = getattr(reason, "code", None)
+    return isinstance(reason, http.client.HTTPException) or (
+        isinstance(code, int) and 400 <= code < 500
+    )
+
+
+def fetch_sha256(url: str) -> str:
+    for attempt in range(1, _FETCH_ATTEMPTS + 1):
+        try:
+            return _fetch_once(url)
+        except _FETCH_ERRORS as exc:
+            if attempt == _FETCH_ATTEMPTS or _no_retry(exc):
+                raise
+            time.sleep(_FETCH_BACKOFF_SECONDS * attempt)
+    raise AssertionError("unreachable")  # pragma: no cover
 
 
 def verify_provenance(
@@ -129,7 +166,14 @@ def verify_provenance(
         except ProvenanceError as exc:
             errors.append(f"{name}: {exc}")
             continue
-        expected = fetch(url)
+        try:
+            expected = fetch(url)
+        except _FETCH_ERRORS as exc:
+            errors.append(
+                f"{name}: {field} could not be fetched at {url}: {exc}. This is an "
+                "infrastructure/unpublished-asset failure, not a checksum mismatch."
+            )
+            continue
         if expected != stored:
             errors.append(
                 f"{name}: {field} is stale for this version. Stored {stored} "
@@ -137,6 +181,16 @@ def verify_provenance(
                 "Run 'scripts/verify_provenance.py --update' to refresh it."
             )
     return errors
+
+
+def _atomic_write(path: Path, content: str) -> None:
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(content)
+    os.replace(tmp, path)
+
+
+def _bounded_digest(stored: str) -> re.Pattern[str]:
+    return re.compile(rf"(?<![0-9a-f]){re.escape(stored)}(?![0-9a-f])")
 
 
 def update_provenance(
@@ -156,7 +210,12 @@ def update_provenance(
                 "matching manifest value to update"
             )
         url = _render_url(template, spec)
-        expected = fetch(url)
+        try:
+            expected = fetch(url)
+        except _FETCH_ERRORS as exc:
+            raise ProvenanceError(
+                f"tool '{name}' {field} could not be fetched at {url}: {exc}"
+            ) from exc
         if expected == stored:
             continue
         if not _HEX_DIGIT_PATTERN.fullmatch(stored):
@@ -164,17 +223,18 @@ def update_provenance(
                 f"tool '{name}' {field} stored value is not a SHA-256 hex "
                 "digest; refusing an ambiguous rewrite"
             )
-        occurrences = text.count(stored)
+        pattern = _bounded_digest(stored)
+        occurrences = len(pattern.findall(text))
         if occurrences != 1:
             raise ProvenanceError(
                 f"tool '{name}' {field} stored digest appears {occurrences} "
                 "times; refusing an ambiguous rewrite"
             )
-        text = text.replace(stored, expected)
+        text = pattern.sub(expected, text, count=1)
         changes.append((name, field, stored, expected))
 
     if changes:
-        manifest_path.write_text(text)
+        _atomic_write(manifest_path, text)
     return changes
 
 

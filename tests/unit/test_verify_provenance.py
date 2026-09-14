@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+import scripts.verify_provenance as vp
 from scripts.verify_provenance import (
     ProvenanceError,
     _render_url,
@@ -164,3 +165,82 @@ def test_update_provenance_refuses_ambiguous_digest(tmp_path: Path):
                 }
             ),
         )
+
+
+@pytest.mark.unit
+def test_verify_provenance_reports_fetch_failure_not_traceback(tmp_path: Path):
+    manifest = tmp_path / "tool-versions.json"
+    _write_manifest(manifest, _spec(asset=_OLD_ASSET, skill=_OLD_SKILL))
+
+    def boom(url: str) -> str:
+        raise OSError("network unreachable")
+
+    errors = verify_provenance(manifest, fetch=boom)
+
+    # Every checksummed field is reported as an infrastructure failure rather
+    # than raising out of the command.
+    assert len(errors) == 3
+    assert all("could not be fetched" in error for error in errors)
+
+
+@pytest.mark.unit
+def test_update_provenance_raises_on_fetch_failure(tmp_path: Path):
+    manifest = tmp_path / "tool-versions.json"
+    _write_manifest(manifest, _spec(asset=_NEW_ASSET, skill=_OLD_SKILL))
+
+    def boom(url: str) -> str:
+        raise OSError("network unreachable")
+
+    with pytest.raises(ProvenanceError, match="could not be fetched"):
+        update_provenance(manifest, fetch=boom)
+    # A failed update must never have touched the file.
+    assert (
+        manifest.read_text()
+        == json.dumps(
+            {"tools": {"ast_grep": _spec(asset=_NEW_ASSET, skill=_OLD_SKILL)}},
+            indent=2,
+        )
+        + "\n"
+    )
+
+
+@pytest.mark.unit
+def test_main_exit_code_zero_when_current(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    manifest = tmp_path / "tool-versions.json"
+    _write_manifest(manifest, _spec(asset=_OLD_ASSET, skill=_OLD_SKILL))
+    monkeypatch.setattr(vp, "verify_provenance", lambda path: [])
+    assert vp.main(["--manifest", str(manifest)]) == 0
+
+
+@pytest.mark.unit
+def test_main_exit_code_one_when_stale(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    manifest = tmp_path / "tool-versions.json"
+    _write_manifest(manifest, _spec(asset=_OLD_ASSET, skill=_OLD_SKILL))
+    monkeypatch.setattr(vp, "verify_provenance", lambda path: ["stale checksum"])
+    assert vp.main(["--manifest", str(manifest)]) == 1
+
+
+@pytest.mark.unit
+def test_main_exit_code_two_on_provenance_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    manifest = tmp_path / "tool-versions.json"
+
+    def raise_provenance(path):
+        raise ProvenanceError("bad manifest")
+
+    monkeypatch.setattr(vp, "verify_provenance", raise_provenance)
+    assert vp.main(["--manifest", str(manifest)]) == 2
+
+
+@pytest.mark.unit
+def test_main_update_exit_code_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    manifest = tmp_path / "tool-versions.json"
+
+    def fake_update(path):
+        return [("ast_grep", "checksums.amd64", "a", "b")]
+
+    monkeypatch.setattr(vp, "update_provenance", fake_update)
+    assert vp.main(["--update", "--manifest", str(manifest)]) == 0

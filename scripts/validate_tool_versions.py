@@ -516,7 +516,7 @@ def _check_provenance_dockerfile_coherence(
     reads = _provenance_references(dockerfile_text)
     declared = _declared_provenance_fields(tools)
 
-    for tool, _kind in sorted(reads):
+    for tool in sorted({tool for tool, _kind in reads}):
         if tool not in tools:
             errors.append(
                 f"{dockerfile_name} references unknown tool '{tool}' provenance"
