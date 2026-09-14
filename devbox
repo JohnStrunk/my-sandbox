@@ -285,6 +285,7 @@ create_container_locked() {
     --volume "devbox-kb:/sandbox/kb" \
     --volume "devbox-uv-cache:/sandbox/.uv_cache" \
     --volume "devbox-precommit-cache:/sandbox/.cache/pre-commit" \
+    --volume "devbox-semble-cache:/sandbox/.cache/semble" \
     --volume "$podman_storage_cache_dir:/sandbox/.local/share/containers/storage" \
   )
 
@@ -320,6 +321,23 @@ EOF
     "ripwire": {
       "type": "local",
       "command": ["ripwire", "--mcp"],
+      "enabled": true
+    }
+  }
+}
+EOF
+)"
+  )
+
+  # Semble MCP integration. The model is baked into the image and the index
+  # cache is backed by a shared named volume, so this stays local after build.
+  opencode_config+=(
+    "$(cat <<'EOF'
+{
+  "mcp": {
+    "semble": {
+      "type": "local",
+      "command": ["semble"],
       "enabled": true
     }
   }

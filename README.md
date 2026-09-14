@@ -36,7 +36,8 @@ This repository provides:
   - **Cloud & Productivity CLIs**: GitHub CLI (`gh`), GitLab CLI (`glab`),
     Google Cloud SDK (`gcloud`), Google Workspace CLI (`gws`), Atlassian CLI
     (`acli`), Google Antigravity (`agy`), OpenCode (`opencode`), Repomix
-    (`repomix`), ripwire (`ripwire`), and ast-grep (`ast-grep`, `sg`).
+    (`repomix`), ripwire (`ripwire`), ast-grep (`ast-grep`, `sg`), and Semble
+    (`semble`).
   - **Linters & Utilities**: `pre-commit`, `ripgrep`, `jq`, `shellcheck`,
     `hadolint`, `markdownlint-cli2`, `ffmpeg`, and process diagnostics
     (`ps`, `pgrep`) via `procps-ng`.
@@ -156,6 +157,7 @@ downloads or nested image builds whose inputs haven't changed:
 | `/sandbox/kb` | Podman named volume `devbox-kb` | Shared knowledge-base checkout. |
 | `/sandbox/.uv_cache` | Podman named volume `devbox-uv-cache` | `uv`/`uvx` package downloads. |
 | `/sandbox/.cache/pre-commit` | Podman named volume `devbox-precommit-cache` | Pre-commit hook environments. |
+| `/sandbox/.cache/semble` | Podman named volume `devbox-semble-cache` | Semble's mtime-incremental code indexes. |
 | `/sandbox/.local/share/containers/storage` | Host directory `${XDG_CACHE_HOME:-~/.cache}/devbox/containers-storage` | Nested Podman/Buildah's own image and layer storage. |
 
 The knowledge base, `uv`, and pre-commit caches use Podman-managed named
@@ -172,8 +174,8 @@ volume/directory itself clears them:
 # Shared knowledge base
 podman volume rm devbox-kb
 
-# uv and pre-commit caches
-podman volume rm devbox-uv-cache devbox-precommit-cache
+# uv, pre-commit, and Semble caches
+podman volume rm devbox-uv-cache devbox-precommit-cache devbox-semble-cache
 
 # Nested Podman/Buildah image and layer storage
 rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/devbox/containers-storage"
@@ -230,6 +232,7 @@ devbox container is created:
 | The Source | Search and fetch capabilities for The Source, Red Hat's intranet. | All of `IGLOO_MCP_COMMUNITY`, `IGLOO_MCP_COMMUNITY_KEY`, `IGLOO_MCP_APP_PASS`, `IGLOO_MCP_APP_ID`, `IGLOO_MCP_USERNAME`, and `IGLOO_MCP_PASSWORD`. |
 | Context7 | Up-to-date documentation and code examples for software libraries. | `CONTEXT7_API_KEY`. |
 | Ripwire | Local repository context mapping and code-navigation tools through CLI and MCP. | Always enabled; included in the devbox image. |
+| Semble | Natural-language semantic code search through the local OpenCode MCP server. | Always enabled; included in the devbox image. |
 | Anthropic | Direct Anthropic models, including Anthropic-compatible endpoints. | `ANTHROPIC_API_KEY` enables the built-in provider; optional `ANTHROPIC_BASE_URL` selects a custom endpoint. |
 | OCTO Open Models | OpenAI-compatible Qwen 3.8 Frontier, Core, and Bulk models. | Both `OCTO_OPEN_URL` (gateway `/v1` URL) and `OCTO_OPEN_KEY`. |
 
@@ -296,6 +299,18 @@ Use `--no-files` for a cheap directory and metadata map. Repomix's default
 Secretlint scan remains enabled, so do not pass `--no-security-check` in agent
 workflows. Use ripwire for ranked, incremental repository context or `rg` for
 plain-text searches when a portable snapshot is not needed.
+
+For vague natural-language code searches, use Semble before broad text searches:
+
+```shell
+semble search "where are failed requests retried" . --json
+```
+
+Semble combines lexical and local static-embedding search. Its embedding model
+is included in the image, and its incremental index is stored in the shared
+`devbox-semble-cache` volume, so queries do not need an API key or network after
+the image is built. Use ripwire for symbol, call-graph, and impact questions,
+and `rg` for exact literal matches.
 
 ---
 

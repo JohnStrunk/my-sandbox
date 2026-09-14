@@ -367,6 +367,35 @@ RUN pre_commit_version="$(jq -er '.tools.pre_commit.version' /tmp/devbox-tool-ve
     && pre_commit_version="${pre_commit_version#v}" \
     && /usr/sbin/runuser -u sandbox -- uv tool install "pre-commit==${pre_commit_version}"
 
+# Install Semble with its MCP dependencies. The embedding model is fetched at
+# image-build time so searches do not need network access after startup.
+ENV HF_HOME=/usr/local/share/semble/huggingface \
+    SEMBLE_CACHE_LOCATION=/sandbox/.cache/semble
+RUN semble_version="$(jq -er '.tools.semble.version' /tmp/devbox-tool-versions.json)" \
+    && semble_version="${semble_version#v}" \
+    && /usr/sbin/runuser -u sandbox -- uv tool install "semble[mcp]==${semble_version}" \
+    && mv /sandbox/.local/bin/semble /sandbox/.local/bin/semble-bin \
+    && mkdir -p /usr/local/share/semble/huggingface /tmp/semble-fixture \
+    && chown -R sandbox:sandbox /usr/local/share/semble /tmp/semble-fixture \
+    && printf '%s\n' \
+      'def retry_failed_request(request):' \
+      '    for attempt in range(3):' \
+      '        try:' \
+      '            return request()' \
+      '        except TimeoutError:' \
+      '            continue' \
+      > /tmp/semble-fixture/retry.py \
+    && /usr/sbin/runuser -u sandbox -- env \
+      HF_HOME="${HF_HOME}" \
+      SEMBLE_CACHE_LOCATION=/tmp/semble-index-cache \
+      /sandbox/.local/bin/semble-bin search \
+      "retry failed requests" /tmp/semble-fixture --format json >/dev/null \
+    && rm -rf /tmp/semble-fixture /tmp/semble-index-cache \
+    && chmod -R a+rX /usr/local/share/semble
+
+COPY semble /usr/local/bin/semble
+RUN chmod 0755 /usr/local/bin/semble
+
 # Two more settings from podman's own reference Podman-in-Podman image
 # (https://github.com/containers/image_build/blob/main/podman/Containerfile),
 # defensive for nested `podman build`/`buildah` in this doubly-rootless

@@ -13,6 +13,11 @@ RIPWIRE_MCP = {
     "command": ["ripwire", "--mcp"],
     "enabled": True,
 }
+SEMBLE_MCP = {
+    "type": "local",
+    "command": ["semble"],
+    "enabled": True,
+}
 
 
 @pytest.fixture
@@ -415,6 +420,7 @@ def test_devbox_github_mcp_config_from_token(
         },
         "mcp": {
             "ripwire": RIPWIRE_MCP,
+            "semble": SEMBLE_MCP,
             "github": {
                 "type": "remote",
                 "url": "https://api.githubcopilot.com/mcp/",
@@ -479,6 +485,7 @@ def test_devbox_context7_mcp_config_from_api_key(
         },
         "mcp": {
             "ripwire": RIPWIRE_MCP,
+            "semble": SEMBLE_MCP,
             "context7": {
                 "type": "remote",
                 "url": "https://mcp.context7.com/mcp",
@@ -548,6 +555,7 @@ def test_devbox_does_not_add_github_mcp_without_credentials(
         },
         "mcp": {
             "ripwire": RIPWIRE_MCP,
+            "semble": SEMBLE_MCP,
         },
     }
 
@@ -606,6 +614,7 @@ def test_devbox_the_source_mcp_config(
         },
         "mcp": {
             "ripwire": RIPWIRE_MCP,
+            "semble": SEMBLE_MCP,
             "the-source": {
                 "enabled": True,
                 "type": "local",
@@ -671,7 +680,7 @@ def test_devbox_merges_mcp_configurations(
         value for value in env_values if value.startswith("OPENCODE_CONFIG_CONTENT=")
     )
     config = json.loads(config_value.split("=", 1)[1])
-    assert set(config["mcp"]) == {"ripwire", "github", "the-source"}
+    assert set(config["mcp"]) == {"ripwire", "semble", "github", "the-source"}
     assert config["mcp"]["github"]["headers"] == {
         "Authorization": "Bearer {env:GH_TOKEN}"
     }
@@ -1118,6 +1127,7 @@ def test_devbox_persistent_cache_volumes(
     assert "devbox-kb:/sandbox/kb" in volumes
     assert "devbox-uv-cache:/sandbox/.uv_cache" in volumes
     assert "devbox-precommit-cache:/sandbox/.cache/pre-commit" in volumes
+    assert "devbox-semble-cache:/sandbox/.cache/semble" in volumes
 
     # Nested Podman/Buildah storage is host-backed so its size is easy to
     # manage, and the host directory is created ahead of time.

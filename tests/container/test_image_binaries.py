@@ -1,4 +1,5 @@
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -27,6 +28,7 @@ BINARIES = [
     ("repomix", ["repomix", "--version"]),
     ("ripwire", ["ripwire", "--version"]),
     ("ast-grep", ["ast-grep", "--version"]),
+    ("semble", ["semble", "--version"]),
     ("which", ["which", "ripwire"]),
     ("rg", ["rg", "--version"]),
     ("jq", ["jq", "--version"]),
@@ -146,3 +148,47 @@ def test_ast_grep_structural_rewrite(devbox_image: str):
         "ast-grep failed to apply a structural rewrite.\n"
         f"Stdout: {res.stdout}\nStderr: {res.stderr}"
     )
+
+
+@pytest.mark.container
+def test_semble_search_returns_json_without_network(devbox_image: str):
+    res = subprocess.run(
+        [
+            "podman",
+            "run",
+            "--rm",
+            "--network",
+            "none",
+            "--user",
+            "sandbox",
+            devbox_image,
+            "bash",
+            "-c",
+            (
+                "set -eu; "
+                'fixture="$(mktemp -d)"; '
+                "trap 'rm -rf \"$fixture\"' EXIT; "
+                "printf '%s\\n' "
+                "'def retry_failed_request(request):' "
+                "'    for attempt in range(3):' "
+                "'        try:' "
+                "'            return request()' "
+                "'        except TimeoutError:' "
+                "'            continue' "
+                '> "$fixture/retry.py"; '
+                "semble search 'where are failed requests retried' \"$fixture\" "
+                "--top-k 1 --max-snippet-lines 0 --json"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert res.returncode == 0, (
+        "Semble failed to search without network access.\n"
+        f"Stdout: {res.stdout}\nStderr: {res.stderr}"
+    )
+    payload = json.loads(res.stdout)
+    assert payload["results"]
+    assert payload["results"][0]["file_path"].endswith("retry.py")

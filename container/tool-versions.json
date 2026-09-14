@@ -84,6 +84,14 @@
       "agent_skill": {"commit": "f2175aff21f20cfb8e2db30c28febeb3a2d42b61", "sha256": "6e8ccb117f90cf5d153c9b95acad7ffc689032e0b71c0f89131789d4288ac5f5"},
       "consumers": {"docker": true}
     },
+    "semble": {
+      "version": "0.6.0",
+      "datasource": "pypi",
+      "depName": "semble",
+      "consumers": {
+        "docker": true
+      }
+    },
     "acli": {
       "version": "1.3.29-stable",
       "datasource": "custom.acli",
