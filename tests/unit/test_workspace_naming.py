@@ -1,4 +1,4 @@
-"""Deterministic tests for per-run unique launcher workspace naming.
+"""Fast tests for per-run unique launcher workspace naming.
 
 These tests exercise ``tests.conftest.unique_workspace_dir`` and
 ``tests.conftest.devbox_container_name`` (issue #152): repeated runs must
@@ -48,3 +48,26 @@ def test_generated_container_names_are_valid_podman_names(tmp_path):
 
         assert name[0].isalnum()
         assert set(name) <= PODMAN_NAME_CHARS
+
+
+@pytest.mark.unit
+def test_generated_container_names_never_equal_legacy_fixed_names(tmp_path):
+    # Regression for issue #152: the pre-fix fixed names (e.g. the stale
+    # `devbox-test_workspace` that poisoned re-runs) must never be produced
+    # again, regardless of label.
+    legacy_names = {
+        "devbox-test_workspace",
+        "devbox-check_nested",
+        "devbox-nested_run_ws",
+        "devbox-nested_build_ws",
+        "devbox-docker_api_probe",
+        "devbox-docker_api_port",
+        "devbox-docker_api_network",
+    }
+    for label in ("test_workspace", "nested_run_ws", "docker_api_network"):
+        names = {
+            devbox_container_name(unique_workspace_dir(tmp_path, label))
+            for _ in range(20)
+        }
+
+        assert names.isdisjoint(legacy_names)
