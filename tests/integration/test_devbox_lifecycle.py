@@ -49,6 +49,8 @@ def test_devbox_lifecycle_create_exec_recreate_remove(
         assert "0.5.0" in ripwire_version.stdout
         assert (host_agents / "skills" / "ripwire-orient" / "SKILL.md").is_file()
         assert (host_agents / "skills" / "devbox-tools" / "SKILL.md").is_file()
+        assert (host_agents / "skills" / "ast-grep" / "SKILL.md").is_file()
+        assert (host_agents / "skills" / "ast-grep-outline" / "SKILL.md").is_file()
 
         # Check ownership on host: file should be owned by the current host user
         assert test_file.stat().st_uid == os.getuid()
