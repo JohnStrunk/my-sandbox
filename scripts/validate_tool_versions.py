@@ -16,6 +16,27 @@ _VERSION_LITERAL_PATTERN = re.compile(
     r"(?<![A-Za-z0-9_.-])v?\d+\.\d+(?:\.\d+)*(?:-[A-Za-z0-9.-]+)?"
     r"(?![A-Za-z0-9_.-])"
 )
+_SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
+_GIT_COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}")
+_PROVENANCE_REFERENCE_PATTERN = re.compile(
+    r"\.tools\.([a-z][a-z0-9_]*)\.(checksums|agent_skill)\.([a-z][a-z0-9_]*)"
+)
+_PROVENANCE_PLACEHOLDER_PATTERN = re.compile(r"\{([a-z][a-z0-9_.]*)\}")
+_SUPPORTED_ARCHES = frozenset({"amd64", "arm64"})
+_ALLOWED_AGENT_SKILL_FIELDS = frozenset({"commit", "sha256"})
+_ALLOWED_PROVENANCE_PLACEHOLDERS = frozenset({"version", "agent_skill.commit"})
+_ALLOWED_TOOL_FIELDS = frozenset(
+    {
+        "version",
+        "datasource",
+        "depName",
+        "versioning",
+        "consumers",
+        "checksums",
+        "agent_skill",
+        "provenance",
+    }
+)
 
 
 def _read_text(path: Path, errors: list[str]) -> str:
@@ -95,6 +116,13 @@ def _load_manifest(path: Path, errors: list[str]) -> dict[str, dict[str, object]
             not isinstance(versioning, str) or not versioning
         ):
             errors.append(f"{path}: tool '{name}' has an invalid versioning value")
+
+        unknown_fields = set(spec) - _ALLOWED_TOOL_FIELDS
+        if unknown_fields:
+            errors.append(
+                f"{path}: tool '{name}' has unknown field(s): "
+                + ", ".join(sorted(unknown_fields))
+            )
 
     return tools
 
@@ -334,6 +362,182 @@ def _check_lockfile_consumers(
             )
 
 
+def _provenance_references(text: str) -> dict[tuple[str, str], set[str]]:
+    """Group ``.tools.<tool>.<kind>.<field>`` reads by (tool, kind)."""
+
+    refs: dict[tuple[str, str], set[str]] = {}
+    for tool, kind, field in _PROVENANCE_REFERENCE_PATTERN.findall(_active_lines(text)):
+        refs.setdefault((tool, kind), set()).add(field)
+    return refs
+
+
+def _declared_provenance_fields(
+    tools: dict[str, dict[str, object]],
+) -> dict[tuple[str, str], set[str]]:
+    declared: dict[tuple[str, str], set[str]] = {}
+    for name, spec in tools.items():
+        checksums = spec.get("checksums")
+        if isinstance(checksums, dict):
+            declared[(name, "checksums")] = set(checksums)
+        agent_skill = spec.get("agent_skill")
+        if isinstance(agent_skill, dict):
+            declared[(name, "agent_skill")] = set(agent_skill)
+    return declared
+
+
+def _declared_checksummed_fields(
+    spec: dict[str, object],
+) -> set[str]:
+    fields: set[str] = set()
+    checksums = spec.get("checksums")
+    if isinstance(checksums, dict):
+        fields.update(f"checksums.{arch}" for arch in checksums)
+    agent_skill = spec.get("agent_skill")
+    if isinstance(agent_skill, dict) and "sha256" in agent_skill:
+        fields.add("agent_skill.sha256")
+    return fields
+
+
+def _is_sha256(value: object) -> bool:
+    return isinstance(value, str) and bool(_SHA256_PATTERN.fullmatch(value))
+
+
+def _check_checksums(name: str, checksums: object, errors: list[str]) -> None:
+    if not isinstance(checksums, dict) or not checksums:
+        errors.append(f"tool '{name}' 'checksums' must be a non-empty object")
+        return
+    for arch in sorted(set(checksums) - _SUPPORTED_ARCHES):
+        errors.append(
+            f"tool '{name}' declares a checksum for unsupported architecture '{arch}'"
+        )
+    for arch, value in sorted(checksums.items()):
+        if not _is_sha256(value):
+            errors.append(
+                f"tool '{name}' checksums['{arch}'] must be a 64-char lowercase "
+                "SHA-256 hex digest"
+            )
+
+
+def _check_agent_skill(name: str, agent_skill: object, errors: list[str]) -> None:
+    if not isinstance(agent_skill, dict):
+        errors.append(f"tool '{name}' 'agent_skill' must be an object")
+        return
+    for field in sorted(set(agent_skill) - _ALLOWED_AGENT_SKILL_FIELDS):
+        errors.append(f"tool '{name}' agent_skill has unknown field '{field}'")
+    if "commit" in agent_skill and not (
+        isinstance(agent_skill["commit"], str)
+        and bool(_GIT_COMMIT_PATTERN.fullmatch(agent_skill["commit"]))
+    ):
+        errors.append(
+            f"tool '{name}' agent_skill['commit'] must be a 40-char lowercase "
+            "Git commit hex"
+        )
+    if "sha256" in agent_skill and not _is_sha256(agent_skill["sha256"]):
+        errors.append(
+            f"tool '{name}' agent_skill['sha256'] must be a 64-char lowercase "
+            "SHA-256 hex digest"
+        )
+
+
+def _check_provenance_block(
+    name: str, spec: dict[str, object], provenance: object, errors: list[str]
+) -> None:
+    required = _declared_checksummed_fields(spec)
+    if not required:
+        errors.append(
+            f"tool '{name}' declares 'provenance' but has no checksum or "
+            "agent-skill metadata to verify"
+        )
+    if not isinstance(provenance, dict):
+        errors.append(f"tool '{name}' 'provenance' must be an object")
+        return
+    for field in sorted(set(provenance) - {"url_templates"}):
+        errors.append(f"tool '{name}' provenance has unknown field '{field}'")
+    templates = provenance.get("url_templates")
+    if not isinstance(templates, dict) or not templates:
+        errors.append(
+            f"tool '{name}' provenance must declare a non-empty 'url_templates' object"
+        )
+        return
+    for missing in sorted(required - set(templates)):
+        errors.append(f"tool '{name}' provenance.url_templates is missing '{missing}'")
+    for extra in sorted(set(templates) - required):
+        errors.append(
+            f"tool '{name}' provenance.url_templates has no matching checksum "
+            f"field for '{extra}'"
+        )
+    for field, template in sorted(templates.items()):
+        if not isinstance(template, str) or not template.startswith("https://"):
+            errors.append(
+                f"tool '{name}' provenance.url_templates['{field}'] must be an "
+                "https URL"
+            )
+            continue
+        for placeholder in _PROVENANCE_PLACEHOLDER_PATTERN.findall(template):
+            if placeholder not in _ALLOWED_PROVENANCE_PLACEHOLDERS:
+                errors.append(
+                    f"tool '{name}' provenance.url_templates['{field}'] uses "
+                    f"unknown placeholder '{{{placeholder}}}'"
+                )
+
+
+def _check_provenance(
+    tools: dict[str, dict[str, object]],
+    dockerfile_name: str,
+    dockerfile_text: str,
+    errors: list[str],
+) -> None:
+    for name, spec in tools.items():
+        if "checksums" in spec:
+            _check_checksums(name, spec["checksums"], errors)
+        if "agent_skill" in spec:
+            _check_agent_skill(name, spec["agent_skill"], errors)
+        if "provenance" in spec:
+            _check_provenance_block(name, spec, spec["provenance"], errors)
+        elif _declared_checksummed_fields(spec):
+            errors.append(
+                f"tool '{name}' declares checksum/agent-skill metadata but "
+                "has no 'provenance.url_templates' to verify it"
+            )
+
+    _check_provenance_dockerfile_coherence(
+        tools, dockerfile_name, dockerfile_text, errors
+    )
+
+
+def _check_provenance_dockerfile_coherence(
+    tools: dict[str, dict[str, object]],
+    dockerfile_name: str,
+    dockerfile_text: str,
+    errors: list[str],
+) -> None:
+    """Ensure every Dockerfile checksum/skill read has a manifest entry."""
+
+    reads = _provenance_references(dockerfile_text)
+    declared = _declared_provenance_fields(tools)
+
+    for tool, _kind in sorted(reads):
+        if tool not in tools:
+            errors.append(
+                f"{dockerfile_name} references unknown tool '{tool}' provenance"
+            )
+
+    for (tool, kind), read_fields in sorted(reads.items()):
+        declared_fields = declared.get((tool, kind), set())
+        for missing in sorted(read_fields - declared_fields):
+            errors.append(
+                f"{dockerfile_name} reads '{tool}' {kind}['{missing}'] but the "
+                "manifest does not declare it"
+            )
+    for (tool, kind), declared_fields in sorted(declared.items()):
+        read_fields = reads.get((tool, kind), set())
+        for unused in sorted(declared_fields - read_fields):
+            errors.append(
+                f"the manifest declares '{tool}' {kind}['{unused}'] but "
+                f"{dockerfile_name} never reads it"
+            )
+
+
 def validate_tool_versions(repo_root: Path) -> list[str]:
     """Return all manifest/consumer consistency errors for ``repo_root``."""
 
@@ -377,6 +581,7 @@ def validate_tool_versions(repo_root: Path) -> list[str]:
     _check_no_hardcoded_versions(
         "container/Dockerfile", tools, dockerfile, "docker", errors
     )
+    _check_provenance(tools, "container/Dockerfile", dockerfile, errors)
 
     if "container/tool-versions.json" not in workflow:
         errors.append(

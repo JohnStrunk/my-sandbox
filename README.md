@@ -335,7 +335,8 @@ and `rg` for exact literal matches.
 ├── devbox                     # Main launcher script
 ├── scripts/
 │   ├── fast-check.sh          # Fast lint + unit test validation
-│   └── validate_tool_versions.py # Version consumer consistency check
+│   ├── validate_tool_versions.py # Version consumer consistency check
+│   └── verify_provenance.py   # Recompute/verify release checksums
 └── .pre-commit-config.yaml    # Pre-commit hook definitions
 ```
 
@@ -469,3 +470,18 @@ python3 scripts/validate_tool_versions.py
 
 The Renovate configuration updates the manifest and groups related pre-commit
 consumer updates so a version change remains synchronized.
+
+Some entries also pin release-provenance metadata that Renovate cannot
+recompute: `ast_grep` carries per-platform release checksums and the official
+agent-skill archive hash. Every such entry declares a
+`provenance.url_templates` block mapping each checksummed field to the asset
+that must hash to it, and the Dockerfile must read exactly those fields.
+
+Verify the pinned digests against upstream (this runs in CI, so a version-only
+bump fails fast rather than at image-build time), or refresh the whole unit in
+place after bumping a version:
+
+```shell
+python3 scripts/verify_provenance.py           # check (non-zero if stale)
+python3 scripts/verify_provenance.py --update  # recompute and rewrite digests
+```

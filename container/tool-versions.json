@@ -82,6 +82,13 @@
       "depName": "ast-grep/ast-grep",
       "checksums": {"amd64": "f8ac830881339d1edee6b2652f54798c0f4da5a827f2db38a08ee31117783ce8", "arm64": "b39cfbc58da4b869a88b8a4bc57bd5deb0d24541e704cf7c257da7b53ec81c8f"},
       "agent_skill": {"commit": "f2175aff21f20cfb8e2db30c28febeb3a2d42b61", "sha256": "6e8ccb117f90cf5d153c9b95acad7ffc689032e0b71c0f89131789d4288ac5f5"},
+      "provenance": {
+        "url_templates": {
+          "checksums.amd64": "https://github.com/ast-grep/ast-grep/releases/download/{version}/app-x86_64-unknown-linux-gnu.zip",
+          "checksums.arm64": "https://github.com/ast-grep/ast-grep/releases/download/{version}/app-aarch64-unknown-linux-gnu.zip",
+          "agent_skill.sha256": "https://github.com/ast-grep/agent-skill/archive/{agent_skill.commit}.tar.gz"
+        }
+      },
       "consumers": {"docker": true}
     },
     "semble": {
