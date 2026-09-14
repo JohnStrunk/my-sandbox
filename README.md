@@ -35,8 +35,8 @@ This repository provides:
     Node.js, and Playwright CLI with a bundled Chromium browser.
   - **Cloud & Productivity CLIs**: GitHub CLI (`gh`), GitLab CLI (`glab`),
     Google Cloud SDK (`gcloud`), Google Workspace CLI (`gws`), Atlassian CLI
-    (`acli`), Google Antigravity (`agy`), OpenCode (`opencode`), and ripwire
-    (`ripwire`).
+    (`acli`), Google Antigravity (`agy`), OpenCode (`opencode`), ripwire
+    (`ripwire`), and ast-grep (`ast-grep`, `sg`).
   - **Linters & Utilities**: `pre-commit`, `ripgrep`, `jq`, `shellcheck`,
     `hadolint`, `markdownlint-cli2`, `ffmpeg`, and process diagnostics
     (`ps`, `pgrep`) via `procps-ng`.
@@ -273,6 +273,16 @@ When adding or changing an image capability, recreate persistent containers:
 ```shell
 devbox --recreate
 ```
+
+For syntax-aware code searches and structural rewrites, use the staged
+`ast-grep` skill and command instead of a text-only edit loop:
+
+```shell
+ast-grep --lang python -p 'print($ARG)' -r 'logger.info($ARG)' -U path/to/file.py
+```
+
+Test a pattern or rule against a fixture first, and use ripwire for symbol or
+call-graph questions and `rg` for plain-text searches.
 
 ---
 

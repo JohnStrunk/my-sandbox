@@ -22,6 +22,7 @@ BINARIES = [
     ("agy", ["agy", "--help"]),
     ("opencode", ["opencode", "--version"]),
     ("ripwire", ["ripwire", "--version"]),
+    ("ast-grep", ["ast-grep", "--version"]),
     ("which", ["which", "ripwire"]),
     ("rg", ["rg", "--version"]),
     ("jq", ["jq", "--version"]),
@@ -71,3 +72,32 @@ def test_playwright_browser_launches(devbox_image: str):
         f"Stdout: {res.stdout}\nStderr: {res.stderr}"
     )
     assert "Page URL: about:blank" in res.stdout
+
+
+@pytest.mark.container
+def test_ast_grep_structural_rewrite(devbox_image: str):
+    res = run_in_devbox(
+        devbox_image,
+        [
+            "bash",
+            "-c",
+            (
+                "set -eu; "
+                'fixture="$(mktemp --suffix=.py)"; '
+                "printf '%s\\n' "
+                "'print(\"hello\")' "
+                "'# print(\"comment\")' "
+                '\'print("hello", "world")\' > "$fixture"; '
+                "ast-grep --lang python -p 'print($ARG)' "
+                "-r 'logger.info($ARG)' -U \"$fixture\"; "
+                'grep -Fx \'logger.info("hello")\' "$fixture"; '
+                'grep -Fx \'# print("comment")\' "$fixture"; '
+                'grep -Fx \'print("hello", "world")\' "$fixture"'
+            ),
+        ],
+        user="sandbox",
+    )
+    assert res.returncode == 0, (
+        "ast-grep failed to apply a structural rewrite.\n"
+        f"Stdout: {res.stdout}\nStderr: {res.stderr}"
+    )
