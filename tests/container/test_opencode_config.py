@@ -11,24 +11,11 @@ def test_ripwire_skills_are_staged_and_active(devbox_image: str):
     for skill_path in (
         "/usr/local/share/ripwire/skills/ripwire-orient/SKILL.md",
         "/sandbox/.agents/skills/ripwire-orient/SKILL.md",
-    ):
-        res = run_in_devbox(
-            devbox_image,
-            ["test", "-f", skill_path],
-            user="sandbox",
-        )
-        assert res.returncode == 0, (
-            f"Ripwire skill missing at {skill_path}.\n"
-            f"Stdout: {res.stdout}\nStderr: {res.stderr}"
-        )
-
-
-@pytest.mark.container
-def test_ast_grep_skills_are_staged_and_active(devbox_image: str):
-    for skill_path in (
         "/usr/local/share/ast-grep/skills/ast-grep/SKILL.md",
         "/sandbox/.agents/skills/ast-grep/SKILL.md",
         "/sandbox/.agents/skills/ast-grep-outline/SKILL.md",
+        "/usr/local/share/devbox/skills/devbox-tools/SKILL.md",
+        "/sandbox/.agents/skills/devbox-tools/SKILL.md",
     ):
         res = run_in_devbox(
             devbox_image,
@@ -36,7 +23,7 @@ def test_ast_grep_skills_are_staged_and_active(devbox_image: str):
             user="sandbox",
         )
         assert res.returncode == 0, (
-            f"ast-grep skill missing at {skill_path}.\n"
+            f"Image-owned skill missing at {skill_path}.\n"
             f"Stdout: {res.stdout}\nStderr: {res.stderr}"
         )
 
@@ -48,6 +35,21 @@ def test_ast_grep_skills_are_staged_and_active(devbox_image: str):
     assert res.returncode == 0, (
         "The active ast-grep skill does not have the expected OpenCode skill name.\n"
         f"Stdout: {res.stdout}\nStderr: {res.stderr}"
+    )
+
+    res = run_in_devbox(
+        devbox_image,
+        [
+            "grep",
+            "-q",
+            '^name: "devbox-tools"$',
+            "/sandbox/.agents/skills/devbox-tools/SKILL.md",
+        ],
+        user="sandbox",
+    )
+    assert res.returncode == 0, (
+        "The active devbox-tools skill does not have the expected OpenCode "
+        f"skill name.\nStdout: {res.stdout}\nStderr: {res.stderr}"
     )
 
 
