@@ -1,0 +1,83 @@
+---
+name: "issue-to-pr"
+description: >
+  Take a repository issue from triage through a tested, reviewed implementation
+  pull request, and choose the highest-value unassigned issue when none is
+  specified. Use when asked to "work on the next issue", "pick up a backlog
+  issue", "take an issue to a PR", or otherwise run the issue-to-PR workflow.
+---
+
+# Issue to Pull Request
+
+Turn a repository issue into a tested, reviewed pull request. Reach GitHub only
+through the `gh` CLI (required for all authenticated actions) or the GitHub MCP
+server for read-only lookups -- both over HTTPS, never SSH. When the user names
+no specific issue, first select one; otherwise run the workflow directly on the
+named issue.
+
+## When no issue is named: choose the highest-value one
+
+Do not equate value with issue number, recency, or how easy an issue looks.
+Select the highest-value open, unassigned, unblocked issue.
+
+1. Enumerate open, unassigned issues (`gh issue list --state open --search
+   "no:assignee"`; the GitHub MCP `list_issues` filter works too -- note that
+   `--assignee ""` is a no-op and still returns assigned issues). Read each
+   candidate's labels, custom project fields, description, comments,
+   dependencies, and linked issues.
+2. Impact: weigh severity, how many people or flows are affected, how often it
+   happens, urgency, risk reduction, and strategic alignment.
+3. Confidence and effort: estimate implementation effort, external and internal
+   dependencies (is it blocked?), and whether the acceptance criteria are
+   actionable enough to prove "done".
+4. Rank with a transparent, concise rationale (a short score or ordered list
+   with issue references). Impact leads the ranking: do not let low effort
+   override a materially higher-impact issue unless you document the tradeoff.
+5. When labels or priority fields are missing or incomplete, state the
+   assumptions you made and choose the best value-to-effort candidate the
+   available evidence supports; never guess silently.
+6. Ask the user only when the ambiguity would materially change which issue is
+   selected; otherwise proceed and record your reasoning.
+7. Search for duplicates before creating any follow-up issue.
+8. Record why the chosen issue is highest value in both the issue comment and
+   the pull request body.
+9. Claim the issue (assign it to yourself) before writing any code.
+
+## Issue-to-PR workflow
+
+1. Authenticate with GitHub over HTTPS only. Treat SSH access to GitHub as
+   unavailable: run `gh auth setup-git` so Git uses `gh` for HTTPS, and never
+   attempt SSH remotes or `git@github.com:` URLs.
+2. Preserve the workspace. Never revert or discard unrelated or dirty changes,
+   and never build in a dirty main checkout. Fetch `origin/main` and create an
+   isolated worktree from it under `.worktrees/`, per the repository `AGENTS.md`.
+3. Claim and read. Assign the issue to yourself, then read the issue plus the
+   repository guidance (`AGENTS.md`, `README.md`) and any referenced docs.
+4. Plan. Post the approach and any initial findings or questions as a comment on
+   the issue before coding.
+5. Implement the smallest complete change that satisfies the acceptance criteria,
+   following existing conventions and reusing what already exists.
+6. Test from the fastest tier upward -- unit, lint, and type checks first, then
+   the relevant integration or container coverage. Use the repository's
+   documented test command (for example `uv run --extra test pytest`) in a
+   sanitized environment, and never print the full environment.
+7. Review. Have an independent subagent review the final diff for quality and
+   completeness, and resolve every actionable finding before opening the pull
+   request.
+8. Rebase, then open the pull request. Fetch `origin/main` again and rebase the
+   branch onto it if it advanced (per `AGENTS.md`). Search for a PR template and
+   follow it when present. Describe what changed, the test results, and any known
+   limitations. Push the branch, create the pull request, and report CI status.
+9. Land it. Monitor CI until it is green; once the pull request merges (or the
+   repository auto-merges it), update the local `main`, then remove the worktree
+   and its branch.
+
+## Guardrails
+
+- Route every GitHub action through `gh` or the GitHub MCP server over HTTPS; no
+  SSH.
+- Keep the user's dirty and untracked files untouched; isolate all edits in the
+  `.worktrees/` worktree created from the latest `origin/main`.
+- Prefer reuse and existing house patterns; keep the change minimal.
+- Leave decisions and verification evidence (test output, selection rationale)
+  for the reviewer rather than asserting success without proof.
