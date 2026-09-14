@@ -19,6 +19,11 @@ This repository provides:
 - **Fully Rootless & Secure**: Runs via Podman using `--userns=keep-id` without
   requiring `--privileged` mode or added Linux capabilities. Files created
   inside the container remain owned by the host user.
+- **Git-Safe Worktree Mounts**: When launched from a linked Git worktree,
+  `devbox` also bind-mounts the repository's git directory at the same host
+  path inside the container, so the worktree's `.git` pointer file resolves
+  and Git commands keep working from the mounted worktree. Containers
+  created earlier pick this up on the next `devbox --recreate`.
 - **Nested Podman-in-Podman**: Build and run containers inside the devbox
   without host root permissions. Uses `fuse-overlayfs` and dynamic subordinate
   UID/GID delegation (`/etc/subuid` and `/etc/subgid`).
