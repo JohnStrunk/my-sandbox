@@ -93,11 +93,14 @@ ENV UV_CACHE_DIR=/sandbox/.uv_cache
 # this image is not built from an npm project.
 RUN markdownlint_version="$(jq -er '.tools.markdownlint_cli2.version' /tmp/devbox-tool-versions.json)" \
     && playwright_version="$(jq -er '.tools.playwright_cli.version' /tmp/devbox-tool-versions.json)" \
+    && repomix_version="$(jq -er '.tools.repomix.version' /tmp/devbox-tool-versions.json)" \
     && markdownlint_version="${markdownlint_version#v}" \
     && playwright_version="${playwright_version#v}" \
+    && repomix_version="${repomix_version#v}" \
     && npm install -g --no-fund \
     "markdownlint-cli2@${markdownlint_version}" \
     "@playwright/cli@${playwright_version}" \
+    "repomix@${repomix_version}" \
     && playwright-cli install-browser chrome-for-testing \
     && chmod -R a+rX "${PLAYWRIGHT_BROWSERS_PATH}"
 

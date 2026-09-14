@@ -58,6 +58,22 @@ repository `AGENTS.md` or README.
 - Fall back to ripwire for symbol/call-graph questions and `rg` for plain-text
   searches where syntax is not relevant.
 
+### Repomix
+
+- Runtime command: `repomix`.
+- Use it for one-shot, portable repository snapshots or review artifacts when a
+  live, incremental view is not required.
+- Safe invocation: `repomix --token-budget 12000 --compress`; use `--no-files`
+  for a cheap directory and metadata map. Always pass `--token-budget`; the
+  command exits non-zero when the packed output exceeds the limit.
+- Repomix's default Secretlint scan remains enabled. Do not pass
+  `--no-security-check` in agent workflows.
+- Fall back to ripwire for ranked live-repository navigation or `rg` for plain
+  text searches when a portable snapshot is not needed.
+- The container test verifies both this active guidance and the budget gate in
+  `tests/container/test_opencode_config.py` and
+  `tests/container/test_image_binaries.py`.
+
 ## Adding Entries
 
 Keep each entry short and operational. Include:

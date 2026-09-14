@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 import pytest
 
 from tests.conftest import run_in_devbox
@@ -21,6 +24,7 @@ BINARIES = [
     ("acli", ["acli", "--version"]),
     ("agy", ["agy", "--help"]),
     ("opencode", ["opencode", "--version"]),
+    ("repomix", ["repomix", "--version"]),
     ("ripwire", ["ripwire", "--version"]),
     ("ast-grep", ["ast-grep", "--version"]),
     ("which", ["which", "ripwire"]),
@@ -48,6 +52,47 @@ def test_container_binary_presence_and_execution(
     valid_returncodes = (0, 2) if binary_name == "markdownlint-cli2" else (0,)
     assert res.returncode in valid_returncodes, (
         f"Command '{' '.join(cmd)}' failed with code {res.returncode}.\n"
+        f"Stdout: {res.stdout}\nStderr: {res.stderr}"
+    )
+
+
+@pytest.mark.container
+def test_repomix_version_matches_manifest(devbox_image: str, repo_root: Path):
+    manifest = json.loads((repo_root / "container" / "tool-versions.json").read_text())
+    expected_version = manifest["tools"]["repomix"]["version"]
+
+    res = run_in_devbox(devbox_image, ["repomix", "--version"], user="sandbox")
+
+    assert res.returncode == 0, (
+        f"Repomix version check failed.\nStdout: {res.stdout}\nStderr: {res.stderr}"
+    )
+    assert res.stdout.strip() == expected_version
+
+
+@pytest.mark.container
+def test_repomix_token_budget_overflow_fails(devbox_image: str):
+    res = run_in_devbox(
+        devbox_image,
+        [
+            "bash",
+            "-ceu",
+            r"""
+set -eu
+fixture="$(mktemp -d)"
+trap 'rm -rf "$fixture"' EXIT
+printf '%s\n' 'This fixture must exceed one token.' > "$fixture/source.txt"
+set +e
+repomix "$fixture" --output "$fixture/packed.xml" --token-budget 1
+status=$?
+set -e
+test "$status" -ne 0
+""",
+        ],
+        user="sandbox",
+        timeout=60,
+    )
+    assert res.returncode == 0, (
+        "Repomix accepted output over the token budget.\n"
         f"Stdout: {res.stdout}\nStderr: {res.stderr}"
     )
 
