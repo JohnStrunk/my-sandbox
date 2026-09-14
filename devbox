@@ -241,6 +241,60 @@ create_container() {
   return "$create_status"
 }
 
+# Linked git worktrees keep their repository metadata outside the worktree
+# directory: `$BIND_DIR/.git` is a pointer file recording a host-only
+# `gitdir:` path that doesn't exist inside the container, which makes every
+# Git operation from the mount fail (issue #148). When that happens, echo the
+# host path of the repository's common git directory (the pointer chain's
+# destination, containing objects/refs/config and the worktree admin dirs);
+# echo nothing for normal checkouts or when the metadata already lives inside
+# the bind mount (e.g. submodule gitdirs), so the container needs no extra
+# mount in those cases.
+git_worktree_metadata_dir() {
+  local gitfile="$BIND_DIR/.git"
+  [ -f "$gitfile" ] || return 0
+
+  local gitdir
+  gitdir="$(
+    sed -n '1{s/^gitdir:[[:space:]]*//;s/[[:space:]]*$//;p}' "$gitfile" 2>/dev/null
+  )"
+  [ -n "$gitdir" ] || return 0
+
+  case "$gitdir" in
+    /*) ;;
+    *) gitdir="$BIND_DIR/$gitdir" ;;
+  esac
+  gitdir="$(realpath -m -- "$gitdir" 2>/dev/null)" || return 0
+
+  # Metadata inside the bind mount is already visible in the container.
+  case "$gitdir/" in
+    "$BIND_DIR/"*) return 0 ;;
+  esac
+
+  # The pointer targets a worktree's administrative gitdir; the common gitdir
+  # recorded in `commondir` holds it under `worktrees/`, so mounting the
+  # common gitdir makes the whole pointer chain resolvable. Git treats an
+  # empty `commondir` as "the common dir is the gitdir itself".
+  if [ -f "$gitdir/commondir" ]; then
+    local commondir
+    commondir="$(head -n 1 -- "$gitdir/commondir" 2>/dev/null)"
+    if [ -n "$commondir" ]; then
+      case "$commondir" in
+        /*) ;;
+        *) commondir="$gitdir/$commondir" ;;
+      esac
+      gitdir="$(realpath -m -- "$commondir" 2>/dev/null)" || return 0
+    fi
+  fi
+
+  # The pointer is repository-controlled content, so only ever mount a
+  # directory that is actually a git directory; this keeps a crafted pointer
+  # from exfiltrating unrelated host paths (e.g. $HOME/.ssh) into the
+  # container.
+  [ -f "$gitdir/HEAD" ] || return 0
+  printf '%s' "$gitdir"
+}
+
 create_container_locked() {
   local source_fingerprint
   source_fingerprint="$(container_context_fingerprint)"
@@ -267,6 +321,17 @@ create_container_locked() {
   params+=(
     --volume "$BIND_DIR:$WORKDIR" \
   )
+
+  # For a linked worktree, mount the repository's git directory at its same
+  # host path so the `.git` pointer file resolves inside the container too.
+  local git_metadata_dir
+  git_metadata_dir="$(git_worktree_metadata_dir)"
+  if [ -n "$git_metadata_dir" ]; then
+    echo "==> Linked git worktree detected: also mounting git directory $git_metadata_dir"
+    params+=(
+      --volume "$git_metadata_dir:$git_metadata_dir" \
+    )
+  fi
 
   # Persistent storage shared across *all* devbox instances (not just this
   # directory's container):

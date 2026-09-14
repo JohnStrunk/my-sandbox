@@ -257,6 +257,60 @@ def parse_podman_calls(log_file: Path) -> list[list[str]]:
     return calls
 
 
+def _run_git(args: list[str], cwd: Path) -> None:
+    subprocess.run(
+        ["git", *args],
+        cwd=str(cwd),
+        check=True,
+        capture_output=True,
+    )
+
+
+def _init_repository(repo_dir: Path) -> None:
+    _run_git(["init", "-b", "main", "."], repo_dir)
+    _run_git(
+        [
+            "-c",
+            "user.name=Devbox Test",
+            "-c",
+            "user.email=devbox-test@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "initial",
+        ],
+        repo_dir,
+    )
+
+
+def _assert_host_git_mount(volumes: list[str], path: Path) -> None:
+    resolved = str(path.resolve())
+    assert f"{resolved}:{resolved}" in volumes
+
+
+def _assert_no_host_git_mount(volumes: list[str], path: Path) -> None:
+    resolved = str(path.resolve())
+    assert not any(volume.rsplit(":", 1)[-1] == resolved for volume in volumes)
+
+
+def _write_dot_git_pointer(tmp_path: Path, gitdir: Path) -> Path:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".git").write_text(f"gitdir: {gitdir}\n")
+    return project
+
+
+def _create_container_volumes(log_file: Path) -> list[str]:
+    calls = parse_podman_calls(log_file)
+    run_call = next((c for c in calls if c and c[0] == "run" and "-d" in c), None)
+    assert run_call is not None
+    return [
+        run_call[index + 1]
+        for index, arg in enumerate(run_call[:-1])
+        if arg == "--volume"
+    ]
+
+
 @pytest.mark.unit
 def test_devbox_gemini_env(devbox_path: Path, mock_podman_env, tmp_path: Path):
     env, log_file = mock_podman_env
@@ -1594,3 +1648,124 @@ def test_devbox_warns_when_docker_api_never_ready(
     res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir, timeout=60)
     assert res.returncode == 0, res.stderr
     assert "Docker API did not become ready" in res.stderr
+
+
+@pytest.mark.unit
+def test_devbox_mounts_git_directory_for_linked_worktree(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    # Issue #148: a linked worktree's `.git` pointer file references a
+    # host-only gitdir path, so the launcher must additionally mount the
+    # repository's git directory at the same path inside the container.
+    env, log_file = mock_podman_env
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repository(repo)
+    worktree = tmp_path / "linked-worktree"
+    _run_git(["worktree", "add", "-b", "feature", str(worktree)], repo)
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=worktree)
+    assert res.returncode == 0, res.stderr
+    assert "Linked git worktree detected" in res.stdout
+
+    volumes = _create_container_volumes(log_file)
+    _assert_host_git_mount(volumes, repo / ".git")
+    assert any(str(worktree.resolve()) in volume for volume in volumes)
+
+
+@pytest.mark.unit
+def test_devbox_mounts_separate_git_dir_without_commondir(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    # A `--separate-git-dir` style pointer (no `commondir` file) still names
+    # the git directory that must be mounted for Git to work in the mount.
+    env, log_file = mock_podman_env
+    gitdir = tmp_path / "external-git-dir"
+    gitdir.mkdir()
+    (gitdir / "HEAD").write_text("ref: refs/heads/main\n")
+    project = _write_dot_git_pointer(tmp_path, gitdir)
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=project)
+    assert res.returncode == 0, res.stderr
+    assert "Linked git worktree detected" in res.stdout
+
+    volumes = _create_container_volumes(log_file)
+    _assert_host_git_mount(volumes, gitdir)
+
+
+@pytest.mark.unit
+def test_devbox_no_extra_mount_for_normal_checkout(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, log_file = mock_podman_env
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repository(repo)
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=repo)
+    assert res.returncode == 0, res.stderr
+    assert "Linked git worktree detected" not in res.stdout
+
+    volumes = _create_container_volumes(log_file)
+    _assert_no_host_git_mount(volumes, repo / ".git")
+
+
+@pytest.mark.unit
+def test_devbox_no_extra_mount_for_git_pointer_inside_worktree(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    # Relative `.git` pointer files (e.g. submodule style) that resolve to a
+    # path inside the bind mount stay resolvable in the container, so no
+    # extra mount is needed.
+    env, log_file = mock_podman_env
+    inner = tmp_path / "project" / "inner"
+    inner.mkdir(parents=True)
+    _init_repository(inner)
+    project = inner.parent
+    (project / ".git").write_text("gitdir: inner/.git\n")
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=project)
+    assert res.returncode == 0, res.stderr
+    assert "Linked git worktree detected" not in res.stdout
+
+    volumes = _create_container_volumes(log_file)
+    _assert_no_host_git_mount(volumes, inner / ".git")
+
+
+@pytest.mark.unit
+def test_devbox_ignores_malformed_dot_git_pointer(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, log_file = mock_podman_env
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".git").write_text("not a gitdir pointer\n")
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=project)
+    assert res.returncode == 0, res.stderr
+    assert "Linked git worktree detected" not in res.stdout
+
+    volumes = _create_container_volumes(log_file)
+    _assert_no_host_git_mount(volumes, project / ".git")
+
+
+@pytest.mark.unit
+def test_devbox_refuses_to_mount_non_git_dir_from_dot_git_pointer(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    # The `.git` pointer is repository-controlled content, so a crafted
+    # pointer must never turn an arbitrary host directory (e.g. ~/.ssh)
+    # into a container mount.
+    env, log_file = mock_podman_env
+    outside = tmp_path / "not-a-git-dir"
+    outside.mkdir()
+    (outside / "id_ed25519").write_text("secret key material")
+    project = _write_dot_git_pointer(tmp_path, outside)
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=project)
+    assert res.returncode == 0, res.stderr
+    assert "Linked git worktree detected" not in res.stdout
+
+    volumes = _create_container_volumes(log_file)
+    _assert_no_host_git_mount(volumes, outside)
+    assert not any(str(outside.resolve()) in volume for volume in volumes)
