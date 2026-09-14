@@ -30,6 +30,7 @@ RUN dnf install -y --setopt=install_weak_deps=False \
     ShellCheck \
     shadow-utils \
     sudo \
+    unzip \
     which \
     && dnf clean all \
     && rm -rf /var/cache/dnf
@@ -142,6 +143,37 @@ RUN ripwire_version="$(jq -er '.tools.ripwire.version' /tmp/devbox-tool-versions
     && if [ -d /usr/local/share/ripwire/hooks ]; then chmod +x /usr/local/share/ripwire/hooks/*.sh; fi \
     && rm -rf "/tmp/${ripwire_asset}" "/tmp/${ripwire_asset}.sha256" "${ripwire_root}"
 
+# Install ast-grep and stage the official agent skills. Verify both the
+# platform archive and the skill source archive before extracting them.
+RUN ast_grep_version="$(jq -er '.tools.ast_grep.version' /tmp/devbox-tool-versions.json)" \
+    && ast_grep_version="${ast_grep_version#v}" \
+    && ast_grep_skill_commit="$(jq -er '.tools.ast_grep.agent_skill.commit' /tmp/devbox-tool-versions.json)" \
+    && ast_grep_skill_checksum="$(jq -er '.tools.ast_grep.agent_skill.sha256' /tmp/devbox-tool-versions.json)" \
+    && case "${TARGETARCH}" in \
+        amd64) ast_grep_arch=x86_64; ast_grep_checksum="$(jq -er '.tools.ast_grep.checksums.amd64' /tmp/devbox-tool-versions.json)" ;; \
+        arm64) ast_grep_arch=aarch64; ast_grep_checksum="$(jq -er '.tools.ast_grep.checksums.arm64' /tmp/devbox-tool-versions.json)" ;; \
+        *) echo "Unsupported architecture for ast-grep: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+    && ast_grep_asset="app-${ast_grep_arch}-unknown-linux-gnu.zip" \
+    && curl -fsSL "https://github.com/ast-grep/ast-grep/releases/download/${ast_grep_version}/${ast_grep_asset}" -o "/tmp/${ast_grep_asset}" \
+    && printf '%s  %s\n' "${ast_grep_checksum}" "/tmp/${ast_grep_asset}" | sha256sum -c - \
+    && mkdir -p /tmp/ast-grep-bin \
+    && unzip -q "/tmp/${ast_grep_asset}" -d /tmp/ast-grep-bin \
+    && install -Dm755 /tmp/ast-grep-bin/ast-grep /usr/local/bin/ast-grep \
+    && install -Dm755 /tmp/ast-grep-bin/sg /usr/local/bin/sg \
+    && ast_grep_skill_archive="agent-skill-${ast_grep_skill_commit}.tar.gz" \
+    && curl -fsSL "https://github.com/ast-grep/agent-skill/archive/${ast_grep_skill_commit}.tar.gz" -o "/tmp/${ast_grep_skill_archive}" \
+    && printf '%s  %s\n' "${ast_grep_skill_checksum}" "/tmp/${ast_grep_skill_archive}" | sha256sum -c - \
+    && mkdir -p /tmp/ast-grep-skill \
+    && tar -C /tmp/ast-grep-skill -xzf "/tmp/${ast_grep_skill_archive}" \
+    && ast_grep_skill_root="/tmp/ast-grep-skill/agent-skill-${ast_grep_skill_commit}/ast-grep/skills" \
+    && install -d /usr/local/share/ast-grep/skills \
+    && cp -R "${ast_grep_skill_root}/ast-grep" /usr/local/share/ast-grep/skills/ \
+    && cp -R "${ast_grep_skill_root}/outline" /usr/local/share/ast-grep/skills/ast-grep-outline \
+    && chmod -R a+rX /usr/local/share/ast-grep \
+    && rm -rf "/tmp/${ast_grep_asset}" /tmp/ast-grep-bin \
+      "/tmp/${ast_grep_skill_archive}" /tmp/ast-grep-skill
+
 # Stage image-owned agent guidance separately from project-mounted skills. The
 # entrypoint copies this namespace after any host .agents mount is applied.
 COPY agent-skills/ /usr/local/share/devbox/skills/
@@ -230,6 +262,7 @@ RUN useradd --create-home --user-group --home-dir /sandbox --shell /bin/bash san
 # entrypoint refreshes both namespaces after any host .agents mount is applied.
 RUN mkdir -p /sandbox/.agents/skills \
     && cp -R /usr/local/share/devbox/skills/devbox-* /sandbox/.agents/skills/ \
+    && cp -R /usr/local/share/ast-grep/skills/ast-grep* /sandbox/.agents/skills/ \
     && chown -R sandbox:sandbox /sandbox/.agents \
     && /usr/sbin/runuser -u sandbox -- /usr/local/share/ripwire/skills/install.sh --codex
 

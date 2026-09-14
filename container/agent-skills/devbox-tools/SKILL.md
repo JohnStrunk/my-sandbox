@@ -47,6 +47,17 @@ repository `AGENTS.md` or README.
 - Prefer the relevant Ripwire skill and MCP operation over broad repository
   dumps or repeated grep/read loops.
 
+### ast-grep
+
+- Runtime command: `ast-grep` (with the `sg` alias).
+- Agent integration: the official `ast-grep` and `ast-grep-outline` skills are
+  staged into the active `.agents/skills` directory.
+- Use it for syntax-aware code search, lint rules, and AST-accurate rewrites;
+  start with `ast-grep --lang python -p '...' -r '...' path` and verify a
+  pattern or rule on a fixture before applying `-U` rewrites.
+- Fall back to ripwire for symbol/call-graph questions and `rg` for plain-text
+  searches where syntax is not relevant.
+
 ## Adding Entries
 
 Keep each entry short and operational. Include:

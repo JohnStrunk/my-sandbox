@@ -78,6 +78,7 @@ sync_builtin_skills() {
 
 sync_builtin_skills /usr/local/share/ripwire/skills ripwire- ripwire true
 sync_builtin_skills /usr/local/share/devbox/skills devbox- devbox
+sync_builtin_skills /usr/local/share/ast-grep/skills ast-grep ast-grep
 
 wait_for_socket() {
   for _ in {1..100}; do

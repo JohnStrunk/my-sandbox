@@ -36,6 +36,7 @@
       "description": "Keep canonical tool versions and their consumers together",
       "matchPackageNames": [
         "hadolint/hadolint",
+        "ast-grep/ast-grep",
         "markdownlint-cli2",
         "DavidAnson/markdownlint-cli2",
         "ruff",
