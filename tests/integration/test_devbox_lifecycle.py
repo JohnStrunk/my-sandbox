@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.conftest import run_bash_script
+from tests.conftest import devbox_container_name, run_bash_script, unique_workspace_dir
 
 
 @pytest.mark.integration
@@ -14,10 +14,11 @@ def test_devbox_lifecycle_create_exec_recreate_remove(
     tmp_path: Path,
     isolated_env: dict[str, str],
 ):
-    # Unique directory name for this test run
-    test_dir = tmp_path / "test_workspace"
-    test_dir.mkdir()
-    container_name = f"devbox-{test_dir.name}"
+    # Per-run unique directory name, hence a per-run unique container name
+    # (issue #152): a stale container from an interrupted run can never
+    # collide with this run's container.
+    test_dir = unique_workspace_dir(tmp_path, "test_workspace")
+    container_name = devbox_container_name(test_dir)
     host_agents = Path(isolated_env["HOME"]) / ".agents"
     (host_agents / "skills").mkdir(parents=True)
 
