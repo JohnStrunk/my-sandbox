@@ -33,6 +33,18 @@
       ],
     },
     {
+      // ast-grep's manifest entry also pins platform release checksums and the
+      // official agent-skill archive hash. Renovate cannot recompute those, so
+      // a version-only bump is caught by the "Verify release provenance
+      // checksums" CI step; run the refresh command below to update the whole
+      // unit together.
+      "description": "ast-grep version bumps must refresh release checksums + agent-skill pin",
+      "matchPackageNames": [
+        "ast-grep/ast-grep",
+      ],
+      "commitMessageSuffix": "(refresh release checksums + agent-skill pin via scripts/verify_provenance.py --update)",
+    },
+    {
       "description": "Keep canonical tool versions and their consumers together",
       "matchPackageNames": [
         "hadolint/hadolint",

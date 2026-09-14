@@ -19,6 +19,11 @@ This repository provides:
 - **Fully Rootless & Secure**: Runs via Podman using `--userns=keep-id` without
   requiring `--privileged` mode or added Linux capabilities. Files created
   inside the container remain owned by the host user.
+- **Git-Safe Worktree Mounts**: When launched from a linked Git worktree,
+  `devbox` also bind-mounts the repository's git directory at the same host
+  path inside the container, so the worktree's `.git` pointer file resolves
+  and Git commands keep working from the mounted worktree. Containers
+  created earlier pick this up on the next `devbox --recreate`.
 - **Nested Podman-in-Podman**: Build and run containers inside the devbox
   without host root permissions. Uses `fuse-overlayfs` and dynamic subordinate
   UID/GID delegation (`/etc/subuid` and `/etc/subgid`).
@@ -335,7 +340,8 @@ and `rg` for exact literal matches.
 ├── devbox                     # Main launcher script
 ├── scripts/
 │   ├── fast-check.sh          # Fast lint + unit test validation
-│   └── validate_tool_versions.py # Version consumer consistency check
+│   ├── validate_tool_versions.py # Version consumer consistency check
+│   └── verify_provenance.py   # Recompute/verify release checksums
 └── .pre-commit-config.yaml    # Pre-commit hook definitions
 ```
 
@@ -469,3 +475,23 @@ python3 scripts/validate_tool_versions.py
 
 The Renovate configuration updates the manifest and groups related pre-commit
 consumer updates so a version change remains synchronized.
+
+Some entries also pin release-provenance metadata that Renovate cannot
+recompute: `ast_grep` carries per-platform release checksums and the official
+agent-skill archive hash. Every such entry declares a
+`provenance.url_templates` block mapping each checksummed field to the asset
+that must hash to it, and the Dockerfile must read exactly those fields.
+
+Verify the pinned digests against upstream (this runs in CI, so a version-only
+bump fails fast rather than at image-build time), or refresh the whole unit in
+place after bumping a version:
+
+```shell
+python3 scripts/verify_provenance.py           # check (non-zero if stale)
+python3 scripts/verify_provenance.py --update  # recompute and rewrite digests
+```
+
+The check retries transient network errors and fails closed: an asset that
+cannot be fetched (or has not yet been published for a bumped version) is
+reported distinctly from a checksum mismatch, and the command exits non-zero
+either way so CI fails rather than silently passing.
