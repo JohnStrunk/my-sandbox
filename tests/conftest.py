@@ -3,6 +3,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -342,6 +343,27 @@ def devbox_image(podman_probe_result: PodmanProbeResult, dockerfile_path: Path) 
         return image_tag
     pytest.fail(f"Failed to build devbox image: {build_res.stderr}")
     return image_tag
+
+
+def unique_workspace_dir(tmp_path: Path, label: str) -> Path:
+    """Create a per-run unique launcher workspace directory under ``tmp_path``.
+
+    The `devbox` launcher names its container after the workspace directory
+    basename (``devbox-<dirname>``), so a fixed workspace name reuses the same
+    container across runs: a container left behind by an interrupted run then
+    collides with the next run, and parallel sessions collide on one container
+    and the launcher's per-name lock (issue #152). A random per-run suffix
+    gives every run its own container name, which the test's own cleanup
+    removes.
+    """
+    test_dir = tmp_path / f"{label}-{uuid.uuid4().hex[:8]}"
+    test_dir.mkdir()
+    return test_dir
+
+
+def devbox_container_name(test_dir: Path) -> str:
+    """The container name the launcher derives for a workspace directory."""
+    return f"devbox-{test_dir.name}"
 
 
 def run_bash_script(
