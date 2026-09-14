@@ -35,8 +35,8 @@ This repository provides:
     Node.js, and Playwright CLI with a bundled Chromium browser.
   - **Cloud & Productivity CLIs**: GitHub CLI (`gh`), GitLab CLI (`glab`),
     Google Cloud SDK (`gcloud`), Google Workspace CLI (`gws`), Atlassian CLI
-    (`acli`), Google Antigravity (`agy`), OpenCode (`opencode`), ripwire
-    (`ripwire`), and ast-grep (`ast-grep`, `sg`).
+    (`acli`), Google Antigravity (`agy`), OpenCode (`opencode`), Repomix
+    (`repomix`), ripwire (`ripwire`), and ast-grep (`ast-grep`, `sg`).
   - **Linters & Utilities**: `pre-commit`, `ripgrep`, `jq`, `shellcheck`,
     `hadolint`, `markdownlint-cli2`, `ffmpeg`, and process diagnostics
     (`ps`, `pgrep`) via `procps-ng`.
@@ -283,6 +283,19 @@ ast-grep --lang python -p 'print($ARG)' -r 'logger.info($ARG)' -U path/to/file.p
 
 Test a pattern or rule against a fixture first, and use ripwire for symbol or
 call-graph questions and `rg` for plain-text searches.
+
+For one-shot repository snapshots, use the image-installed `repomix` command.
+Always pass an explicit token budget so an oversized artifact fails rather than
+silently exceeding an agent's context window:
+
+```shell
+repomix --token-budget 12000 --compress
+```
+
+Use `--no-files` for a cheap directory and metadata map. Repomix's default
+Secretlint scan remains enabled, so do not pass `--no-security-check` in agent
+workflows. Use ripwire for ranked, incremental repository context or `rg` for
+plain-text searches when a portable snapshot is not needed.
 
 ---
 

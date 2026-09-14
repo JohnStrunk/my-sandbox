@@ -68,6 +68,14 @@
         "docker": true
       }
     },
+    "repomix": {
+      "version": "1.18.0",
+      "datasource": "npm",
+      "depName": "repomix",
+      "consumers": {
+        "docker": true
+      }
+    },
     "ast_grep": {
       "version": "0.45.3",
       "datasource": "github-releases",

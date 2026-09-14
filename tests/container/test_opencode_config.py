@@ -46,3 +46,32 @@ def test_ast_grep_skills_are_staged_and_active(devbox_image: str):
         "The active ast-grep skill does not have the expected OpenCode skill name.\n"
         f"Stdout: {res.stdout}\nStderr: {res.stderr}"
     )
+
+
+@pytest.mark.container
+def test_repomix_guidance_is_staged_and_active(devbox_image: str):
+    res = run_in_devbox(
+        devbox_image,
+        [
+            "bash",
+            "-ceu",
+            r"""
+set -eu
+source=/usr/local/share/devbox/skills/devbox-tools/SKILL.md
+active=/sandbox/.agents/skills/devbox-tools/SKILL.md
+test "$(sha256sum "$source" | cut -d ' ' -f1)" = \
+  "$(sha256sum "$active" | cut -d ' ' -f1)"
+awk '
+/^### Repomix$/ { repomix=1 }
+/--token-budget/ { budget=1 }
+/--no-security-check/ { security=1 }
+END { exit !(repomix && budget && security) }
+' "$source"
+""",
+        ],
+        user="sandbox",
+    )
+    assert res.returncode == 0, (
+        "Repomix guidance is not available to a fresh OpenCode session.\n"
+        f"Stdout: {res.stdout}\nStderr: {res.stderr}"
+    )
