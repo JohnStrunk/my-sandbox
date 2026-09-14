@@ -134,6 +134,33 @@ podman run --rm alpine uname -a
 opencode
 ```
 
+### Python Environments (`.venv`)
+
+A `.venv` created on the host records host-only interpreter paths and script
+shebangs, so reusing one inside a container fails (typically `Failed to spawn:
+pytest`) whenever `uv run` -- or anything else that discovers `.venv` -- picks
+it up from a bind-mounted project. To keep the documented
+`uv run --extra test pytest` workflow working, `devbox` shadows a project
+`.venv` **directory** with a per-project Podman named volume
+(`devbox-venv-<dirname>`) whenever one exists at container-creation time:
+
+- Inside the container, `.venv` starts empty and `uv run` creates a
+  container-native environment in it, so host shebangs are never executed.
+- The host `.venv` is only masked, never read or written, and is not created
+  for projects that don't already have one.
+- The volume survives `devbox --recreate`; `uv run` re-syncs the environment
+  against the lockfile on every invocation. Clear it with
+  `podman volume rm devbox-venv-<dirname>`.
+- A `.venv` that is a _symlink_ (or any other non-directory) can't be shadowed
+  safely; `devbox` warns and leaves it alone. Recreate it inside devbox instead
+  (`rm .venv && uv sync`).
+- Only the project root's `.venv` is shadowed; virtualenvs in nested
+  subprojects are not.
+- The shadow is established at container creation. If entering an older
+  container (created before the project had a `.venv`, or before this feature
+  existed) whose host project now has one, `devbox` warns that it isn't
+  shadowed; run `devbox --recreate` to pick up the mount.
+
 ### Git Identity & GitHub Authentication
 
 When a container is created, `devbox` configures a Git identity inside it: any
@@ -167,6 +194,7 @@ downloads or nested image builds whose inputs haven't changed:
 | `/sandbox/.cache/pre-commit` | Podman named volume `devbox-precommit-cache` | Pre-commit hook environments. |
 | `/sandbox/.cache/semble` | Podman named volume `devbox-semble-cache` | Semble's mtime-incremental code indexes. |
 | `/sandbox/.local/share/containers/storage` | Host directory `${XDG_CACHE_HOME:-~/.cache}/devbox/containers-storage` | Nested Podman/Buildah's own image and layer storage. |
+| `/sandbox/<project>/.venv` | Podman named volume `devbox-venv-<dirname>` | Container-local shadow of a host-created `.venv` (per project; see [Python Environments](#python-environments-venv)). |
 
 The knowledge base, `uv`, and pre-commit caches use Podman-managed named
 volumes because their exact host-side location doesn't matter. Nested
@@ -174,9 +202,10 @@ Podman/Buildah's storage instead uses a plain host directory so its size can be
 inspected and pruned with ordinary tools (`du -sh`, `rm -rf`) without needing
 `podman volume` commands.
 
-All four are shared across _every_ devbox instance, not just one project's
-container, so they persist even across `devbox --remove`; only deleting the
-volume/directory itself clears them:
+The first five entries above are shared across _every_ devbox instance, not
+just one project's container, and the per-project `.venv` shadow volume
+likewise survives its container, so all of them persist even across
+`devbox --remove`; only deleting the volume/directory itself clears them:
 
 ```shell
 # Shared knowledge base

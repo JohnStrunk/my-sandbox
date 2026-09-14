@@ -152,6 +152,10 @@ if [ "$1" = "rm" ] && [ "${{MOCK_RM_FAIL:-}}" = "1" ]; then
 fi
 
 if [ "$1" = "inspect" ]; then
+    if [ "${{MOCK_VENV_SHADOW_MOUNT:-}}" = "1" ] && echo "$*" | grep -q "Mounts"; then
+        echo "/sandbox/workdir/.venv /sandbox/kb /sandbox/.uv_cache "
+        exit 0
+    fi
     echo "true"
     exit 0
 fi
@@ -1769,3 +1773,124 @@ def test_devbox_refuses_to_mount_non_git_dir_from_dot_git_pointer(
     volumes = _create_container_volumes(log_file)
     _assert_no_host_git_mount(volumes, outside)
     assert not any(str(outside.resolve()) in volume for volume in volumes)
+
+
+def test_devbox_shadows_host_venv_with_container_volume(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    # Issue #154: a host-created .venv contains host-only interpreter paths,
+    # so the launcher must shadow it with a container-local named volume
+    # instead of letting uv run its broken shebangs.
+    env, log_file = mock_podman_env
+    run_dir = tmp_path / "workdir"
+    (run_dir / ".venv" / "bin").mkdir(parents=True)
+    (run_dir / ".venv" / "bin" / "pytest").write_text(
+        "#!/nonexistent/host/python\nraise SystemExit\n"
+    )
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0, res.stderr
+    assert "Shadowing host .venv" in res.stdout
+
+    calls = parse_podman_calls(log_file)
+    run_call = next((c for c in calls if c and c[0] == "run" and "-d" in c), None)
+    assert run_call is not None
+    volumes = [run_call[i + 1] for i, arg in enumerate(run_call) if arg == "--volume"]
+    assert f"devbox-venv-{run_dir.name}:/sandbox/{run_dir.name}/.venv" in volumes
+
+
+@pytest.mark.unit
+def test_devbox_no_venv_volume_when_host_venv_absent(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    # Projects without a .venv must be untouched: no shadow volume, and no
+    # mount-point directory is ever created in the host project.
+    env, log_file = mock_podman_env
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0, res.stderr
+    assert not (run_dir / ".venv").exists()
+
+    calls = parse_podman_calls(log_file)
+    run_call = next((c for c in calls if c and c[0] == "run" and "-d" in c), None)
+    assert run_call is not None
+    volumes = [run_call[i + 1] for i, arg in enumerate(run_call) if arg == "--volume"]
+    assert not any("/.venv" in volume for volume in volumes)
+
+
+@pytest.mark.unit
+def test_devbox_warns_on_symlinked_host_venv(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    # A symlinked .venv cannot be shadowed safely (the mount target would not
+    # resolve inside the container), so the launcher warns and skips it.
+    env, log_file = mock_podman_env
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+    outside = tmp_path / "shared-env"
+    outside.mkdir()
+    run_dir.joinpath(".venv").symlink_to(outside)
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0, res.stderr
+    assert "cannot be shadowed" in res.stderr
+
+    calls = parse_podman_calls(log_file)
+    run_call = next((c for c in calls if c and c[0] == "run" and "-d" in c), None)
+    assert run_call is not None
+    volumes = [run_call[i + 1] for i, arg in enumerate(run_call) if arg == "--volume"]
+    assert not any("/.venv" in volume for volume in volumes)
+
+
+@pytest.mark.unit
+def test_devbox_warns_on_non_directory_host_venv(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, log_file = mock_podman_env
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+    (run_dir / ".venv").write_text("not a virtualenv\n")
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0, res.stderr
+    assert "not a directory" in res.stderr
+
+    calls = parse_podman_calls(log_file)
+    run_call = next((c for c in calls if c and c[0] == "run" and "-d" in c), None)
+    assert run_call is not None
+    volumes = [run_call[i + 1] for i, arg in enumerate(run_call) if arg == "--volume"]
+    assert not any("/.venv" in volume for volume in volumes)
+
+
+@pytest.mark.unit
+def test_devbox_warns_when_existing_container_lacks_venv_shadow(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    # A container created before the project grew a host .venv (or before
+    # this feature existed) has no shadow mount; entering it must warn
+    # instead of silently running uv against host-only interpreter paths.
+    env, _ = mock_podman_env
+    env["MOCK_CONTAINER_EXISTS"] = "1"
+    run_dir = tmp_path / "workdir"
+    (run_dir / ".venv").mkdir(parents=True)
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0, res.stderr
+    assert "does not shadow the host .venv" in res.stderr
+
+
+@pytest.mark.unit
+def test_devbox_no_shadow_warning_when_container_has_venv_mount(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, _ = mock_podman_env
+    env["MOCK_CONTAINER_EXISTS"] = "1"
+    env["MOCK_VENV_SHADOW_MOUNT"] = "1"
+    run_dir = tmp_path / "workdir"
+    (run_dir / ".venv").mkdir(parents=True)
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0, res.stderr
+    assert "does not shadow the host .venv" not in res.stderr

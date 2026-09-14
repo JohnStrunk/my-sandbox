@@ -333,6 +333,26 @@ create_container_locked() {
     )
   fi
 
+  # A `.venv` created on the host contains interpreter paths and script
+  # shebangs that only exist on the host, so `uv run` (and anything else that
+  # discovers `.venv`) fails with e.g. "Failed to spawn: pytest" when it
+  # reuses one from a bind-mounted worktree. Shadow the project's `.venv`
+  # with a container-local named volume so tools create and use a
+  # container-native environment instead; the host directory is never read,
+  # written, or chowned. A symlinked `.venv` can't be shadowed safely (its
+  # mount target wouldn't resolve inside the container), so warn instead.
+  if [ -L "$BIND_DIR/.venv" ]; then
+    echo "==> WARNING: $BIND_DIR/.venv is a symlink and cannot be shadowed by a container-local environment; recreate it inside devbox (e.g. 'rm .venv && uv sync')" >&2
+  elif [ -d "$BIND_DIR/.venv" ]; then
+    local venv_volume="devbox-venv-${NAME#devbox-}"
+    echo "==> Shadowing host .venv with container-local volume '$venv_volume'"
+    params+=(
+      --volume "$venv_volume:$WORKDIR/.venv" \
+    )
+  elif [ -e "$BIND_DIR/.venv" ]; then
+    echo "==> WARNING: $BIND_DIR/.venv exists but is not a directory and cannot be shadowed; uv may reuse host-only interpreter paths from it" >&2
+  fi
+
   # Persistent storage shared across *all* devbox instances (not just this
   # directory's container):
   #   - The knowledge base and uv/pre-commit caches use Podman-managed named
@@ -1091,6 +1111,21 @@ EOF
   trap - INT TERM
 }
 
+warn_unshadowed_host_venv() {
+  if ! [ -d "$BIND_DIR/.venv" ] || [ -L "$BIND_DIR/.venv" ]; then
+    return 0
+  fi
+  local mount_destinations
+  mount_destinations="$(podman inspect \
+    -f '{{range .Mounts}}{{.Destination}} {{end}}' "$NAME" 2>/dev/null || true)"
+  case " $mount_destinations " in
+    *" $WORKDIR/.venv "*) ;;
+    *)
+      echo "==> WARNING: this container does not shadow the host .venv; run 'devbox --recreate' so uv uses a container-local environment instead of host-only interpreter paths" >&2
+      ;;
+  esac
+}
+
 enter_container() {
   if ! acquire_devbox_lock; then
     return 1
@@ -1130,6 +1165,7 @@ enter_container() {
     release_devbox_lock
     return "$enter_status"
   fi
+  warn_unshadowed_host_venv
   release_devbox_lock
   echo "==> Entering container '$NAME'"
   local exec_opts=("-i")
