@@ -3,7 +3,11 @@ from pathlib import Path
 
 import pytest
 
-from tests.conftest import run_bash_script
+from tests.conftest import (
+    devbox_container_name,
+    run_bash_script,
+    unique_workspace_dir,
+)
 
 ALPINE_IMAGE = "docker.io/library/alpine:3.22"
 TESTCONTAINERS_VERSION = "12.1.0"
@@ -191,7 +195,7 @@ def _remove_devbox(devbox_path: Path, test_dir: Path, env: dict[str, str]) -> No
     )
     if result.returncode != 0:
         subprocess.run(
-            ["podman", "rm", "-f", f"devbox-{test_dir.name}"],
+            ["podman", "rm", "-f", devbox_container_name(test_dir)],
             env=env,
             capture_output=True,
             check=False,
@@ -205,7 +209,7 @@ def _assert_devbox_is_unprivileged(test_dir: Path, env: dict[str, str]) -> None:
             "inspect",
             "--format",
             "{{.HostConfig.Privileged}}",
-            f"devbox-{test_dir.name}",
+            devbox_container_name(test_dir),
         ],
         env=env,
         capture_output=True,
@@ -220,8 +224,7 @@ def _assert_devbox_is_unprivileged(test_dir: Path, env: dict[str, str]) -> None:
 def nested_podman_available(
     devbox_path: Path, isolated_env: dict[str, str], tmp_path: Path
 ):
-    probe_dir = tmp_path / "docker_api_probe"
-    probe_dir.mkdir()
+    probe_dir = unique_workspace_dir(tmp_path, "docker_api_probe")
     try:
         probe = run_bash_script(
             devbox_path,
@@ -255,8 +258,7 @@ def test_docker_api_published_port(
     isolated_env: dict[str, str],
 ):
     del devbox_image, nested_podman_available
-    test_dir = tmp_path / "docker_api_port"
-    test_dir.mkdir()
+    test_dir = unique_workspace_dir(tmp_path, "docker_api_port")
     _prepare_testcontainers_project(test_dir, HTTP_SMOKE_SCRIPT, "http-smoke.cjs")
 
     try:
@@ -323,8 +325,7 @@ def test_docker_api_user_defined_network_aliases(
     isolated_env: dict[str, str],
 ):
     del devbox_image, nested_podman_available
-    test_dir = tmp_path / "docker_api_network"
-    test_dir.mkdir()
+    test_dir = unique_workspace_dir(tmp_path, "docker_api_network")
     _prepare_testcontainers_project(test_dir, NETWORK_SMOKE_SCRIPT, "network-smoke.cjs")
 
     try:

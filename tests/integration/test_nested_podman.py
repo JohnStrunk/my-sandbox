@@ -3,15 +3,18 @@ from pathlib import Path
 
 import pytest
 
-from tests.conftest import run_bash_script
+from tests.conftest import (
+    devbox_container_name,
+    run_bash_script,
+    unique_workspace_dir,
+)
 
 
 def _check_nested_podman_supported(
     devbox_path: Path, tmp_path: Path, env: dict[str, str]
 ) -> bool:
-    test_dir = tmp_path / "check_nested"
-    test_dir.mkdir(exist_ok=True)
-    container_name = f"devbox-{test_dir.name}"
+    test_dir = unique_workspace_dir(tmp_path, "check_nested")
+    container_name = devbox_container_name(test_dir)
     try:
         res = run_bash_script(
             devbox_path,
@@ -36,9 +39,7 @@ def nested_podman_available(
     isolated_env: dict[str, str],
     tmp_path: Path,
 ) -> bool:
-    tmp = tmp_path / "nested_check"
-    tmp.mkdir()
-    if not _check_nested_podman_supported(devbox_path, tmp, isolated_env):
+    if not _check_nested_podman_supported(devbox_path, tmp_path, isolated_env):
         pytest.skip("Nested user namespaces not supported in this host/container env")
     return True
 
@@ -51,9 +52,8 @@ def test_nested_podman_run(
     tmp_path: Path,
     isolated_env: dict[str, str],
 ):
-    test_dir = tmp_path / "nested_run_ws"
-    test_dir.mkdir()
-    container_name = f"devbox-{test_dir.name}"
+    test_dir = unique_workspace_dir(tmp_path, "nested_run_ws")
+    container_name = devbox_container_name(test_dir)
 
     try:
         # Run nested podman command inside devbox
@@ -91,9 +91,8 @@ def test_nested_podman_build(
     tmp_path: Path,
     isolated_env: dict[str, str],
 ):
-    test_dir = tmp_path / "nested_build_ws"
-    test_dir.mkdir()
-    container_name = f"devbox-{test_dir.name}"
+    test_dir = unique_workspace_dir(tmp_path, "nested_build_ws")
+    container_name = devbox_container_name(test_dir)
 
     # Create a minimal Containerfile in the workspace
     containerfile = test_dir / "Containerfile"
