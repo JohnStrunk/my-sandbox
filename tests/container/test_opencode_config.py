@@ -1,3 +1,6 @@
+import json
+import subprocess
+
 import pytest
 
 from tests.conftest import run_in_devbox
@@ -75,3 +78,45 @@ END { exit !(repomix && budget && security) }
         "Repomix guidance is not available to a fresh OpenCode session.\n"
         f"Stdout: {res.stdout}\nStderr: {res.stderr}"
     )
+
+
+@pytest.mark.container
+def test_fresh_opencode_session_discovers_semble(devbox_image: str):
+    config = json.dumps(
+        {
+            "mcp": {
+                "semble": {
+                    "type": "local",
+                    "command": ["semble"],
+                    "enabled": True,
+                }
+            }
+        }
+    )
+    res = subprocess.run(
+        [
+            "podman",
+            "run",
+            "--rm",
+            "--network",
+            "none",
+            "--user",
+            "sandbox",
+            "--env",
+            f"OPENCODE_CONFIG_CONTENT={config}",
+            devbox_image,
+            "opencode",
+            "mcp",
+            "list",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    output = f"{res.stdout}\n{res.stderr}"
+    assert res.returncode == 0, (
+        f"A fresh OpenCode session could not connect to Semble.\n{output}"
+    )
+    assert "semble" in output
+    assert "connected" in output

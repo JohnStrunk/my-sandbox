@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+real_semble=/sandbox/.local/bin/semble-bin
+
+if [[ "${1:-}" == search ]]; then
+  translated_args=()
+  json_requested=false
+  for arg in "$@"; do
+    if [[ "$arg" == --json ]]; then
+      json_requested=true
+    else
+      translated_args+=("$arg")
+    fi
+  done
+  if [[ "$json_requested" == true ]]; then
+    translated_args+=(--format json)
+  fi
+  exec "$real_semble" "${translated_args[@]}"
+fi
+
+exec "$real_semble" "$@"

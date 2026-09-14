@@ -74,6 +74,21 @@ repository `AGENTS.md` or README.
   `tests/container/test_opencode_config.py` and
   `tests/container/test_image_binaries.py`.
 
+### Semble
+
+- Runtime command: `semble` (including `semble search` and its local MCP
+  server).
+- Agent integration: OpenCode receives the always-on local `semble` MCP server.
+- Use it for vague natural-language code searches, for example:
+  `semble search "where are failed requests retried" . --json`.
+- Fall back to ripwire for symbol, call-graph, and impact questions, or `rg` for
+  exact literal matches.
+- The embedding model is baked into the image and incremental indexes live in
+  the shared `/sandbox/.cache/semble` volume, so queries need no network or API
+  key after the image is built.
+- The runtime search and fresh OpenCode MCP discovery are covered by container
+  tests.
+
 ## Adding Entries
 
 Keep each entry short and operational. Include:
