@@ -13,11 +13,15 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 RUN dnf install -y --setopt=install_weak_deps=False \
     ca-certificates \
     curl \
+    difftastic \
+    fd-find \
     ffmpeg-free \
     gh \
     git \
     glab \
     gnupg2 \
+    hyperfine \
+    just \
     jq \
     libcap \
     nodejs22-full-i18n \
@@ -30,6 +34,7 @@ RUN dnf install -y --setopt=install_weak_deps=False \
     ShellCheck \
     shadow-utils \
     sudo \
+    tokei \
     unzip \
     which \
     && dnf clean all \

@@ -41,6 +41,9 @@ This repository provides:
   - **Linters & Utilities**: `pre-commit`, `ripgrep`, `jq`, `shellcheck`,
     `hadolint`, `markdownlint-cli2`, `ffmpeg`, and process diagnostics
     (`ps`, `pgrep`) via `procps-ng`.
+  - **Agent token-hygiene utilities**: Fedora 44 packages `tokei` 14.0.0,
+    `just` 1.57.0, `difftastic` 0.69.0 (command `difft`), `hyperfine` 1.20.0,
+    and `fd-find` 10.4.2 (command `fd`).
 - **Automatic Host Credential & Config Passthrough**: `devbox` detects and
   bind-mounts existing host configurations (GitHub tokens, Google Cloud ADC,
   Atlassian CLI, Google Workspace, LiteMaaS API keys, and OpenCode

@@ -52,6 +52,38 @@ def test_ast_grep_skills_are_staged_and_active(devbox_image: str):
 
 
 @pytest.mark.container
+def test_devbox_tools_skill_is_staged_and_active(devbox_image: str):
+    for skill_path in (
+        "/usr/local/share/devbox/skills/devbox-tools/SKILL.md",
+        "/sandbox/.agents/skills/devbox-tools/SKILL.md",
+    ):
+        res = run_in_devbox(
+            devbox_image,
+            ["test", "-f", skill_path],
+            user="sandbox",
+        )
+        assert res.returncode == 0, (
+            f"devbox-tools skill missing at {skill_path}.\n"
+            f"Stdout: {res.stdout}\nStderr: {res.stderr}"
+        )
+
+    res = run_in_devbox(
+        devbox_image,
+        [
+            "grep",
+            "-q",
+            '^name: "devbox-tools"$',
+            "/sandbox/.agents/skills/devbox-tools/SKILL.md",
+        ],
+        user="sandbox",
+    )
+    assert res.returncode == 0, (
+        "The active devbox-tools skill does not have the expected OpenCode "
+        f"skill name.\nStdout: {res.stdout}\nStderr: {res.stderr}"
+    )
+
+
+@pytest.mark.container
 def test_repomix_guidance_is_staged_and_active(devbox_image: str):
     res = run_in_devbox(
         devbox_image,

@@ -89,6 +89,47 @@ repository `AGENTS.md` or README.
 - The runtime search and fresh OpenCode MCP discovery are covered by container
   tests.
 
+### Token-hygiene utilities
+
+The Fedora package names are `tokei`, `just`, `difftastic`, `hyperfine`, and
+`fd-find`. Their command names are `tokei`, `just`, `difft`, `hyperfine`, and
+`fd`, respectively.
+
+### tokei
+
+- Use `tokei .` for repository size and per-language file/SLOC counts; use
+  `tokei -o json` when the result will be parsed by another command.
+- Fall back to `rg --files` and targeted reads when a repository is too large
+  for the output budget or only a file list is needed.
+
+### just
+
+- Use `just --list` to inspect the available recipes when the repository has a
+  `justfile`; this lists commands without running a recipe.
+- A Makefile-only repository gains nothing from `just`, so use normal tools for
+  Makefile archaeology instead.
+
+### difft
+
+- Use `difft old/path new/path` for syntax-aware comparisons when moved or
+  refactored code would be easy to misread in a line diff.
+- Fall back to `git diff` when the syntax-aware output is longer than the
+  available context or the file type is unsupported.
+
+### hyperfine
+
+- Use `hyperfine --warmup 3 'command'` for repeatable command timing instead
+  of writing an ad-hoc timing loop; quote the command as one argument.
+- Fall back to `time` for a one-off measurement or when a command must not be
+  repeated.
+
+### fd
+
+- Use `fd pattern path` for fast, gitignore-aware file discovery; add
+  `--hidden --exclude .git` when hidden files are part of the search.
+- Fall back to `rg --files` when its file-listing behavior is sufficient or
+  when `fd` is unavailable.
+
 ## Adding Entries
 
 Keep each entry short and operational. Include:
