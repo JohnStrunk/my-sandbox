@@ -1,0 +1,34 @@
+---
+name: Trial
+description: >-
+  A timeboxed experiment with an adopt/opt-in/drop decision bar. Trial
+  issues still carry one status, value, and confidence label.
+labels:
+  - trial
+  - ready
+  - value:medium
+  - confidence:medium
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: The gap being explored.
+    validations:
+      required: true
+  - type: textarea
+    id: candidate
+    attributes:
+      label: Candidate
+      description: The tool or approach being trialed.
+    validations:
+      required: true
+  - type: textarea
+    id: plan
+    attributes:
+      label: Trial plan and decision bar
+      description: >-
+        The guarded trial steps and the evidence required to adopt, keep
+        opt-in, or drop.
+    validations:
+      required: true
