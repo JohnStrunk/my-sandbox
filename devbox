@@ -696,7 +696,7 @@ EOF
         "apiKey": "{env:PRICETAG_API_KEY}"
       },
       "models": {
-        "Inferact/Qwen3.8-Flash-Next-NVFP4": {
+        "qwen38-flash-next": {
           "name": "Qwen 3.8 Flash Next (free)",
           "limit": {
             "context": 262144,

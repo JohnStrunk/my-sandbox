@@ -855,7 +855,7 @@ def test_devbox_pricetag_env_and_provider_config(
                 "apiKey": "{env:PRICETAG_API_KEY}",
             },
             "models": {
-                "Inferact/Qwen3.8-Flash-Next-NVFP4": {
+                "qwen38-flash-next": {
                     "name": "Qwen 3.8 Flash Next (free)",
                     "limit": {"context": 262144, "output": 8192},
                 },
