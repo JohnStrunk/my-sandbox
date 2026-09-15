@@ -357,6 +357,7 @@ and `rg` for exact literal matches.
 .
 ├── .github/
 │   ├── workflows/             # GitHub Actions CI workflows
+│   ├── ISSUE_TEMPLATE/        # Issue forms with triage label defaults
 │   ├── lint-all.sh            # Script to run pre-commit across all files
 │   ├── markdownlint-cli2.yaml # Markdown lint configuration
 │   ├── mergify.yml            # Mergify PR automation rules
@@ -373,6 +374,21 @@ and `rg` for exact literal matches.
 │   └── verify_provenance.py   # Recompute/verify release checksums
 └── .pre-commit-config.yaml    # Pre-commit hook definitions
 ```
+
+---
+
+## Issue Triage
+
+Every open work issue carries labels that let an agent or human pick the
+next issue from a single list query, without opening bodies: exactly one
+status label (`ready` or `blocked`), one value label (`value:high`,
+`value:medium`, `value:low`), and one confidence label
+(`confidence:high`, `confidence:medium`, `confidence:low`); `trial` marks
+timeboxed experiments. Real dependencies use GitHub's native "Blocked by"
+relationship. The issue forms in
+[`.github/ISSUE_TEMPLATE/`](.github/ISSUE_TEMPLATE) preselect the
+defaults; [`AGENTS.md`](AGENTS.md) documents the full vocabulary and the
+selection order.
 
 ---
 

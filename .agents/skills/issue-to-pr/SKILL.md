@@ -18,29 +18,43 @@ named issue.
 ## When no issue is named: choose the highest-value one
 
 Do not equate value with issue number, recency, or how easy an issue looks.
-Select the highest-value open, unassigned, unblocked issue.
+Select the highest-value open, unassigned, unblocked issue. This repo labels
+issues for exactly that decision (see the triage vocabulary in `AGENTS.md`);
+use the labels first and reserve full-body reads for what they cannot answer.
 
-1. Enumerate open, unassigned issues (`gh issue list --state open --search
-   "no:assignee"`; the GitHub MCP `list_issues` filter works too -- note that
-   `--assignee ""` is a no-op and still returns assigned issues). Read each
-   candidate's labels, custom project fields, description, comments,
-   dependencies, and linked issues.
-2. Impact: weigh severity, how many people or flows are affected, how often it
-   happens, urgency, risk reduction, and strategic alignment.
-3. Confidence and effort: estimate implementation effort, external and internal
-   dependencies (is it blocked?), and whether the acceptance criteria are
-   actionable enough to prove "done".
-4. Rank with a transparent, concise rationale (a short score or ordered list
-   with issue references). Impact leads the ranking: do not let low effort
-   override a materially higher-impact issue unless you document the tradeoff.
-5. When labels or priority fields are missing or incomplete, state the
-   assumptions you made and choose the best value-to-effort candidate the
-   available evidence supports; never guess silently.
-6. Ask the user only when the ambiguity would materially change which issue is
-   selected; otherwise proceed and record your reasoning.
+1. Enumerate candidates with one list call that includes labels, assignees,
+   and dependency summaries -- for example `gh api
+   'repos/<owner>/<repo>/issues?state=open&per_page=100'` returns all three
+   per item (the GitHub MCP `list_issues` filter works too -- note that
+   `--assignee ""` is a no-op and still returns assigned issues). Keep
+   issues that are unassigned, labeled `ready`, not labeled `blocked`, and
+   whose `issue_dependencies_summary.total_blocked_by` is 0. An open
+   unassigned issue carrying no triage labels at all is not dropped here;
+   keep it as a step-5 candidate so untriaged work stays selectable.
+2. Rank the candidates by their labels: `value:high` before `value:medium`
+   before `value:low`, ties broken by `confidence:high` before
+   `confidence:medium` before `confidence:low`.
+3. Spend the read budget the confidence tier allows: a
+   `confidence:high` issue is selectable from list output alone;
+   `confidence:medium` warrants a quick body check; select
+   `confidence:low` only after a body read (or a clarifying question)
+   confirms it is worth the effort.
+4. Labels are a prior, not a verdict. Weigh severity, how many people or
+   flows are affected, urgency, risk reduction, and strategic alignment;
+   impact leads the ranking: do not let low effort override a materially
+   higher-impact issue unless you document the tradeoff.
+5. When triage labels are missing, contradictory, or absent from the repo,
+   state the assumptions you made, fall back to reading descriptions,
+   comments, dependencies, and linked issues, and choose the best
+   value-to-effort candidate the available evidence supports; never guess
+   silently.
+6. Rank with a transparent, concise rationale (a short score or ordered
+   list with issue references). Ask the user only when the ambiguity would
+   materially change which issue is selected; otherwise proceed and record
+   your reasoning.
 7. Search for duplicates before creating any follow-up issue.
-8. Record why the chosen issue is highest value in both the issue comment and
-   the pull request body.
+8. Record why the chosen issue is highest value in both the issue comment
+   and the pull request body.
 9. Claim the issue (assign it to yourself) before writing any code.
 
 ## Issue-to-PR workflow

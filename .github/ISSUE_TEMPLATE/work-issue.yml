@@ -1,0 +1,38 @@
+---
+name: Work issue
+description: >-
+  A bug, task, or feature to implement. The triage labels below are
+  preselected defaults; set exactly one value and one confidence label
+  before leaving triage.
+labels:
+  - ready
+  - value:medium
+  - confidence:medium
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Selection vocabulary (see `AGENTS.md`): exactly one of
+        `ready`/`blocked`; one of `value:high`/`value:medium`/`value:low`;
+        one of `confidence:high`/`confidence:medium`/`confidence:low`.
+        Use GitHub's "Blocked by" relationship for dependencies on other
+        issues; the `blocked` label is for non-issue blockers only.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is wrong or missing, and what it affects.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed improvement
+      description: The intended approach, if already known.
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: How "done" will be proven.
+    validations:
+      required: true
