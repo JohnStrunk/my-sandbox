@@ -89,6 +89,27 @@ repository `AGENTS.md` or README.
 - The runtime search and fresh OpenCode MCP discovery are covered by container
   tests.
 
+### Project-aware Go toolchains
+
+- Runtime command: `devbox-go`.
+- Use it from a Go project when the project's `go.work` or `go.mod` declares a
+  different toolchain than the image default. `devbox-go --doctor` reports the
+  selected version, `devbox-go version` runs Go with it, and
+  `devbox-go install <tool-module>@<version>` builds a Go tool with it.
+- `devbox-go run COMMAND ...` exports `GOTOOLCHAIN` to child commands that
+  invoke Go. It cannot change the Go runtime embedded in an already-compiled
+  binary. Installed tools use the persistent Go cache's `bin` directory, which
+  is on `PATH`; use a precompiled tool's own version-selection mechanism when
+  needed.
+- Go's downloaded toolchains and module cache live under the persistent
+  `/sandbox/.cache/go` volume. `devbox --recreate` keeps that cache.
+- If `devbox-go` is unavailable, use the reported `GOTOOLCHAIN=<version>+auto`
+  value explicitly with the Go command or tool. Without a discoverable
+  `go.work` or `go.mod`, the command fails rather than silently selecting the
+  image default.
+- Unit coverage is in `tests/unit/test_devbox_go.py`; container availability is
+  covered by `tests/container/test_image_binaries.py`.
+
 ### Token-hygiene utilities
 
 The Fedora package names are `tokei`, `just`, `difftastic`, `hyperfine`, and

@@ -1,0 +1,243 @@
+#!/usr/bin/env bash
+# Select the Go toolchain declared by the active project.
+
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: devbox-go {doctor|env|run COMMAND [ARG ...]|[go arguments ...]}
+
+Select the active project's Go toolchain before running Go or a Go-based tool.
+
+Commands:
+  doctor                 Report the project and selected toolchain.
+  env [--] [COMMAND ...] Print the selected environment or run a command with it.
+  run COMMAND [ARG ...]  Run an arbitrary command with the selected environment.
+  [go arguments ...]     Run the image's Go command with the selection.
+
+The active go.work takes precedence over go.mod. Use GOWORK=off to ignore a
+workspace file. Toolchains downloaded by Go are cached under the devbox Go
+cache and survive container recreation.
+EOF
+}
+
+die() {
+  printf 'devbox-go: %s\n' "$*" >&2
+  exit 1
+}
+
+find_upward() {
+  local filename="$1"
+  local directory="$PWD"
+
+  while :; do
+    if [[ -f "$directory/$filename" ]]; then
+      printf '%s\n' "$directory/$filename"
+      return 0
+    fi
+    [[ "$directory" == "/" ]] && return 1
+    directory="${directory%/*}"
+    [[ -n "$directory" ]] || directory=/
+  done
+}
+
+find_workspace() {
+  case "${GOWORK:-}" in
+    off)
+      return 1
+      ;;
+    "" | auto)
+      find_upward go.work
+      ;;
+    *)
+      [[ "$GOWORK" == /* ]] \
+        || die "GOWORK must be an absolute path or 'auto'/'off': $GOWORK"
+      [[ -f "$GOWORK" ]] || die "GOWORK points to a missing file: $GOWORK"
+      printf '%s\n' "$GOWORK"
+      ;;
+  esac
+}
+
+directive_value() {
+  local name="$1"
+  local file="$2"
+  awk -v name="$name" '
+    $1 == name {
+      value = $2
+      sub(/\r$/, "", value)
+      sub(/^"/, "", value)
+      sub(/"$/, "", value)
+      sub(/^`/, "", value)
+      sub(/`$/, "", value)
+      print value
+      exit
+    }
+  ' "$file"
+}
+
+valid_go_version() {
+  [[ "$1" =~ ^[0-9]+(\.[0-9]+){1,2}([a-z]+[0-9]+)?$ ]]
+}
+
+valid_toolchain() {
+  [[ "$1" =~ ^go[0-9]+(\.[0-9]+){1,2}([a-z]+[0-9]+)?([-A-Za-z0-9._]+)?$ ]]
+}
+
+normalize_go_version() {
+  local version="$1"
+  local major minor
+
+  if [[ "$version" =~ ^([0-9]+)\.([0-9]+)(\.0)?$ ]]; then
+    major="${BASH_REMATCH[1]}"
+    minor="${BASH_REMATCH[2]}"
+    if [[ "$major" == 1 ]] && (( minor < 21 )); then
+      printf '%s.%s\n' "$major" "$minor"
+    elif [[ -n "${BASH_REMATCH[3]}" ]]; then
+      printf '%s\n' "$version"
+    else
+      printf '%s.%s.0\n' "$major" "$minor"
+    fi
+    return
+  fi
+  printf '%s\n' "$version"
+}
+
+WORKSPACE_FILE=""
+MODULE_FILE=""
+WORKSPACE_GO=""
+WORKSPACE_TOOLCHAIN=""
+MODULE_GO=""
+MODULE_TOOLCHAIN=""
+SELECTION_SOURCE=""
+DECLARED_GO=""
+DECLARED_TOOLCHAIN=""
+SELECTED_TOOLCHAIN=""
+GOTOOLCHAIN_VALUE=""
+
+select_toolchain() {
+  local value="$1"
+
+  if [[ "$value" == default ]]; then
+    SELECTED_TOOLCHAIN=local
+    GOTOOLCHAIN_VALUE=auto
+    return
+  fi
+  if [[ "$value" =~ ^go([0-9]+\.[0-9]+)(\.0)?$ ]]; then
+    value="go$(normalize_go_version "${BASH_REMATCH[1]}${BASH_REMATCH[2]:-}")"
+  fi
+  valid_toolchain "$value" || die "unsupported toolchain directive '$value'"
+  SELECTED_TOOLCHAIN="$value"
+  GOTOOLCHAIN_VALUE="${value}+auto"
+}
+
+load_project() {
+  WORKSPACE_FILE="$(find_workspace || true)"
+  MODULE_FILE="$(find_upward go.mod || true)"
+
+  if [[ -z "$WORKSPACE_FILE" && -z "$MODULE_FILE" ]]; then
+    die "no go.work or go.mod found from $PWD"
+  fi
+
+  if [[ -n "$WORKSPACE_FILE" ]]; then
+    WORKSPACE_GO="$(directive_value go "$WORKSPACE_FILE")"
+    WORKSPACE_TOOLCHAIN="$(directive_value toolchain "$WORKSPACE_FILE")"
+  fi
+  if [[ -n "$MODULE_FILE" ]]; then
+    MODULE_GO="$(directive_value go "$MODULE_FILE")"
+    MODULE_TOOLCHAIN="$(directive_value toolchain "$MODULE_FILE")"
+  fi
+
+  if [[ -n "$WORKSPACE_TOOLCHAIN" ]]; then
+    SELECTION_SOURCE="$WORKSPACE_FILE"
+    DECLARED_GO="$WORKSPACE_GO"
+    DECLARED_TOOLCHAIN="$WORKSPACE_TOOLCHAIN"
+    select_toolchain "$WORKSPACE_TOOLCHAIN"
+  elif [[ -n "$WORKSPACE_GO" ]]; then
+    SELECTION_SOURCE="$WORKSPACE_FILE"
+    DECLARED_GO="$WORKSPACE_GO"
+    valid_go_version "$WORKSPACE_GO" \
+      || die "unsupported go directive '$WORKSPACE_GO' in $WORKSPACE_FILE"
+    select_toolchain "go$(normalize_go_version "$WORKSPACE_GO")"
+  elif [[ -n "$MODULE_TOOLCHAIN" ]]; then
+    SELECTION_SOURCE="$MODULE_FILE"
+    DECLARED_GO="$MODULE_GO"
+    DECLARED_TOOLCHAIN="$MODULE_TOOLCHAIN"
+    select_toolchain "$MODULE_TOOLCHAIN"
+  elif [[ -n "$MODULE_GO" ]]; then
+    SELECTION_SOURCE="$MODULE_FILE"
+    DECLARED_GO="$MODULE_GO"
+    valid_go_version "$MODULE_GO" \
+      || die "unsupported go directive '$MODULE_GO' in $MODULE_FILE"
+    select_toolchain "go$(normalize_go_version "$MODULE_GO")"
+  else
+    SELECTION_SOURCE="${WORKSPACE_FILE:-$MODULE_FILE}"
+    select_toolchain default
+  fi
+}
+
+print_report() {
+  printf 'Working directory: %s\n' "$PWD"
+  printf 'Workspace: %s\n' "${WORKSPACE_FILE:-<none>}"
+  printf 'Module: %s\n' "${MODULE_FILE:-<none>}"
+  printf 'Go directive: %s\n' "${DECLARED_GO:-<none>}"
+  printf 'Toolchain directive: %s\n' "${DECLARED_TOOLCHAIN:-<none>}"
+  printf 'Selection source: %s\n' "$SELECTION_SOURCE"
+  printf 'Selected toolchain: %s\n' "$SELECTED_TOOLCHAIN"
+  printf 'GOTOOLCHAIN: %s\n' "$GOTOOLCHAIN_VALUE"
+  printf 'Go cache: %s\n' "${GOPATH:-/sandbox/.cache/go}"
+}
+
+print_environment() {
+  printf 'export GOTOOLCHAIN=%q\n' "$GOTOOLCHAIN_VALUE"
+  printf 'export PATH=%q\n' "${PATH:-}:$(go_bin_dir)"
+}
+
+go_bin_dir() {
+  if [[ -n "${GOBIN:-}" ]]; then
+    printf '%s\n' "$GOBIN"
+    return
+  fi
+  local go_path="${GOPATH:-/sandbox/.cache/go}"
+  printf '%s/bin\n' "${go_path%%:*}"
+}
+
+run_with_selection() {
+  env "GOTOOLCHAIN=$GOTOOLCHAIN_VALUE" "PATH=${PATH:-}:$(go_bin_dir)" "$@"
+}
+
+case "${1:-}" in
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  doctor | --doctor)
+    [[ $# -eq 1 ]] || die "doctor does not accept arguments"
+    load_project
+    print_report
+    ;;
+  env | --env)
+    shift
+    load_project
+    [[ "${1:-}" == -- ]] && shift
+    if [[ $# -eq 0 ]]; then
+      print_environment
+    else
+      run_with_selection "$@"
+    fi
+    ;;
+  run | --run)
+    shift
+    [[ $# -gt 0 ]] || die "run requires a command"
+    load_project
+    run_with_selection "$@"
+    ;;
+  --)
+    shift
+    load_project
+    run_with_selection go "$@"
+    ;;
+  *)
+    load_project
+    run_with_selection go "$@"
+    ;;
+esac

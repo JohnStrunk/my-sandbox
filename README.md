@@ -161,6 +161,37 @@ it up from a bind-mounted project. To keep the documented
   existed) whose host project now has one, `devbox` warns that it isn't
   shadowed; run `devbox --recreate` to pick up the mount.
 
+### Go Project Toolchains
+
+The image includes a manifest-pinned Go toolchain, but a project can require an
+older version for its build or analysis tools. From a Go project, use
+`devbox-go` to select the version declared by the active `go.work` or `go.mod`:
+
+```shell
+devbox-go --doctor
+devbox-go version
+devbox-go test ./...
+devbox-go install <tool-module>@<version>
+devbox-go run make test
+```
+
+The workspace file takes precedence over a module file. `devbox-go --doctor`
+reports the selected version and the `GOTOOLCHAIN` value it applies. A missing
+project file is an error so an unrelated image default is never selected by
+accident. If a project file has no explicit version, the doctor reports that
+Go's default selection is being used. Go can download the selected toolchain
+through its normal proxy and checksum flow; downloaded toolchains and the module
+cache are stored in the persistent `devbox-go-cache` volume. Use
+`devbox --recreate` after image changes, but do not need to redownload a
+toolchain already present in that volume.
+
+`devbox-go run` exports `GOTOOLCHAIN` to a child command that invokes `go`; it
+cannot change the Go runtime embedded in an already-compiled binary. Install
+source-built Go tools with `devbox-go install` so the selected toolchain builds
+them; installed binaries are placed in the persistent Go cache's `bin` path,
+which the image adds to `PATH`. Use a precompiled tool's own version-selection
+mechanism otherwise.
+
 ### Git Identity & GitHub Authentication
 
 When a container is created, `devbox` configures a Git identity inside it: any
@@ -190,6 +221,7 @@ downloads or nested image builds whose inputs haven't changed:
 | Path | Backing | Notes |
 | --- | --- | --- |
 | `/sandbox/kb` | Podman named volume `devbox-kb` | Shared knowledge-base checkout. |
+| `/sandbox/.cache/go` | Podman named volume `devbox-go-cache` | Go module and downloaded toolchain cache. |
 | `/sandbox/.uv_cache` | Podman named volume `devbox-uv-cache` | `uv`/`uvx` package downloads. |
 | `/sandbox/.cache/pre-commit` | Podman named volume `devbox-precommit-cache` | Pre-commit hook environments. |
 | `/sandbox/.cache/semble` | Podman named volume `devbox-semble-cache` | Semble's mtime-incremental code indexes. |
@@ -202,7 +234,7 @@ Podman/Buildah's storage instead uses a plain host directory so its size can be
 inspected and pruned with ordinary tools (`du -sh`, `rm -rf`) without needing
 `podman volume` commands.
 
-The first five entries above are shared across _every_ devbox instance, not
+The shared cache entries above are shared across _every_ devbox instance, not
 just one project's container, and the per-project `.venv` shadow volume
 likewise survives its container, so all of them persist even across
 `devbox --remove`; only deleting the volume/directory itself clears them:
@@ -211,8 +243,8 @@ likewise survives its container, so all of them persist even across
 # Shared knowledge base
 podman volume rm devbox-kb
 
-# uv, pre-commit, and Semble caches
-podman volume rm devbox-uv-cache devbox-precommit-cache devbox-semble-cache
+# Go, uv, pre-commit, and Semble caches
+podman volume rm devbox-go-cache devbox-uv-cache devbox-precommit-cache devbox-semble-cache
 
 # Nested Podman/Buildah image and layer storage
 rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/devbox/containers-storage"
