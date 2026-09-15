@@ -95,7 +95,15 @@ runtime_root="$(mktemp -d "${TMPDIR:-/tmp}/my-sandbox-sanitized.XXXXXX")" || {
 # The cleanup function is invoked by the EXIT trap rather than directly.
 # shellcheck disable=SC2329
 cleanup() {
-  rm -rf -- "$runtime_root"
+  if rm -rf -- "$runtime_root" 2>/dev/null; then
+    return 0
+  fi
+  if [[ -n "${podman_wrapper:-}" && -x "${podman_wrapper:-}" ]] \
+    && declare -p safe_env &>/dev/null; then
+    env -i -- "${safe_env[@]}" timeout 120 "$podman_wrapper" unshare \
+      rm -rf -- "$runtime_root" >/dev/null 2>&1 || true
+  fi
+  rm -rf -- "$runtime_root" 2>/dev/null || true
 }
 trap cleanup EXIT
 
