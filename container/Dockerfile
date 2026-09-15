@@ -358,12 +358,16 @@ RUN mkdir -p /sandbox/.config/containers \
     > /sandbox/.config/containers/storage.conf \
     && printf '[containers]\ncgroups = "disabled"\nvolumes = ["/proc:/proc"]\ndefault_sysctls = []\nutsns = "host"\nnetns = "pasta"\n\n[network]\nnetwork_backend = "netavark"\ndefault_rootless_network_cmd = "pasta"\n' \
     > /sandbox/.config/containers/containers.conf \
-    && mkdir -p /sandbox/.config/acli /sandbox/.config/gcloud /sandbox/.config/gws /sandbox/.config/opencode /sandbox/.local/state/opencode /sandbox/.local/share/opencode /sandbox/.docker/run \
+    && mkdir -p /sandbox/.cache/go /sandbox/.config/acli /sandbox/.config/gcloud /sandbox/.config/gws /sandbox/.config/opencode /sandbox/.local/state/opencode /sandbox/.local/share/opencode /sandbox/.docker/run \
     && touch /sandbox/.local/state/opencode/model.json /sandbox/.config/gcloud/application_default_credentials.json \
-    && chown -R sandbox:sandbox /sandbox/.config /sandbox/.local /sandbox/.docker
+    && chown -R sandbox:sandbox /sandbox/.cache /sandbox/.config /sandbox/.local /sandbox/.docker
 
 ENV HOME=/sandbox \
-    DOCKER_HOST=unix:///sandbox/.docker/run/docker.sock
+    DOCKER_HOST=unix:///sandbox/.docker/run/docker.sock \
+    GOPATH=/sandbox/.cache/go \
+    GOCACHE=/sandbox/.cache/go/build-cache \
+    GOTOOLCHAIN=auto \
+    PATH="${PATH}:/sandbox/.cache/go/bin"
 
 # Install pre-commit for the sandbox user so its executable and tool
 # environment live under /sandbox/.local.
@@ -415,8 +419,8 @@ RUN chmod 0755 /usr/local/bin/semble
 ENV BUILDAH_ISOLATION=chroot \
     _CONTAINERS_USERNS_CONFIGURED=""
 
-COPY devbox-entry.sh devbox-docker-api-check.sh /usr/local/bin/
-RUN chmod +rx /usr/local/bin/devbox-entry.sh /usr/local/bin/devbox-docker-api-check.sh \
+COPY devbox-go devbox-entry.sh devbox-docker-api-check.sh /usr/local/bin/
+RUN chmod +rx /usr/local/bin/devbox-go /usr/local/bin/devbox-entry.sh /usr/local/bin/devbox-docker-api-check.sh \
     && ln -s devbox-docker-api-check.sh /usr/local/bin/devbox-docker-api-check \
     && printf '%s\n' 'sandbox ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/sandbox \
     && chmod 0440 /etc/sudoers.d/sandbox \

@@ -82,6 +82,21 @@ def test_devbox_tools_skill_is_staged_and_active(devbox_image: str):
         f"skill name.\nStdout: {res.stdout}\nStderr: {res.stderr}"
     )
 
+    res = run_in_devbox(
+        devbox_image,
+        [
+            "grep",
+            "-q",
+            "devbox-go",
+            "/sandbox/.agents/skills/devbox-tools/SKILL.md",
+        ],
+        user="sandbox",
+    )
+    assert res.returncode == 0, (
+        "Project-aware Go guidance is not available to a fresh OpenCode session.\n"
+        f"Stdout: {res.stdout}\nStderr: {res.stderr}"
+    )
+
 
 @pytest.mark.container
 def test_repomix_guidance_is_staged_and_active(devbox_image: str):

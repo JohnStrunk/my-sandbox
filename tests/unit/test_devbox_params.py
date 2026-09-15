@@ -1180,9 +1180,10 @@ def test_devbox_persistent_cache_volumes(
     assert run_call is not None
     volumes = [run_call[i + 1] for i, arg in enumerate(run_call) if arg == "--volume"]
 
-    # The knowledge base and uv/pre-commit caches are shared (not
+    # The knowledge base, Go, uv/pre-commit, and Semble caches are shared (not
     # per-directory) named volumes.
     assert "devbox-kb:/sandbox/kb" in volumes
+    assert "devbox-go-cache:/sandbox/.cache/go" in volumes
     assert "devbox-uv-cache:/sandbox/.uv_cache" in volumes
     assert "devbox-precommit-cache:/sandbox/.cache/pre-commit" in volumes
     assert "devbox-semble-cache:/sandbox/.cache/semble" in volumes

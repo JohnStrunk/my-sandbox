@@ -355,7 +355,7 @@ create_container_locked() {
 
   # Persistent storage shared across *all* devbox instances (not just this
   # directory's container):
-  #   - The knowledge base and uv/pre-commit caches use Podman-managed named
+  #   - The knowledge base, Go, uv/pre-commit, and Semble caches use Podman-managed named
   #     volumes: their host-side location doesn't matter, and rootless Podman
   #     gives them the same keep-id-aware ownership handling as the bind mounts
   #     above.
@@ -368,6 +368,7 @@ create_container_locked() {
   mkdir -p "$podman_storage_cache_dir"
   params+=(
     --volume "devbox-kb:/sandbox/kb" \
+    --volume "devbox-go-cache:/sandbox/.cache/go" \
     --volume "devbox-uv-cache:/sandbox/.uv_cache" \
     --volume "devbox-precommit-cache:/sandbox/.cache/pre-commit" \
     --volume "devbox-semble-cache:/sandbox/.cache/semble" \

@@ -1,5 +1,6 @@
 import json
 import subprocess
+import uuid
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,7 @@ from tests.conftest import run_in_devbox
 
 BINARIES = [
     ("go", ["go", "version"]),
+    ("devbox-go", ["devbox-go", "--help"]),
     ("rustc", ["rustc", "--version"]),
     ("cargo", ["cargo", "--version"]),
     ("rustup", ["rustup", "--version"]),
@@ -74,6 +76,85 @@ def test_repomix_version_matches_manifest(devbox_image: str, repo_root: Path):
         f"Repomix version check failed.\nStdout: {res.stdout}\nStderr: {res.stderr}"
     )
     assert res.stdout.strip() == expected_version
+
+
+@pytest.mark.container
+def test_project_go_toolchain_selector(devbox_image: str):
+    res = run_in_devbox(
+        devbox_image,
+        [
+            "bash",
+            "-ceu",
+            r"""
+fixture="$(mktemp -d)"
+trap 'rm -rf "$fixture"' EXIT
+printf '%s\n' 'module example.test/project' '' 'go 1.26.0' > "$fixture/go.mod"
+output="$(cd "$fixture" && devbox-go --doctor)"
+grep -F 'Selected toolchain: go1.26.0' <<<"$output"
+grep -F 'GOTOOLCHAIN: go1.26.0+auto' <<<"$output"
+""",
+        ],
+        user="sandbox",
+    )
+    assert res.returncode == 0, (
+        "devbox-go did not select the project toolchain.\n"
+        f"Stdout: {res.stdout}\nStderr: {res.stderr}"
+    )
+
+    cache_volume = f"devbox-go-test-{uuid.uuid4().hex}"
+    subprocess.run(
+        ["podman", "volume", "create", cache_volume],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    try:
+        first = run_in_devbox(
+            devbox_image,
+            [
+                "bash",
+                "-ceu",
+                r"""
+test "$GOPATH" = /sandbox/.cache/go
+test "$GOCACHE" = /sandbox/.cache/go/build-cache
+case ":$PATH:" in *:/sandbox/.cache/go/bin:*) ;; *) exit 1 ;; esac
+marker="$GOPATH/pkg/mod/cache/download/golang.org/toolchain/marker"
+mkdir -p "$(dirname "$marker")"
+printf '%s\n' cached > "$marker"
+""",
+            ],
+            user="sandbox",
+            volumes=[f"{cache_volume}:/sandbox/.cache/go"],
+        )
+        assert first.returncode == 0, (
+            "The Go cache path was not writable in the image.\n"
+            f"Stdout: {first.stdout}\nStderr: {first.stderr}"
+        )
+
+        second = run_in_devbox(
+            devbox_image,
+            [
+                "bash",
+                "-ceu",
+                r"""
+marker=/sandbox/.cache/go/pkg/mod/cache/download/golang.org/toolchain/marker
+test "$(cat "$marker")" = cached
+""",
+            ],
+            user="sandbox",
+            volumes=[f"{cache_volume}:/sandbox/.cache/go"],
+        )
+        assert second.returncode == 0, (
+            "The Go cache did not survive a second container.\n"
+            f"Stdout: {second.stdout}\nStderr: {second.stderr}"
+        )
+    finally:
+        subprocess.run(
+            ["podman", "volume", "rm", cache_volume],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
 
 
 @pytest.mark.container
