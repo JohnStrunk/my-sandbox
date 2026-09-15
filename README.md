@@ -498,6 +498,32 @@ diagnostic, so it is not confused with a product test failure. Proxy and
 provider variables are intentionally not inherited. Do not use this wrapper for
 `e2e_inference`, whose purpose is to read real provider credentials.
 
+For parallel tests in a resource-constrained devbox, add
+`--resource-preflight`:
+
+```shell
+./scripts/sanitized-test.sh --resource-preflight -- \
+  go test ./...
+```
+
+The resource preflight reports the cgroup PID limit/current usage, CPU quota,
+and memory limit/current usage before the command starts. It checks both cgroup
+v2 and v1 layouts. A conservative PID, CPU, or memory budget is classified as
+an infrastructure limitation and returns status `125` without starting the
+test command. If the cgroup root, a mounted limit, or current usage cannot be
+read, the preflight reports it as unavailable and applies the same
+infrastructure classification rather than assuming the resource is unlimited.
+The diagnostic recommends a bounded `GOMAXPROCS`, `go test -p`, and Ginkgo
+`--nodes` setting; for example, rerun a constrained Go suite with:
+
+```shell
+./scripts/sanitized-test.sh -- \
+  env GOMAXPROCS=2 go test -p 1 ./...
+```
+
+The resource check is opt-in, and it runs under the same `env -i` allowlist as
+the test command, so credentials and unrelated host variables are not exposed.
+
 ## Code Quality & Pre-Commit
 
 This repository uses [pre-commit](https://pre-commit.com) to validate code

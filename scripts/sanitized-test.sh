@@ -3,6 +3,8 @@
 # Podman calls use a separate, explicit runtime-only environment.
 set -euo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
 usage() {
   cat <<'EOF'
 Usage: sanitized-test.sh [options] -- command [arg ...]
@@ -16,13 +18,21 @@ Options:
                      missing or unusable runtime is reported as infrastructure
                      failure and the command is not started.
   --podman-probe-image IMAGE
-                     Image used by the real-container preflight. Pre-pull a
-                     local image and pass its tag to avoid registry access.
+                      Image used by the real-container preflight. Pre-pull a
+                      local image and pass its tag to avoid registry access.
+  --resource-preflight
+                      Report cgroup resource limits and block constrained
+                      parallel test commands before they start.
+  --resource-cgroup-root DIR
+                      Cgroup hierarchy to inspect (defaults to
+                      /sys/fs/cgroup; useful for diagnostics and tests).
   -h, --help        Show this help text.
 EOF
 }
 
 require_podman=false
+resource_preflight_enabled=false
+resource_cgroup_root="/sys/fs/cgroup"
 podman_probe_image="docker.io/library/alpine:3.22"
 while (($# > 0)); do
   case "$1" in
@@ -36,6 +46,18 @@ while (($# > 0)); do
         exit 2
       fi
       podman_probe_image="$2"
+      shift 2
+      ;;
+    --resource-preflight)
+      resource_preflight_enabled=true
+      shift
+      ;;
+    --resource-cgroup-root)
+      if (($# < 2)) || [[ -z "$2" || "$2" == -* ]]; then
+        printf 'sanitized-test: --resource-cgroup-root requires a directory\n' >&2
+        exit 2
+      fi
+      resource_cgroup_root="$2"
       shift 2
       ;;
     --)
@@ -254,6 +276,23 @@ for name in LANG LC_ALL LC_CTYPE TERM CI; do
   fi
 done
 
+resource_preflight() {
+  if [[ ! -r "$SCRIPT_DIR/resource_preflight.py" ]]; then
+    printf '%s\n' \
+      'sanitized-test: resource preflight script is unavailable.' \
+      'sanitized-test: this is an infrastructure/runtime configuration failure, not a product test failure.' >&2
+    return 125
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    printf '%s\n' \
+      'sanitized-test: python3 is required for the resource preflight.' \
+      'sanitized-test: this is an infrastructure/runtime configuration failure, not a product test failure.' >&2
+    return 125
+  fi
+  env -i -- "${safe_env[@]}" python3 "$SCRIPT_DIR/resource_preflight.py" \
+    --cgroup-root "$resource_cgroup_root" --fail-on-constrained
+}
+
 podman_preflight() {
   local info_error info_output probe_error probe_output rootless_status status
   if [[ -z "$podman_path" ]]; then
@@ -319,6 +358,15 @@ podman_preflight() {
   fi
   return 125
 }
+
+if [[ "$resource_preflight_enabled" == true ]]; then
+  if resource_preflight; then
+    :
+  else
+    preflight_status=$?
+    exit "$preflight_status"
+  fi
+fi
 
 if [[ "$require_podman" == true ]]; then
   if podman_preflight; then
