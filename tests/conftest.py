@@ -87,6 +87,20 @@ HOST_CONFIG_ENV_VARS = (
 )
 
 ISOLATION_ENV_VARS = CREDENTIAL_ENV_VARS + HOST_CONFIG_ENV_VARS
+PODMAN_RUNTIME_CONFIG_FILES = (
+    "containers.conf",
+    "storage.conf",
+    "registries.conf",
+    "policy.json",
+)
+SANITIZED_TEST_WRAPPER_ACTIVE = "MY_SANDBOX_SANITIZED_TEST_WRAPPER_ACTIVE"
+SAFE_TEST_ENV_VARS = ("PATH", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "CI")
+UNLISTED_SENSITIVE_ENV_VARS = (
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "PYTHONPATH",
+    "BASH_ENV",
+)
 
 
 @pytest.fixture(autouse=True)
@@ -116,6 +130,8 @@ def host_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     for name in ISOLATION_ENV_VARS:
         monkeypatch.setenv(name, f"host-{name.lower()}")
+    for name in UNLISTED_SENSITIVE_ENV_VARS:
+        monkeypatch.setenv(name, f"host-{name.lower()}")
 
 
 @pytest.fixture
@@ -132,15 +148,108 @@ def isolated_home(tmp_path: Path) -> Path:
     return home
 
 
+def _configure_isolated_podman(env: dict[str, str], isolated_home: Path) -> None:
+    """Expose only non-secret Podman runtime state to launcher subprocesses."""
+    podman_path = shutil.which("podman")
+    if not podman_path or os.environ.get(SANITIZED_TEST_WRAPPER_ACTIVE) == "1":
+        return
+
+    isolated_bin = isolated_home.parent / "isolated-bin"
+    isolated_bin.mkdir(exist_ok=True)
+    podman_wrapper = isolated_bin / "podman"
+    runtime_root = isolated_home.parent / "podman-runtime"
+    podman_home = runtime_root / "home"
+    podman_config_home = runtime_root / "config"
+    podman_config_dir = podman_config_home / "containers"
+    podman_data_home = runtime_root / "data"
+    podman_runtime_dir = runtime_root / "runtime"
+    podman_tmp = runtime_root / "tmp"
+    podman_docker_config = runtime_root / "docker-config"
+    registry_auth_file = runtime_root / "registry-auth.json"
+    for path in (
+        podman_home,
+        podman_config_dir,
+        podman_data_home,
+        podman_runtime_dir,
+        podman_tmp,
+        podman_docker_config,
+    ):
+        path.mkdir(parents=True, exist_ok=True)
+        path.chmod(0o700)
+    registry_auth_file.write_text("{}\n")
+    registry_auth_file.chmod(0o600)
+
+    host_home = Path(os.environ["HOME"]) if os.environ.get("HOME") else None
+    host_config_home_value = os.environ.get("XDG_CONFIG_HOME")
+    host_config_home = (
+        Path(host_config_home_value)
+        if host_config_home_value
+        else host_home / ".config"
+        if host_home
+        else None
+    )
+    if host_config_home:
+        host_config_dir = host_config_home / "containers"
+        for name in PODMAN_RUNTIME_CONFIG_FILES:
+            source = host_config_dir / name
+            if source.is_file():
+                shutil.copyfile(source, podman_config_dir / name)
+        dropins = host_config_dir / "containers.conf.d"
+        if dropins.is_dir():
+            shutil.copytree(
+                dropins,
+                podman_config_dir / "containers.conf.d",
+                dirs_exist_ok=True,
+            )
+
+    host_data_home_value = os.environ.get("XDG_DATA_HOME")
+    host_data_home = (
+        Path(host_data_home_value)
+        if host_data_home_value
+        else host_home / ".local" / "share"
+        if host_home
+        else None
+    )
+    host_runtime_dir_value = os.environ.get("XDG_RUNTIME_DIR")
+    podman_args: list[str] = []
+    if host_data_home:
+        podman_args.extend(["--root", str(host_data_home / "containers" / "storage")])
+    if host_runtime_dir_value:
+        podman_args.extend(
+            ["--runroot", str(Path(host_runtime_dir_value) / "containers")]
+        )
+
+    wrapper_lines = [
+        "#!/usr/bin/env bash\n",
+        "set -euo pipefail\n",
+        f"export PATH={shlex.quote(os.environ.get('PATH', ''))}\n",
+        f"export HOME={shlex.quote(str(podman_home))}\n",
+        f"export XDG_CONFIG_HOME={shlex.quote(str(podman_config_home))}\n",
+        f"export XDG_DATA_HOME={shlex.quote(str(podman_data_home))}\n",
+        f"export XDG_RUNTIME_DIR={shlex.quote(str(podman_runtime_dir))}\n",
+        f"export TMPDIR={shlex.quote(str(podman_tmp))}\n",
+        f"export REGISTRY_AUTH_FILE={shlex.quote(str(registry_auth_file))}\n",
+        f"export DOCKER_CONFIG={shlex.quote(str(podman_docker_config))}\n",
+    ]
+    for name in (*ISOLATION_ENV_VARS, "DOCKER_AUTH_CONFIG"):
+        wrapper_lines.append(f"unset {name}\n")
+    wrapper_lines.append(f"exec {shlex.quote(podman_path)}")
+    for argument in podman_args:
+        wrapper_lines.append(f" {shlex.quote(argument)}")
+    wrapper_lines.append(' "$@"\n')
+    podman_wrapper.write_text("".join(wrapper_lines))
+    podman_wrapper.chmod(podman_wrapper.stat().st_mode | 0o111)
+    env["PATH"] = f"{isolated_bin}:{env.get('PATH', '')}"
+
+
 @pytest.fixture
 def isolated_env(host_credentials: None, isolated_home: Path) -> dict[str, str]:
     """A deterministic environment for launching `devbox` (or similar
     scripts) as a subprocess: no provider/integration credentials and no
     host home-directory state, unless a test adds them explicitly.
     """
-    env = os.environ.copy()
-    for name in ISOLATION_ENV_VARS:
-        env.pop(name, None)
+    env = {name: os.environ[name] for name in SAFE_TEST_ENV_VARS if name in os.environ}
+    env.setdefault("PATH", os.defpath)
     env["HOME"] = str(isolated_home)
     isolated_xdg = isolated_home.parent / "isolated-xdg"
     for xdg_var, subdir in (
@@ -151,34 +260,7 @@ def isolated_env(host_credentials: None, isolated_home: Path) -> dict[str, str]:
     ):
         env[xdg_var] = str(isolated_xdg / subdir)
 
-    # Keep the host Podman image store and runtime configuration visible to
-    # real launcher integration tests without exposing that host state to the
-    # test process or to containers. The wrapper restores only the runtime's
-    # non-secret HOME/XDG settings; the credential/config override variables
-    # above remain scrubbed.
-    # Unit tests that install a mock `podman` prepend their own bin directory
-    # later, so this wrapper is only used by tests that intentionally run the
-    # real outer Podman runtime.
-    podman_path = shutil.which("podman")
-    if podman_path:
-        isolated_bin = isolated_home.parent / "isolated-bin"
-        isolated_bin.mkdir(exist_ok=True)
-        podman_wrapper = isolated_bin / "podman"
-        host_env = os.environ.copy()
-        wrapper_lines = ["#!/usr/bin/env bash\n"]
-        if host_env.get("HOME"):
-            wrapper_lines.append(f"export HOME={shlex.quote(host_env['HOME'])}\n")
-        else:
-            wrapper_lines.append("unset HOME\n")
-        for name in ("XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR"):
-            if host_env.get(name):
-                wrapper_lines.append(f"export {name}={shlex.quote(host_env[name])}\n")
-            else:
-                wrapper_lines.append(f"unset {name}\n")
-        wrapper_lines.append(f'exec {shlex.quote(podman_path)} "$@"\n')
-        podman_wrapper.write_text("".join(wrapper_lines))
-        podman_wrapper.chmod(podman_wrapper.stat().st_mode | 0o111)
-        env["PATH"] = f"{isolated_bin}:{env.get('PATH', '')}"
+    _configure_isolated_podman(env, isolated_home)
     return env
 
 

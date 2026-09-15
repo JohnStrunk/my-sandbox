@@ -395,8 +395,8 @@ selection order.
 ## Testing
 
 Tests live under `tests/` and run with [pytest](https://pytest.org). Install
-the test extras and invoke pytest through `uv` -- this is the one documented
-way to run the suite, locally and in CI:
+the test extras and invoke pytest through `uv`; this is the underlying command
+used by the sanitized wrapper locally and in CI:
 
 ```shell
 uv run --extra test pytest -m "not e2e_inference"
@@ -410,10 +410,10 @@ Tests are organized with markers:
 - `integration` - Container lifecycle and nested Podman-in-Podman checks.
 - `e2e_inference` - End-to-end checks against real LLM provider APIs.
 
-CI runs `uv run --extra test pytest -m "not e2e_inference"`; the `container`
-and `integration` markers still run in CI (they require Podman, which is
-available there) but `e2e_inference` is opt-in since it needs real provider
-credentials.
+CI runs the sanitized wrapper around the underlying pytest command. The
+`container` and `integration` markers still run in CI (they require Podman,
+which is available there) but `e2e_inference` is opt-in since it needs real
+provider credentials.
 
 ### Isolated by default
 
@@ -424,9 +424,10 @@ provider/integration credential environment variables
 (`HOST_CONFIG_ENV_VARS`) before each test, and the `isolated_env`/
 `isolated_home` fixtures give `devbox`-launching tests a fresh, empty `$HOME`
 and XDG directories. Real launcher integration tests use an explicit local
-wrapper that restores only the non-secret Podman runtime settings needed to
-reuse the host image store; those settings are not passed into the test
-containers. This means:
+Podman shim that restores only the non-secret runtime settings needed by the
+outer Podman process; those settings are not passed into the test containers.
+When starting tests directly from the host, use the reusable wrapper below so
+the test process receives the same isolation boundary. This means:
 
 - Unit and container/integration tests produce the same result whether or
   not the machine running them has `GEMINI_API_KEY`, a `gh auth login`
@@ -456,6 +457,46 @@ with the relevant credentials exported:
 ```shell
 GEMINI_API_KEY=... uv run --extra test pytest -m e2e_inference
 ```
+
+### Sanitized host test wrapper
+
+Use `scripts/sanitized-test.sh` for a one-shot sanitized command-line run. It
+starts the command with a temporary `HOME` and XDG tree and passes only a
+small non-secret allowlist (`PATH`, temporary directories, locale, terminal,
+and CI markers). Provider credentials, authenticated CLI state, host config
+override variables, and arbitrary host variables are not passed to the test
+command.
+
+For unit tests or lint checks, which do not require Podman, run:
+
+```shell
+./scripts/sanitized-test.sh -- ./scripts/fast-check.sh
+```
+
+For container and integration tests, add `--require-podman`:
+
+```shell
+./scripts/sanitized-test.sh --require-podman -- \
+  uv run --extra test pytest -m "not e2e_inference"
+```
+
+`--require-podman` uses `docker.io/library/alpine:3.22` for its bounded real
+container probe. Pre-pull a locally available probe image and select it with
+`--podman-probe-image IMAGE` when registry access requires custom proxy or CA
+setup; command arguments after `--` run only after this preflight.
+
+The wrapper gives the outer `podman` process an isolated `HOME`, a temporary
+Podman config root containing only the allowlisted non-secret container config
+files, explicit host graph/run roots for the image store and runtime, the
+host `PATH`, an empty `REGISTRY_AUTH_FILE`, and an empty `DOCKER_CONFIG`
+directory. It does not pass whole host XDG trees to Podman. It explicitly
+removes provider credentials and other CLI credential/config override
+variables from that process too. The `--require-podman` preflight verifies
+that rootless Podman is usable before starting the test command; a missing or
+unusable runtime returns status `125` with an infrastructure or registry
+diagnostic, so it is not confused with a product test failure. Proxy and
+provider variables are intentionally not inherited. Do not use this wrapper for
+`e2e_inference`, whose purpose is to read real provider credentials.
 
 ## Code Quality & Pre-Commit
 
