@@ -6,12 +6,37 @@
 - Before committing or opening a PR, fetch `origin/main` again and rebase the
   feature branch if it has advanced.
 - Create worktrees in `.worktrees/`
+- Shell commands and file-tool paths are independent: relative shell paths use
+  the shell's current working directory. Every shell command that reads or
+  writes worktree files must pass the intended worktree as `workdir` or use an
+  absolute path under `.worktrees/`; never rely on the main checkout's default
+  directory.
 - Keep the main checkout clean and up to date when possible. Never revert
   unrelated existing changes; isolate work from `origin/main` in `.worktrees/`.
 - In fresh worktrees, use `uv run --extra test pytest` or verify that test
   dependencies are installed before invoking test tools.
 - Run tests with a sanitized environment. Never print the complete environment;
   report only allowlisted variable names and set/unset status.
+
+## How PRs land
+
+- `CI Workflow - Success` is the authoritative CI prerequisite for merging. It
+  summarizes the `Automated Tests` and `Pre-commit checks` jobs.
+- Mergify queues and merges eligible PRs automatically after that check passes.
+  PRs authored by `JohnStrunk` or `renovate-bot` need no approval; other
+  authors need at least one approval and no changes-requested review.
+- A `do-not-merge` label prevents Mergify from queueing the PR.
+- Do not merge manually. Mergify may take a few minutes after CI passes to
+  queue and merge the PR, so continue polling rather than merging by hand.
+- Poll the actual merge state with:
+
+  ```shell
+  gh pr view <number> --json state,mergedAt,mergeCommit \
+    -q '[.state,.mergedAt,.mergeCommit.oid]|@tsv'
+  ```
+
+  `state=MERGED` or a non-null `mergedAt` confirms completion. `merged` is not
+  a valid `gh pr view --json` field.
 
 ## Issue triage vocabulary
 
