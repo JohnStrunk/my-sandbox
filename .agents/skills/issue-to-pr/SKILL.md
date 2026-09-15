@@ -25,8 +25,9 @@ use the labels first and reserve full-body reads for what they cannot answer.
 1. Enumerate candidates with one list call that includes labels, assignees,
    and dependency summaries -- for example `gh api
    'repos/<owner>/<repo>/issues?state=open&per_page=100'` returns all three
-   per item (the GitHub MCP `list_issues` filter works too -- note that
-   `--assignee ""` is a no-op and still returns assigned issues). Keep
+   per item (the GitHub MCP `list_issues` filter works too). Note that
+   `--assignee ""` is a no-op and still returns assigned issues; `gh
+   issue list` needs `--search "no:assignee"` instead. Keep
    issues that are unassigned, labeled `ready`, not labeled `blocked`, and
    whose `issue_dependencies_summary.total_blocked_by` is 0. An open
    unassigned issue carrying no triage labels at all is not dropped here;
