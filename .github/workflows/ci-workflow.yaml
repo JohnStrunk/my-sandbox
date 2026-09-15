@@ -95,7 +95,9 @@ jobs:
             pre-commit|
 
       - name: Run pre-commit checks
-        run: pre-commit run -a
+        run: >-
+          ./scripts/sanitized-test.sh -- env
+          PRE_COMMIT_HOME="${HOME}/.cache/pre-commit" pre-commit run -a
 
       - name: Run pre-commit gc
         run: pre-commit gc
@@ -195,7 +197,10 @@ jobs:
             --directory "$HOME/.local/share/containers/storage" .
 
       - name: Run test suite
-        run: uv run --extra test pytest -m "not e2e_inference"
+        run: >-
+          ./scripts/sanitized-test.sh --require-podman --
+          env UV_CACHE_DIR="${HOME}/.cache/uv"
+          uv run --extra test pytest -m "not e2e_inference"
 
       - name: Save Podman layer cache
         if: success() && github.ref == 'refs/heads/main' && steps.podman-cache.outputs.cache-hit != 'true'

@@ -14,7 +14,12 @@ from pathlib import Path
 
 import pytest
 
-from tests.conftest import CREDENTIAL_ENV_VARS, HOST_CONFIG_ENV_VARS, ISOLATION_ENV_VARS
+from tests.conftest import (
+    CREDENTIAL_ENV_VARS,
+    HOST_CONFIG_ENV_VARS,
+    ISOLATION_ENV_VARS,
+    UNLISTED_SENSITIVE_ENV_VARS,
+)
 
 
 @pytest.mark.unit
@@ -40,6 +45,8 @@ def test_isolated_env_scrubs_credentials_and_home_state(
     isolated_env: dict[str, str], isolated_home: Path
 ) -> None:
     for name in CREDENTIAL_ENV_VARS:
+        assert name not in isolated_env
+    for name in UNLISTED_SENSITIVE_ENV_VARS:
         assert name not in isolated_env
     assert isolated_env["HOME"] == str(isolated_home)
     assert not any(isolated_home.iterdir())
