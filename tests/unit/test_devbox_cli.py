@@ -14,6 +14,7 @@ def test_devbox_help(devbox_path: Path):
     assert "-r, --remove" in res.stdout
     assert "--recreate" in res.stdout
     assert "--new" in res.stdout
+    assert "--kind" in res.stdout
 
 
 @pytest.mark.unit

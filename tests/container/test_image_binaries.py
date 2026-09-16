@@ -9,6 +9,9 @@ from tests.conftest import run_in_devbox
 
 BINARIES = [
     ("go", ["go", "version"]),
+    ("kind", ["kind", "version"]),
+    ("kubectl", ["kubectl", "version", "--client=true"]),
+    ("devbox-kind", ["devbox-kind", "--help"]),
     ("devbox-go", ["devbox-go", "--help"]),
     ("rustc", ["rustc", "--version"]),
     ("cargo", ["cargo", "--version"]),

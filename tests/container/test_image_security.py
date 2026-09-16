@@ -39,35 +39,57 @@ def test_sandbox_sudo_nopasswd(devbox_image: str):
     assert res.stdout.strip() == "0"
 
 
-@pytest.mark.container
-def test_containers_storage_conf(devbox_image: str):
+def _read_container_config(devbox_image: str, name: str) -> str:
     res = run_in_devbox(
         devbox_image,
-        ["cat", "/sandbox/.config/containers/storage.conf"],
+        ["cat", f"/sandbox/.config/containers/{name}"],
         user="sandbox",
     )
     assert res.returncode == 0
-    content = res.stdout
+    return res.stdout
+
+
+@pytest.mark.container
+def test_containers_storage_conf(devbox_image: str):
+    content = _read_container_config(devbox_image, "storage.conf")
     assert 'driver = "overlay"' in content
     assert 'mount_program = "/usr/bin/fuse-overlayfs"' in content
     assert 'mountopt = "nodev,fsync=0"' in content
 
 
 @pytest.mark.container
-def test_containers_containers_conf(devbox_image: str):
-    res = run_in_devbox(
-        devbox_image,
-        ["cat", "/sandbox/.config/containers/containers.conf"],
-        user="sandbox",
-    )
-    assert res.returncode == 0
-    content = res.stdout
-    assert 'cgroups = "disabled"' in content
-    assert 'volumes = ["/proc:/proc"]' in content
-    assert 'utsns = "host"' in content
-    assert 'netns = "pasta"' in content
-    assert 'network_backend = "netavark"' in content
-    assert 'default_rootless_network_cmd = "pasta"' in content
+@pytest.mark.parametrize(
+    ("name", "requirements"),
+    [
+        (
+            "containers.conf",
+            (
+                'cgroups = "disabled"',
+                'volumes = ["/proc:/proc"]',
+                'utsns = "host"',
+                'netns = "pasta"',
+                'network_backend = "netavark"',
+                'default_rootless_network_cmd = "pasta"',
+            ),
+        ),
+        (
+            "kind-containers.conf",
+            (
+                'cgroups = "enabled"',
+                'cgroupns = "host"',
+                "default_sysctls = []",
+                'log_driver = "k8s-file"',
+                "pids_limit = 65536",
+                'netns = "bridge"',
+                'cgroup_manager = "cgroupfs"',
+            ),
+        ),
+    ],
+)
+def test_containers_config(devbox_image: str, name: str, requirements: tuple[str, ...]):
+    content = _read_container_config(devbox_image, name)
+    for requirement in requirements:
+        assert requirement in content
 
 
 @pytest.mark.container
