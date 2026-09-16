@@ -60,6 +60,24 @@
         "docker": true
       }
     },
+    "github_mcp_server": {
+      "version": "1.12.2",
+      "datasource": "github-releases",
+      "depName": "github/github-mcp-server",
+      "checksums": {
+        "amd64": "95843162759da2c31dde082dd145be35db82164594796c294414b69790c2290e",
+        "arm64": "2b30f9fcc061b57456cbe38ddc0f13c88863bad49557508a9196f2d1c4cb17a5"
+      },
+      "provenance": {
+        "url_templates": {
+          "checksums.amd64": "https://github.com/github/github-mcp-server/releases/download/v{version}/github-mcp-server_Linux_x86_64.tar.gz",
+          "checksums.arm64": "https://github.com/github/github-mcp-server/releases/download/v{version}/github-mcp-server_Linux_arm64.tar.gz"
+        }
+      },
+      "consumers": {
+        "docker": true
+      }
+    },
     "ripwire": {
       "version": "0.5.0",
       "datasource": "github-releases",

@@ -127,6 +127,24 @@ RUN opencode_version="$(jq -er '.tools.opencode.version' /tmp/devbox-tool-versio
     mv /root/.opencode/bin/opencode /usr/bin/ && \
     chmod +x /usr/bin/opencode
 
+# Install the pinned GitHub MCP server. Keep this local and versioned so search
+# field filtering and pagination behavior are testable instead of depending on
+# the hosted server's rollout state.
+RUN github_mcp_version="$(jq -er '.tools.github_mcp_server.version' /tmp/devbox-tool-versions.json)" \
+    && github_mcp_version="${github_mcp_version#v}" \
+    && case "${TARGETARCH}" in \
+         amd64) github_mcp_arch=x86_64; github_mcp_checksum="$(jq -er '.tools.github_mcp_server.checksums.amd64' /tmp/devbox-tool-versions.json)" ;; \
+         arm64) github_mcp_arch=arm64; github_mcp_checksum="$(jq -er '.tools.github_mcp_server.checksums.arm64' /tmp/devbox-tool-versions.json)" ;; \
+         *) echo "Unsupported architecture for GitHub MCP server: ${TARGETARCH}" >&2; exit 1 ;; \
+       esac \
+    && github_mcp_asset="github-mcp-server_Linux_${github_mcp_arch}.tar.gz" \
+    && curl -fsSL "https://github.com/github/github-mcp-server/releases/download/v${github_mcp_version}/${github_mcp_asset}" -o "/tmp/${github_mcp_asset}" \
+    && printf '%s  %s\n' "${github_mcp_checksum}" "/tmp/${github_mcp_asset}" | sha256sum -c - \
+    && mkdir -p /tmp/github-mcp-server \
+    && tar -C /tmp/github-mcp-server -xzf "/tmp/${github_mcp_asset}" \
+    && install -Dm755 /tmp/github-mcp-server/github-mcp-server /usr/local/bin/github-mcp-server \
+    && rm -rf "/tmp/${github_mcp_asset}" /tmp/github-mcp-server
+
 # Install ripwire and stage its agent assets. Verify the pinned release's
 # published checksum before extracting anything from the archive.
 RUN ripwire_version="$(jq -er '.tools.ripwire.version' /tmp/devbox-tool-versions.json)" \
@@ -420,7 +438,10 @@ ENV BUILDAH_ISOLATION=chroot \
     _CONTAINERS_USERNS_CONFIGURED=""
 
 COPY devbox-go devbox-entry.sh devbox-docker-api-check.sh /usr/local/bin/
+COPY github_mcp_server_proxy.py /usr/local/bin/github_mcp_server_proxy.py
 RUN chmod +rx /usr/local/bin/devbox-go /usr/local/bin/devbox-entry.sh /usr/local/bin/devbox-docker-api-check.sh \
+    && chmod +x /usr/local/bin/github_mcp_server_proxy.py \
+    && ln -s github_mcp_server_proxy.py /usr/local/bin/github-mcp-server-proxy \
     && ln -s devbox-docker-api-check.sh /usr/local/bin/devbox-docker-api-check \
     && printf '%s\n' 'sandbox ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/sandbox \
     && chmod 0440 /etc/sudoers.d/sandbox \

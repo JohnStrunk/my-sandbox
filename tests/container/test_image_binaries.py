@@ -27,6 +27,8 @@ BINARIES = [
     ("acli", ["acli", "--version"]),
     ("agy", ["agy", "--help"]),
     ("opencode", ["opencode", "--version"]),
+    ("github-mcp-server", ["github-mcp-server", "--help"]),
+    ("github-mcp-server-proxy", ["github-mcp-server-proxy", "--help"]),
     ("repomix", ["repomix", "--version"]),
     ("ripwire", ["ripwire", "--version"]),
     ("ast-grep", ["ast-grep", "--version"]),

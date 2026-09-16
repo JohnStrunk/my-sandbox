@@ -469,12 +469,12 @@ EOF
 {
   "mcp": {
     "github": {
-      "type": "remote",
-      "url": "https://api.githubcopilot.com/mcp/",
+      "type": "local",
+      "command": ["github-mcp-server-proxy"],
       "enabled": true,
-      "oauth": false,
-      "headers": {
-        "Authorization": "Bearer {env:GH_TOKEN}"
+      "environment": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "{env:GH_TOKEN}",
+        "GITHUB_TOOLSETS": "context,repos,issues,pull_requests,users"
       }
     }
   }

@@ -42,9 +42,10 @@ jobs:
 
       - name: Verify release provenance checksums
         # Recomputes the SHA-256 of every manifest-declared release asset
-        # (ast-grep binaries and the official agent-skill archive) against the
-        # pinned version so a version-only Renovate bump fails here instead of
-        # at image-build time. See scripts/verify_provenance.py.
+        # (ast-grep binaries, the official agent-skill archive, and GitHub MCP
+        # server binaries) against the pinned version so a version-only
+        # Renovate bump fails here instead of at image-build time. See
+        # scripts/verify_provenance.py.
         run: python3 scripts/verify_provenance.py
 
       - name: Install pre-commit
