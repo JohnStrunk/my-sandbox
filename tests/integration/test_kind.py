@@ -139,6 +139,10 @@ def test_kind_create_use_delete(
                     timeout=60,
                 )
                 assert leftovers.returncode == 0, leftovers.stderr
-                assert not leftovers.stdout.strip(), leftovers.stdout
+                assert "==> Entering container" in leftovers.stdout
+                _, _, entered = leftovers.stdout.partition("==> Entering container")
+                _, _, command_output = entered.partition("\n")
+                command_output = command_output.strip()
+                assert not command_output, leftovers.stdout
         finally:
             remove_devbox(devbox_path, test_dir, isolated_env)
