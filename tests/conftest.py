@@ -449,6 +449,44 @@ def devbox_container_name(test_dir: Path) -> str:
     return f"devbox-{test_dir.name}"
 
 
+def remove_devbox(
+    devbox_path: Path, test_dir: Path, env: dict[str, str], timeout: int = 60
+) -> None:
+    """Remove a test devbox, falling back to host-side cleanup on failure."""
+    try:
+        result = run_bash_script(
+            devbox_path, ["--remove"], env=env, cwd=test_dir, timeout=timeout
+        )
+    except subprocess.TimeoutExpired as exc:
+        result = None
+        launcher_error = f"launcher cleanup timed out: {exc}"
+    else:
+        launcher_error = (
+            f"launcher cleanup exited with status {result.returncode}"
+            if result.returncode != 0
+            else ""
+        )
+    if result is not None and result.returncode == 0:
+        return
+
+    try:
+        fallback = subprocess.run(
+            ["podman", "rm", "-f", devbox_container_name(test_dir)],
+            env=env,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise AssertionError(f"{launcher_error}; host cleanup failed: {exc}") from exc
+    if fallback.returncode != 0:
+        detail = fallback.stderr.strip()
+        raise AssertionError(
+            f"{launcher_error}; host cleanup exited with status "
+            f"{fallback.returncode}{f': {detail}' if detail else ''}"
+        )
+
+
 def run_bash_script(
     script_path: Path,
     args: list[str] | None = None,

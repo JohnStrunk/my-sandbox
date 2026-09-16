@@ -30,7 +30,10 @@ def test_devbox_lifecycle_create_exec_recreate_remove(
             ["bash", "-c", "echo 'hello from container' > test_output.txt"],
             env=isolated_env,
             cwd=test_dir,
-            timeout=300,
+            # A sanitized runner rebuilds the image in its isolated Podman
+            # store; the kind/kubectl downloads make a cold build slower than
+            # the normal command-execution budget.
+            timeout=600,
         )
         assert res_create.returncode == 0, (
             f"Failed to create/run devbox:\n{res_create.stdout}\n{res_create.stderr}"
@@ -75,7 +78,7 @@ def test_devbox_lifecycle_create_exec_recreate_remove(
             ["--recreate", "echo", "recreated"],
             env=isolated_env,
             cwd=test_dir,
-            timeout=300,
+            timeout=600,
         )
         assert res_recreate.returncode == 0
         assert "Removing container" in res_recreate.stdout

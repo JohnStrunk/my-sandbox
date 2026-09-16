@@ -5,6 +5,7 @@ import pytest
 
 from tests.conftest import (
     devbox_container_name,
+    remove_devbox,
     run_bash_script,
     unique_workspace_dir,
 )
@@ -189,19 +190,6 @@ def _run_node_smoke(
     )
 
 
-def _remove_devbox(devbox_path: Path, test_dir: Path, env: dict[str, str]) -> None:
-    result = run_bash_script(
-        devbox_path, ["--remove"], env=env, cwd=test_dir, timeout=60
-    )
-    if result.returncode != 0:
-        subprocess.run(
-            ["podman", "rm", "-f", devbox_container_name(test_dir)],
-            env=env,
-            capture_output=True,
-            check=False,
-        )
-
-
 def _assert_devbox_is_unprivileged(test_dir: Path, env: dict[str, str]) -> None:
     result = subprocess.run(
         [
@@ -246,7 +234,7 @@ def nested_podman_available(
             )
         yield
     finally:
-        _remove_devbox(devbox_path, probe_dir, isolated_env)
+        remove_devbox(devbox_path, probe_dir, isolated_env)
 
 
 @pytest.mark.integration
@@ -313,7 +301,7 @@ def test_docker_api_published_port(
         )
         assert "Read-only file system" not in result.stdout + result.stderr
     finally:
-        _remove_devbox(devbox_path, test_dir, isolated_env)
+        remove_devbox(devbox_path, test_dir, isolated_env)
 
 
 @pytest.mark.integration
@@ -355,4 +343,4 @@ def test_docker_api_user_defined_network_aliases(
         assert "network-alias-ok" in result.stdout
         assert "Read-only file system" not in result.stdout + result.stderr
     finally:
-        _remove_devbox(devbox_path, test_dir, isolated_env)
+        remove_devbox(devbox_path, test_dir, isolated_env)

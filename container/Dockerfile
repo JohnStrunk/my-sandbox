@@ -77,6 +77,23 @@ RUN go_version="$(jq -er '.tools.go.version' /tmp/devbox-tool-versions.json)" \
     && rm /tmp/go.tgz
 ENV PATH="/usr/local/go/bin:${PATH}"
 
+# kind and kubectl provide the operator/Kubernetes profile's cluster tools.
+# Keep both release artifacts checksum-verified and architecture-specific.
+RUN kind_version="$(jq -er '.tools.kind.version' /tmp/devbox-tool-versions.json)" \
+    && kubectl_version="$(jq -er '.tools.kubectl.version' /tmp/devbox-tool-versions.json)" \
+    && case "${TARGETARCH}" in \
+         amd64) kind_checksum="$(jq -er '.tools.kind.checksums.amd64' /tmp/devbox-tool-versions.json)"; kubectl_checksum="$(jq -er '.tools.kubectl.checksums.amd64' /tmp/devbox-tool-versions.json)" ;; \
+         arm64) kind_checksum="$(jq -er '.tools.kind.checksums.arm64' /tmp/devbox-tool-versions.json)"; kubectl_checksum="$(jq -er '.tools.kubectl.checksums.arm64' /tmp/devbox-tool-versions.json)" ;; \
+         *) echo "Unsupported architecture for kind/kubectl: ${TARGETARCH}" >&2; exit 1 ;; \
+       esac \
+    && curl -fsSL "https://github.com/kubernetes-sigs/kind/releases/download/v${kind_version}/kind-linux-${TARGETARCH}" -o /tmp/kind \
+    && printf '%s  %s\n' "${kind_checksum}" /tmp/kind | sha256sum -c - \
+    && install -Dm755 /tmp/kind /usr/local/bin/kind \
+    && curl -fsSL "https://dl.k8s.io/release/v${kubectl_version}/bin/linux/${TARGETARCH}/kubectl" -o /tmp/kubectl \
+    && printf '%s  %s\n' "${kubectl_checksum}" /tmp/kubectl | sha256sum -c - \
+    && install -Dm755 /tmp/kubectl /usr/local/bin/kubectl \
+    && rm -f /tmp/kind /tmp/kubectl
+
 # Rust toolchain
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
@@ -437,12 +454,16 @@ RUN chmod 0755 /usr/local/bin/semble
 ENV BUILDAH_ISOLATION=chroot \
     _CONTAINERS_USERNS_CONFIGURED=""
 
-COPY devbox-go devbox-entry.sh devbox-docker-api-check.sh /usr/local/bin/
+COPY devbox-go devbox-entry.sh devbox-docker-api-check.sh devbox-kind.sh /usr/local/bin/
+COPY kind-containers.conf /sandbox/.config/containers/kind-containers.conf
 COPY github_mcp_server_proxy.py /usr/local/bin/github_mcp_server_proxy.py
 RUN chmod +rx /usr/local/bin/devbox-go /usr/local/bin/devbox-entry.sh /usr/local/bin/devbox-docker-api-check.sh \
+    /usr/local/bin/devbox-kind.sh \
     && chmod +x /usr/local/bin/github_mcp_server_proxy.py \
+    && chown sandbox:sandbox /sandbox/.config/containers/kind-containers.conf \
     && ln -s github_mcp_server_proxy.py /usr/local/bin/github-mcp-server-proxy \
     && ln -s devbox-docker-api-check.sh /usr/local/bin/devbox-docker-api-check \
+    && ln -s devbox-kind.sh /usr/local/bin/devbox-kind \
     && printf '%s\n' 'sandbox ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/sandbox \
     && chmod 0440 /etc/sudoers.d/sandbox \
     && visudo -cf /etc/sudoers
