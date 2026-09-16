@@ -51,6 +51,7 @@ PY
 fi
 ''',
     )
+    _make_executable(bin_dir / "curl", "#!/usr/bin/env bash\nexit 0\n")
 
     env = {"PATH": f"{bin_dir}:{os.environ.get('PATH', os.defpath)}"}
     env["DOCKER_HOST"] = f"unix://{socket_path}"

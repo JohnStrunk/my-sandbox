@@ -53,14 +53,23 @@ with open(sys.argv[1], "a") as f:
 
 if [ "$1" = "run" ] && [ "$2" = "--rm" ]; then
     if [ "$3" = "-i" ] && [ "$4" = "devbox:latest" ] && [ "$5" = "jq" ]; then
-        if echo "$*" | grep -q 'map(select(.id'; then
+        if echo "$*" | grep -q 'select(.id'; then
             python3 -c '
 import json
 import sys
 
 value = json.load(sys.stdin)
 print(json.dumps({{
-    item["id"]: {{"name": item["id"]}}
+    item["id"]: {{
+        "name": item["id"],
+        "limit": {{"context": 262144, "output": 8192}},
+        "reasoning": True,
+        "variants": {{
+            "low": {{"effort": "low"}},
+            "medium": {{"effort": "medium"}},
+            "xhigh": {{"effort": "xhigh"}},
+        }},
+    }}
     for item in value.get("data", [])
     if isinstance(item.get("id"), str) and item["id"]
 }}))
@@ -248,12 +257,15 @@ exit 0
     fake_curl.write_text(
         "#!/usr/bin/env bash\n"
         '[ "${MOCK_PRICETAG_DISCOVERY_FAIL:-}" = 1 ] && exit 1\n'
+        '[ -z "${MOCK_PRICETAG_CURL_LOG:-}" ] || '
+        'printf "%s\\n" "$*" >> "$MOCK_PRICETAG_CURL_LOG"\n'
         "printf '%s\\n' \"$MOCK_PRICETAG_MODELS\"\n"
     )
     fake_curl.chmod(fake_curl.stat().st_mode | stat.S_IEXEC)
 
     env = isolated_env
     env["PATH"] = f"{bin_dir}:{env.get('PATH', '')}"
+    env["MOCK_PRICETAG_CURL_LOG"] = str(tmp_path / "pricetag_curl_calls.log")
     env["MOCK_PRICETAG_MODELS"] = json.dumps(
         {
             "object": "list",
@@ -860,6 +872,24 @@ def test_devbox_pricetag_env_and_provider_config(
         value for value in env_values if value.startswith("OPENCODE_CONFIG_CONTENT=")
     )
     config = json.loads(config_value.split("=", 1)[1])
+    expected_models = {
+        model_id: {
+            "name": model_id,
+            "limit": {"context": 262144, "output": 8192},
+            "reasoning": True,
+            "variants": {
+                "low": {"effort": "low"},
+                "medium": {"effort": "medium"},
+                "xhigh": {"effort": "xhigh"},
+            },
+        }
+        for model_id in (
+            "gpt-5.6-luna",
+            "gpt-5.4",
+            "gpt-5.4-mini",
+            "gpt-5.3-codex",
+        )
+    }
     assert config["provider"] == {
         "anthropic": {
             "options": {
@@ -874,12 +904,7 @@ def test_devbox_pricetag_env_and_provider_config(
                 "baseURL": "{env:PRICETAG_HOSTED_URL}",
                 "apiKey": "{env:PRICETAG_API_KEY}",
             },
-            "models": {
-                "qwen38-flash-next": {
-                    "name": "Qwen 3.8 Flash Next (free)",
-                    "limit": {"context": 262144, "output": 8192},
-                },
-            },
+            "models": expected_models,
         },
         "openai": {
             "options": {
@@ -888,7 +913,43 @@ def test_devbox_pricetag_env_and_provider_config(
             },
         },
     }
+    curl_log = (tmp_path / "pricetag_curl_calls.log").read_text()
+    assert "x-api-key: mock-pricetag-token" in curl_log
+    assert (
+        "https://ai-gateway-unified-ai-gateway-dogfood.dogfood-us-south-1-bxf-4x-"
+        "f196230f74f7ff44a5b4eeb1003c5bd5-0000.us-south.containers.appdomain.cloud/v1/models"
+        in curl_log
+    )
     assert "mock-pricetag-token" not in config_value
+
+
+@pytest.mark.unit
+def test_devbox_pricetag_hosted_discovery_failure_keeps_provider(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, log_file = mock_podman_env
+    env["PRICETAG_HOSTED_URL"] = "https://pricetag-hosted.example/v1"
+    env["PRICETAG_API_KEY"] = "mock-pricetag-token"  # pragma: allowlist secret
+    env["MOCK_PRICETAG_DISCOVERY_FAIL"] = "1"
+
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0
+    assert "could not discover PriceTag hosted models" in res.stderr
+
+    calls = parse_podman_calls(log_file)
+    run_call = next((c for c in calls if c and c[0] == "run" and "-d" in c), None)
+    assert run_call is not None
+    env_values = [
+        run_call[index + 1] for index, arg in enumerate(run_call[:-1]) if arg == "--env"
+    ]
+    config_value = next(
+        value for value in env_values if value.startswith("OPENCODE_CONFIG_CONTENT=")
+    )
+    config = json.loads(config_value.split("=", 1)[1])
+    assert config["provider"]["pricetag-hosted"]["models"] == {}
 
 
 @pytest.mark.unit
