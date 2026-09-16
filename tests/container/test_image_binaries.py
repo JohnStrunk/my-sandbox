@@ -66,6 +66,39 @@ def test_container_binary_presence_and_execution(
 
 
 @pytest.mark.container
+def test_pre_commit_hooks_bootstrap_from_empty_cache(
+    devbox_image: str, repo_root: Path
+):
+    command = r"""
+set -euo pipefail
+fixture="$(mktemp -d)"
+trap 'rm -rf -- "$fixture"' EXIT
+tar \
+  --exclude='./.git' \
+  --exclude='./.venv' \
+  --exclude='./.pytest_cache' \
+  --exclude='./.ruff_cache' \
+  --exclude='./.ripwire_quality_baseline' \
+  -C /workspace -cf - . | tar -xf - -C "$fixture"
+git -C "$fixture" init -q
+git -C "$fixture" add --all
+cd "$fixture"
+PRE_COMMIT_HOME="$fixture/pre-commit-home" pre-commit run --all-files
+"""
+    res = run_in_devbox(
+        devbox_image,
+        ["bash", "-ceu", command],
+        user="sandbox",
+        volumes=[f"{repo_root}:/workspace:ro"],
+        timeout=300,
+    )
+    assert res.returncode == 0, (
+        "Pre-commit hooks could not initialize from an empty cache in the devbox.\n"
+        f"Stdout: {res.stdout}\nStderr: {res.stderr}"
+    )
+
+
+@pytest.mark.container
 def test_repomix_version_matches_manifest(devbox_image: str, repo_root: Path):
     manifest = json.loads((repo_root / "container" / "tool-versions.json").read_text())
     expected_version = manifest["tools"]["repomix"]["version"]
