@@ -103,7 +103,7 @@ check_kind_config() {
       'log_driver[[:space:]]*=[[:space:]]*"k8s-file"' \
       'pids_limit[[:space:]]*=[[:space:]]*65536' \
       'volumes[[:space:]]*=[[:space:]]*\["/proc:/proc"\]' \
-      'utsns[[:space:]]*=[[:space:]]*"host"' \
+      'utsns[[:space:]]*=[[:space:]]*"private"' \
       'netns[[:space:]]*=[[:space:]]*"bridge"' \
       'cgroup_manager[[:space:]]*=[[:space:]]*"cgroupfs"'; do
       if ! config_contains "$config_requirement"; then

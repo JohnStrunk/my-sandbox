@@ -15,7 +15,7 @@ default_sysctls = []
 log_driver = "k8s-file"
 pids_limit = 65536
 volumes = ["/proc:/proc"]
-utsns = "host"
+utsns = "private"
 netns = "bridge"
 
 [engine]
