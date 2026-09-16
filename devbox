@@ -508,6 +508,30 @@ EOF
     )
   fi
 
+  # Tavily MCP integration
+  if [ -n "${TAVILY_API_KEY:-}" ]; then
+    params+=(
+      --env "TAVILY_API_KEY=${TAVILY_API_KEY:-}" \
+    )
+    opencode_config+=(
+      "$(cat <<'EOF'
+{
+  "mcp": {
+    "tavily": {
+      "type": "remote",
+      "url": "https://mcp.tavily.com/mcp/",
+      "headers": {
+        "Authorization": "Bearer {env:TAVILY_API_KEY}"
+      },
+      "enabled": true
+    }
+  }
+}
+EOF
+)"
+    )
+  fi
+
   # The Source MCP integration
   if [ -n "${IGLOO_MCP_COMMUNITY:-}" ] \
     && [ -n "${IGLOO_MCP_COMMUNITY_KEY:-}" ] \

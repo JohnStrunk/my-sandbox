@@ -27,6 +27,14 @@ GITHUB_MCP = {
         "GITHUB_TOOLSETS": "context,repos,issues,pull_requests,users",
     },
 }
+TAVILY_MCP = {
+    "type": "remote",
+    "url": "https://mcp.tavily.com/mcp/",
+    "headers": {
+        "Authorization": "Bearer {env:TAVILY_API_KEY}",
+    },
+    "enabled": True,
+}
 
 
 @pytest.fixture
@@ -503,6 +511,7 @@ def test_devbox_context7_mcp_config_from_api_key(
     env.pop("GITHUB_TOKEN", None)
     env.pop("CONTEXT7_API_KEY", None)
     env["CONTEXT7_API_KEY"] = "mock-context7-token"  # pragma: allowlist secret
+    env["TAVILY_API_KEY"] = "mock-tavily-token"  # pragma: allowlist secret
 
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
@@ -519,6 +528,7 @@ def test_devbox_context7_mcp_config_from_api_key(
     assert (
         "CONTEXT7_API_KEY=mock-context7-token" in run_call
     )  # pragma: allowlist secret
+    assert "TAVILY_API_KEY=mock-tavily-token" in run_call  # pragma: allowlist secret
 
     env_values = [
         run_call[index + 1] for index, arg in enumerate(run_call[:-1]) if arg == "--env"
@@ -553,9 +563,11 @@ def test_devbox_context7_mcp_config_from_api_key(
                 },
                 "enabled": True,
             },
+            "tavily": TAVILY_MCP,
         },
     }
     assert "mock-context7-token" not in config_value
+    assert "mock-tavily-token" not in config_value  # pragma: allowlist secret
 
 
 @pytest.mark.unit

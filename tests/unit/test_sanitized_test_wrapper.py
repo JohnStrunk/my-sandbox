@@ -101,6 +101,7 @@ def _podman_environment(
             "XDG_DATA_HOME": str(host_data),
             "XDG_RUNTIME_DIR": str(host_runtime),
             "GH_TOKEN": "host-secret-token",  # pragma: allowlist secret
+            "TAVILY_API_KEY": "host-tavily-token",  # pragma: allowlist secret
             "CONTAINERS_CONF": str(tmp_path / "host-secret.conf"),
             "DOCKER_AUTH_CONFIG": '{"auths":{"registry.example":"secret"}}',
         }
@@ -135,6 +136,7 @@ def test_wrapper_scrubs_host_environment(repo_root: Path, tmp_path: Path) -> Non
     assert child_env["HOME"] != env["HOME"]
     assert child_env["XDG_CONFIG_HOME"] != env.get("XDG_CONFIG_HOME")
     assert "GH_TOKEN" not in child_env
+    assert "TAVILY_API_KEY" not in child_env
     assert "AWS_CONFIG_FILE" not in child_env
     assert "UNSAFE_TEST_VARIABLE" not in child_env
 
