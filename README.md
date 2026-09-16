@@ -584,6 +584,12 @@ installation is required. Pre-commit still downloads and caches each hook's
 own environment on its first invocation in a new container, so only that
 very first run pays a one-time, network-dependent setup cost. Because devbox
 containers persist across sessions, later runs reuse the cache and stay fast.
+The container test suite also runs every hook inside the freshly built devbox
+image with an empty `PRE_COMMIT_HOME`. This verifies the image's actual
+toolchain instead of allowing the host CI job's restored cache to hide a
+bootstrap failure. The current hook set has no Ruby-language hook; adding one
+requires declaring and provisioning its runtime in both the devbox image and
+CI rather than relying on the cache.
 
 | Command | Checks | Approximate cost |
 | --- | --- | --- |
