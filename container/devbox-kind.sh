@@ -11,6 +11,7 @@ set -euo pipefail
 readonly INFRASTRUCTURE_EXIT=125
 readonly CONFIGURATION_EXIT=2
 readonly KIND_CONFIG="${DEVBOX_KIND_CONTAINERS_CONF:-/sandbox/.config/containers/kind-containers.conf}"
+readonly NETWORK_PREFLIGHT_IMAGE="${DEVBOX_KIND_NETWORK_PREFLIGHT_IMAGE:-docker.io/library/alpine:3.22}"
 
 usage() {
   cat <<'EOF'
@@ -165,6 +166,11 @@ check_bridge_network() {
     # A timed-out create may have reached Podman after the client stopped
     # waiting, so always attempt bounded cleanup below.
     network_maybe_created=true
+  fi
+  local container_output
+  if ! container_output="$(CONTAINERS_CONF="$KIND_CONFIG" timeout 120 podman run \
+    --rm --pull=missing --network "$network_name" "$NETWORK_PREFLIGHT_IMAGE" true 2>&1)"; then
+    record_host_failure "rootless bridge container probe failed: $container_output"
   fi
   if [[ "$network_maybe_created" == true ]]; then
     local remove_output

@@ -66,7 +66,7 @@ def test_containers_storage_conf(devbox_image: str):
             (
                 'cgroups = "disabled"',
                 'volumes = ["/proc:/proc"]',
-                'utsns = "private"',
+                'utsns = "host"',
                 'netns = "pasta"',
                 'network_backend = "netavark"',
                 'default_rootless_network_cmd = "pasta"',
