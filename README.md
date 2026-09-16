@@ -297,7 +297,7 @@ devbox container is created:
 
 | Name | Description | Requirements |
 | --- | --- | --- |
-| GitHub | GitHub repository, issue, pull request, and code search capabilities. | At least one of `GH_TOKEN`, `GITHUB_TOKEN`, or an authenticated host `gh` CLI. |
+| GitHub | GitHub repository, issue, pull request, and code search capabilities through the pinned local MCP server. | At least one of `GH_TOKEN`, `GITHUB_TOKEN`, or an authenticated host `gh` CLI. |
 | The Source | Search and fetch capabilities for The Source, Red Hat's intranet. | All of `IGLOO_MCP_COMMUNITY`, `IGLOO_MCP_COMMUNITY_KEY`, `IGLOO_MCP_APP_PASS`, `IGLOO_MCP_APP_ID`, `IGLOO_MCP_USERNAME`, and `IGLOO_MCP_PASSWORD`. |
 | Context7 | Up-to-date documentation and code examples for software libraries. | `CONTEXT7_API_KEY`. |
 | Ripwire | Local repository context mapping and code-navigation tools through CLI and MCP. | Always enabled; included in the devbox image. |
@@ -314,6 +314,13 @@ credentials or integration triggers. On creation, the launcher also runs
 `opencode models --refresh` inside the container so the first model picker uses
 the current Models.dev catalog. If the refresh command fails, devbox reports a
 warning and leaves any existing cache in place.
+
+The GitHub MCP server runs locally from the pinned image binary through a
+response-bounding proxy, which keeps search behavior versioned and testable.
+Search tools require explicit field selection, clamp `perPage` to 20 or less,
+and cap serialized results at 64 KiB. Use page-based pagination and fetch full
+issue or pull-request bodies with a targeted read after identifying the relevant
+result.
 
 When both Octo variables are set, select the models with these OpenCode IDs:
 `octo-open/qwen38-27b-frontier`, `octo-open/qwen38-flash-next`, and
@@ -628,7 +635,8 @@ consumer updates so a version change remains synchronized.
 
 Some entries also pin release-provenance metadata that Renovate cannot
 recompute: `ast_grep` carries per-platform release checksums and the official
-agent-skill archive hash. Every such entry declares a
+agent-skill archive hash, while `github_mcp_server` carries per-platform
+release checksums. Every such entry declares a
 `provenance.url_templates` block mapping each checksummed field to the asset
 that must hash to it, and the Dockerfile must read exactly those fields.
 

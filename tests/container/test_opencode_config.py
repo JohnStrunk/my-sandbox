@@ -97,6 +97,21 @@ def test_devbox_tools_skill_is_staged_and_active(devbox_image: str):
         f"Stdout: {res.stdout}\nStderr: {res.stderr}"
     )
 
+    res = run_in_devbox(
+        devbox_image,
+        [
+            "grep",
+            "-Eq",
+            "^### GitHub search$|perPage|search_issues",
+            "/sandbox/.agents/skills/devbox-tools/SKILL.md",
+        ],
+        user="sandbox",
+    )
+    assert res.returncode == 0, (
+        "GitHub search field and pagination guidance is not available to a fresh "
+        f"OpenCode session.\nStdout: {res.stdout}\nStderr: {res.stderr}"
+    )
+
 
 @pytest.mark.container
 def test_repomix_guidance_is_staged_and_active(devbox_image: str):
@@ -166,4 +181,56 @@ def test_fresh_opencode_session_discovers_semble(devbox_image: str):
         f"A fresh OpenCode session could not connect to Semble.\n{output}"
     )
     assert "semble" in output
+    assert "connected" in output
+
+
+@pytest.mark.container
+def test_fresh_opencode_session_discovers_github_mcp(devbox_image: str):
+    config = json.dumps(
+        {
+            "mcp": {
+                "github": {
+                    "type": "local",
+                    "command": ["github-mcp-server-proxy"],
+                    "enabled": True,
+                    "environment": {
+                        "GITHUB_PERSONAL_ACCESS_TOKEN": (
+                            "{env:GITHUB_PERSONAL_ACCESS_TOKEN}"
+                        ),
+                        "GITHUB_TOOLSETS": "context,repos,issues,pull_requests,users",
+                    },
+                }
+            }
+        }
+    )
+    res = subprocess.run(
+        [
+            "podman",
+            "run",
+            "--rm",
+            "--network",
+            "none",
+            "--user",
+            "sandbox",
+            "--env",
+            "GITHUB_PERSONAL_ACCESS_TOKEN="
+            "mock-github-token",  # pragma: allowlist secret
+            "--env",
+            f"OPENCODE_CONFIG_CONTENT={config}",
+            devbox_image,
+            "opencode",
+            "mcp",
+            "list",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    output = f"{res.stdout}\n{res.stderr}"
+    assert res.returncode == 0, (
+        f"A fresh OpenCode session could not connect to the local GitHub MCP proxy.\n"
+        f"{output}"
+    )
+    assert "github" in output
     assert "connected" in output

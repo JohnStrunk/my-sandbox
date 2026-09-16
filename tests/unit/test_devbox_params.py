@@ -18,6 +18,15 @@ SEMBLE_MCP = {
     "command": ["semble"],
     "enabled": True,
 }
+GITHUB_MCP = {
+    "type": "local",
+    "command": ["github-mcp-server-proxy"],
+    "enabled": True,
+    "environment": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "{env:GH_TOKEN}",
+        "GITHUB_TOOLSETS": "context,repos,issues,pull_requests,users",
+    },
+}
 
 
 @pytest.fixture
@@ -479,15 +488,7 @@ def test_devbox_github_mcp_config_from_token(
         "mcp": {
             "ripwire": RIPWIRE_MCP,
             "semble": SEMBLE_MCP,
-            "github": {
-                "type": "remote",
-                "url": "https://api.githubcopilot.com/mcp/",
-                "enabled": True,
-                "oauth": False,
-                "headers": {
-                    "Authorization": "Bearer {env:GH_TOKEN}",
-                },
-            },
+            "github": GITHUB_MCP,
         },
     }
     assert "mock-github-token" not in config_value
@@ -739,8 +740,10 @@ def test_devbox_merges_mcp_configurations(
     )
     config = json.loads(config_value.split("=", 1)[1])
     assert set(config["mcp"]) == {"ripwire", "semble", "github", "the-source"}
-    assert config["mcp"]["github"]["headers"] == {
-        "Authorization": "Bearer {env:GH_TOKEN}"
+    assert config["mcp"]["github"] == GITHUB_MCP
+    assert config["mcp"]["github"]["environment"] == {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "{env:GH_TOKEN}",
+        "GITHUB_TOOLSETS": "context,repos,issues,pull_requests,users",
     }
     assert config["mcp"]["the-source"]["environment"]["IGLOO_MCP_APP_ID"] == (
         "{env:IGLOO_MCP_APP_ID}"

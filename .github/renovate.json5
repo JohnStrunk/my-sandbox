@@ -45,10 +45,18 @@
       "commitMessageSuffix": "(refresh release checksums + agent-skill pin via scripts/verify_provenance.py --update)",
     },
     {
+      "description": "GitHub MCP server version bumps must refresh release checksums",
+      "matchPackageNames": [
+        "github/github-mcp-server",
+      ],
+      "commitMessageSuffix": "(refresh release checksums via scripts/verify_provenance.py --update)",
+    },
+    {
       "description": "Keep canonical tool versions and their consumers together",
       "matchPackageNames": [
         "hadolint/hadolint",
         "ast-grep/ast-grep",
+        "github/github-mcp-server",
         "markdownlint-cli2",
         "DavidAnson/markdownlint-cli2",
         "ruff",

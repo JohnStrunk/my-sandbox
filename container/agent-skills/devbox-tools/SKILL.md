@@ -89,6 +89,24 @@ repository `AGENTS.md` or README.
 - The runtime search and fresh OpenCode MCP discovery are covered by container
   tests.
 
+### GitHub search
+
+- Agent integration: OpenCode receives the pinned local `github-mcp-server`
+  through a stdio proxy when GitHub credentials are available.
+- For `search_issues`, `search_pull_requests`, `search_code`, and related search
+  tools, the proxy requires only the `fields` needed for the current step and
+  clamps `perPage` to 20 or less. Use `page` for follow-up results instead of
+  asking for a large unbounded response.
+- Do not request `body`, comments, labels, or full repository objects during a
+  discovery search unless they are required. Use a targeted read tool after
+  identifying the relevant issue, pull request, or repository.
+- If the MCP server is unavailable, use `gh api` with an explicit `--jq`
+  projection and `--paginate` as the fallback; do not print full API objects.
+- Search tool results are capped at 64 KiB; an oversized result returns an
+  actionable error asking for fewer fields or a smaller page.
+- The local server's pinned version and binary availability are validated by
+  the image and tool-manifest checks.
+
 ### Project-aware Go toolchains
 
 - Runtime command: `devbox-go`.
