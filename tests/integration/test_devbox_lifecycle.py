@@ -1,10 +1,14 @@
 import os
-import subprocess
 from pathlib import Path
 
 import pytest
 
-from tests.conftest import devbox_container_name, run_bash_script, unique_workspace_dir
+from tests.conftest import (
+    devbox_container_name,
+    run_bash_script,
+    run_podman_isolated,
+    unique_workspace_dir,
+)
 
 
 @pytest.mark.integration
@@ -97,18 +101,19 @@ def test_devbox_lifecycle_create_exec_recreate_remove(
         assert res_remove.returncode == 0
         assert "Removing container" in res_remove.stdout
 
-        # Verify container no longer exists in podman
-        check_exists = subprocess.run(
-            ["podman", "container", "exists", container_name],
-            capture_output=True,
-            check=False,
+        # Verify container no longer exists in podman. Run through the
+        # isolated runtime: a raw call "passes" on its configuration error,
+        # not on the container's absence (issue #178).
+        names = run_podman_isolated(
+            isolated_env, ["ps", "-a", "--format", "{{.Names}}"]
         )
-        assert check_exists.returncode != 0
+        assert container_name not in names.stdout.splitlines()
 
     finally:
-        # Cleanup in case of failure
-        subprocess.run(
-            ["podman", "rm", "-f", container_name],
-            capture_output=True,
-            check=False,
+        # Loud cleanup in case of failure; an already-removed container is
+        # the expected success-path state, not a leak.
+        run_podman_isolated(
+            isolated_env,
+            ["rm", "-f", container_name],
+            allow_absent=True,
         )

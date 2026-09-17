@@ -268,6 +268,76 @@ def isolated_env(host_credentials: None, isolated_home: Path) -> dict[str, str]:
     return env
 
 
+# Isolation-aware Podman cleanup (issue #178)
+# ---------------------------------------------------------------------------
+# `isolated_env` reaches its Podman runtime through a `podman` wrapper on the
+# PATH it injects, while `host_credentials` (its dependency) leaves fake
+# `CONTAINERS_*` config paths in `os.environ`. A raw
+# `subprocess.run(["podman", ...])` that omits `env=isolated_env` therefore
+# fails with a configuration error instead of cleaning anything up, and
+# `check=False` + `capture_output=True` hides that failure: tests pass while
+# leaking containers and volumes. All Podman cleanup in tests must go through
+# `run_podman_isolated()`, which always passes the isolated env, retries a
+# bounded number of times (volume detachment races container removal), and
+# raises on any real failure.
+PODMAN_CLEANUP_RETRIES = 5
+PODMAN_CLEANUP_RETRY_DELAY_SECONDS = 1.0
+PODMAN_ABSENT_MARKERS = ("no such container", "no such volume", "no such image")
+
+
+def _podman_reports_absent(result: subprocess.CompletedProcess[str]) -> bool:
+    stderr = (result.stderr or "").lower()
+    return any(marker in stderr for marker in PODMAN_ABSENT_MARKERS)
+
+
+def run_podman_isolated(
+    env: dict[str, str],
+    args: list[str],
+    *,
+    timeout: float = 30.0,
+    retries: int = 0,
+    retry_delay: float = PODMAN_CLEANUP_RETRY_DELAY_SECONDS,
+    allow_absent: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    """Run ``podman`` through the ``isolated_env`` runtime and fail loudly.
+
+    ``retries`` bounds retries for failures other than success/absence (e.g.
+    ``volume rm`` racing container removal). With ``allow_absent``, a
+    "no such container/volume/image" error is treated as an already-clean
+    state instead of a failure; every other non-zero exit raises
+    ``AssertionError`` with the exit status and captured output so a leaky
+    cleanup can never pass silently.
+    """
+    cmd = ["podman", *args]
+    result: subprocess.CompletedProcess[str] | None = None
+    for attempt in range(retries + 1):
+        # Plain subprocess.run (not run_in_process_group): the cleanup verbs
+        # this helper takes (rm, volume rm, ps) are single leaf CLI
+        # executions with no descendants to orphan, unlike the
+        # launcher -> `podman build` chains issue #211 had to reap.
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+            timeout=timeout,
+        )
+        if result.returncode == 0:
+            return result
+        if allow_absent and _podman_reports_absent(result):
+            return result
+        if attempt < retries:
+            time.sleep(retry_delay)
+    assert result is not None
+    detail = f"{result.stdout or ''}{result.stderr or ''}".strip()
+    raise AssertionError(
+        f"podman {' '.join(args)} exited with status {result.returncode} "
+        f"after {retries + 1} attempt(s) under the isolated env"
+        f"{f': {detail}' if detail else ''}"
+    )
+
+
 @pytest.fixture(scope="session")
 def repo_root() -> Path:
     return REPO_ROOT

@@ -1,11 +1,13 @@
 import os
-import subprocess
-import time
 from pathlib import Path
 
 import pytest
 
-from tests.conftest import run_bash_script
+from tests.conftest import (
+    PODMAN_CLEANUP_RETRIES,
+    run_bash_script,
+    run_podman_isolated,
+)
 
 HOST_POISONED_PYVENV_CFG = "home = /nonexistent/host/python\n"
 
@@ -79,35 +81,18 @@ def test_host_venv_is_shadowed_inside_devbox(
             .startswith("#!/nonexistent/host/python")
         )
     finally:
-        subprocess.run(
-            [str(devbox_path), "--remove"],
-            capture_output=True,
-            text=True,
-            env=isolated_env,
-            cwd=test_dir,
-            check=False,
-            timeout=60,
-        )
-        subprocess.run(
-            ["podman", "rm", "-f", container_name],
-            capture_output=True,
-            check=False,
-            env=isolated_env,
-            timeout=30,
+        run_podman_isolated(
+            isolated_env,
+            ["rm", "-f", container_name],
+            allow_absent=True,
         )
         # Retry: the volume detaches only once the container is fully gone.
-        rm_volume = None
-        for _ in range(5):
-            rm_volume = subprocess.run(
-                ["podman", "volume", "rm", volume_name],
-                capture_output=True,
-                check=False,
-                env=isolated_env,
-                timeout=30,
-            )
-            if rm_volume.returncode == 0:
-                break
-            time.sleep(1)
-        assert rm_volume is not None and rm_volume.returncode == 0, (
-            rm_volume.stderr.decode() if rm_volume else "volume rm never ran"
+        # Absence is a legitimate outcome when the body failed before the
+        # launcher ever ran; detach races ("being used") still retry and
+        # then fail loudly.
+        run_podman_isolated(
+            isolated_env,
+            ["volume", "rm", volume_name],
+            retries=PODMAN_CLEANUP_RETRIES,
+            allow_absent=True,
         )
