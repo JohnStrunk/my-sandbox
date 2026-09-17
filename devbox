@@ -20,7 +20,8 @@
 #     into it (starting it first if it's currently stopped).
 set -euo pipefail
 
-HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+LAUNCHER_SCRIPT="$(readlink -f "${BASH_SOURCE[0]}")"
+HERE="$(cd "$(dirname "$LAUNCHER_SCRIPT")" && pwd)"
 BIND_DIR="$(realpath "$PWD")"
 NAME="devbox-$(basename "$BIND_DIR")"
 WORKDIR="/sandbox/$(basename "$BIND_DIR")"
@@ -55,10 +56,18 @@ EOF
 }
 
 container_context_fingerprint() {
-  (
-    cd "$HERE/container"
-    find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum
-  ) | sha256sum | cut -d ' ' -f 1
+  # Covers the container build context *and* the launcher itself: bind
+  # mounts, injected env, and exec contracts live in this script, so a
+  # container built by an older launcher must be reported stale (issue
+  # #179). Hashing stdin keeps the value independent of where the repo
+  # is checked out.
+  {
+    (
+      cd "$HERE/container"
+      find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum
+    )
+    printf 'launcher %s\n' "$(sha256sum < "$LAUNCHER_SCRIPT" | cut -d ' ' -f 1)"
+  } | sha256sum | cut -d ' ' -f 1
 }
 
 container_is_stale() {
