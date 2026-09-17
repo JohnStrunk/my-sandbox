@@ -35,6 +35,7 @@ jobs:
 
     steps:
       - name: Checkout repository
+        if: github.event_name == 'pull_request'
         # https://github.com/actions/checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -49,13 +50,14 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
-          # Paths that can change how pre-commit hooks bootstrap inside the
-          # devbox image. Everything else keeps the fast cached validation.
-          relevant='^(\.pre-commit-config\.yaml|\.github/workflows/|container/|pyproject\.toml|uv\.lock|scripts/sanitized-test\.sh|tests/container/test_image_binaries\.py)'
+          # Paths that can change how pre-commit hooks bootstrap or behave
+          # inside the devbox image. Everything else keeps the fast cached
+          # validation.
+          relevant='^(\.pre-commit-config\.yaml|\.secrets\.baseline|\.github/workflows/|container/|pyproject\.toml|uv\.lock|scripts/sanitized-test\.sh|scripts/validate_tool_versions\.py|tests/container/test_image_binaries\.py)'
           cold_bootstrap=true
           if [[ "$EVENT_NAME" == "pull_request" ]]; then
             if ! changed="$(git diff --name-only "$BASE_SHA" HEAD 2>/dev/null)"; then
-              echo "Base commit unavailable; defaulting to cold bootstrap."
+              echo "::warning::Base commit diff failed; forcing cold bootstrap."
             elif grep -Eq "$relevant" <<<"$changed"; then
               echo "Cold bootstrap requested by changed paths:"
               grep -E "$relevant" <<<"$changed"
