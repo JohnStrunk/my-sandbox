@@ -9,18 +9,17 @@ from pathlib import Path
 
 import pytest
 
+from tests.conftest import run_in_process_group
+
 
 def _run_wrapper(
     repo_root: Path, args: list[str], env: dict[str, str]
 ) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
+    return run_in_process_group(
         [str(repo_root / "scripts" / "sanitized-test.sh"), *args],
-        cwd=repo_root,
-        env=env,
-        capture_output=True,
-        text=True,
         timeout=30,
-        check=False,
+        env=env,
+        cwd=repo_root,
     )
 
 
