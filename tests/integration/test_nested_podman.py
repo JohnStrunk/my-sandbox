@@ -1,4 +1,3 @@
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -6,6 +5,7 @@ import pytest
 from tests.conftest import (
     devbox_container_name,
     run_bash_script,
+    run_podman_isolated,
     unique_workspace_dir,
 )
 
@@ -25,10 +25,10 @@ def _check_nested_podman_supported(
         )
         return res.returncode == 0
     finally:
-        subprocess.run(
-            ["podman", "rm", "-f", container_name],
-            capture_output=True,
-            check=False,
+        run_podman_isolated(
+            env,
+            ["rm", "-f", container_name],
+            allow_absent=True,
         )
 
 
@@ -76,10 +76,10 @@ def test_nested_podman_run(
         )
         assert "nested-podman-ok" in res.stdout
     finally:
-        subprocess.run(
-            ["podman", "rm", "-f", container_name],
-            capture_output=True,
-            check=False,
+        run_podman_isolated(
+            isolated_env,
+            ["rm", "-f", container_name],
+            allow_absent=True,
         )
 
 
@@ -126,8 +126,8 @@ CMD ["cat", "/msg.txt"]
         assert run_res.returncode == 0
         assert "build step inside devbox" in run_res.stdout
     finally:
-        subprocess.run(
-            ["podman", "rm", "-f", container_name],
-            capture_output=True,
-            check=False,
+        run_podman_isolated(
+            isolated_env,
+            ["rm", "-f", container_name],
+            allow_absent=True,
         )

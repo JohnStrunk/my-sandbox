@@ -187,11 +187,17 @@ test "$(cat "$marker")" = cached
             f"Stdout: {second.stdout}\nStderr: {second.stderr}"
         )
     finally:
-        subprocess.run(
+        # Surface cleanup failures instead of swallowing them (issue #178):
+        # a non-zero exit here means the volume leaked.
+        rm_volume = subprocess.run(
             ["podman", "volume", "rm", cache_volume],
             check=False,
             capture_output=True,
             text=True,
+        )
+        assert rm_volume.returncode == 0, (
+            f"Leaked cache volume {cache_volume}: "
+            f"exit {rm_volume.returncode}: {rm_volume.stderr.strip()}"
         )
 
 
