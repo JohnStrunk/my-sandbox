@@ -71,6 +71,7 @@ def test_container_binary_presence_and_execution(
 
 
 @pytest.mark.container
+@pytest.mark.cold_bootstrap
 def test_pre_commit_hooks_bootstrap_from_empty_cache(
     devbox_image: str, repo_root: Path
 ):

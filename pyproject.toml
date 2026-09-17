@@ -23,6 +23,7 @@ markers = [
     "unit: Fast isolated unit tests for CLI argument parsing and helper logic",
     "container: Container image static and smoke verification tests",
     "integration: Integration tests for container lifecycle and nested Podman",
+    "cold_bootstrap: Cold-cache pre-commit bootstrap validation (path-gated and scheduled in CI)",
     "e2e_inference: End-to-end LLM inference tests for API providers",
 ]
 

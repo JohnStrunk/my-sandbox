@@ -473,7 +473,7 @@ the test extras and invoke pytest through `uv`; this is the underlying command
 used by the sanitized wrapper locally and in CI:
 
 ```shell
-uv run --extra test pytest -m "not e2e_inference"
+uv run --extra test pytest -m "not e2e_inference and not cold_bootstrap"
 ```
 
 Tests are organized with markers:
@@ -482,12 +482,18 @@ Tests are organized with markers:
   helper logic (no real Podman required).
 - `container` - Static and smoke checks against a built `devbox` image.
 - `integration` - Container lifecycle and nested Podman-in-Podman checks.
+- `cold_bootstrap` - Cold-cache `pre-commit` bootstrap check inside the
+  devbox image. Deselected by default because it initializes every hook
+  environment from an empty cache; CI runs it as its own path-gated step in
+  the `Automated Tests` job instead of on every pull request's full suite.
 - `e2e_inference` - End-to-end checks against real LLM provider APIs.
 
 CI runs the sanitized wrapper around the underlying pytest command. The
 `container` and `integration` markers still run in CI (they require Podman,
-which is available there) but `e2e_inference` is opt-in since it needs real
-provider credentials.
+which is available there). The `cold_bootstrap` marker runs as a dedicated
+step that a `changes` job path-gates on pre-commit/container/CI-relevant
+edits, and a daily schedule always includes it. `e2e_inference` is opt-in
+since it needs real provider credentials.
 
 ### Isolated by default
 
@@ -551,7 +557,7 @@ For container and integration tests, add `--require-podman`:
 
 ```shell
 ./scripts/sanitized-test.sh --require-podman -- \
-  uv run --extra test pytest -m "not e2e_inference"
+  uv run --extra test pytest -m "not e2e_inference and not cold_bootstrap"
 ```
 
 `--require-podman` uses `docker.io/library/alpine:3.22` for its bounded real
@@ -626,30 +632,39 @@ installation is required. Pre-commit still downloads and caches each hook's
 own environment on its first invocation in a new container, so only that
 very first run pays a one-time, network-dependent setup cost. Because devbox
 containers persist across sessions, later runs reuse the cache and stay fast.
-The container test suite also runs every hook inside the freshly built devbox
-image with an empty `PRE_COMMIT_HOME`. This verifies the image's actual
-toolchain instead of allowing the host CI job's restored cache to hide a
-bootstrap failure. The current hook set has no Ruby-language hook; adding one
+A dedicated test (marked `cold_bootstrap`) also runs every hook inside the
+freshly built devbox image with an empty `PRE_COMMIT_HOME`. This verifies the
+image's actual toolchain instead of allowing the host CI job's restored cache
+to hide a bootstrap failure. Running it from an empty cache costs a minute or
+more and depends on hook-repository availability, so CI keeps it out of the
+default suite: a `changes` job gates the cold-bootstrap step so it runs on a
+pull request only when the change touches pre-commit configuration,
+`container/`, tool manifests, CI setup, or the check itself, and a daily
+schedule on `main` always exercises the cold path. The current hook set has
+no Ruby-language hook; adding one
 requires declaring and provisioning its runtime in both the devbox image and
 CI rather than relying on the cache.
 
 | Command | Checks | Approximate cost |
 | --- | --- | --- |
 | `./scripts/fast-check.sh` | Pre-commit lint hooks and unit tests (`tests/unit`) | Seconds after the first run; no container image build |
-| `uv run --extra test pytest -m "not e2e_inference"` | Everything above plus container image build/smoke tests and container lifecycle/nested-Podman integration tests | Several minutes; builds the devbox container image |
+| `uv run --extra test pytest -m "not e2e_inference and not cold_bootstrap"` | Everything above plus container image build/smoke tests and container lifecycle/nested-Podman integration tests | Several minutes; builds the devbox container image |
+| `uv run --extra test pytest -m cold_bootstrap` | Cold-cache `pre-commit` bootstrap inside the freshly built devbox image | Roughly two extra minutes beyond the row above; downloads every hook environment |
 
 Use `./scripts/fast-check.sh` while iterating on launcher scripts,
 configuration, or documentation, then run the full command before opening a
 pull request. CI always runs the full command (see
 [`.github/workflows/ci-workflow.yaml`](.github/workflows/ci-workflow.yaml)) as
 the final validation, along with `pre-commit run -a` for the same lint hooks
-`fast-check.sh` runs.
+`fast-check.sh` runs and the path-gated cold-bootstrap step described above.
 
 Tests are grouped with pytest markers (`unit`, `container`, `integration`,
-`e2e_inference`; see [`pyproject.toml`](pyproject.toml)), so any subset can
-also be run directly, e.g. `uv run --extra test pytest -m unit`. The
-`e2e_inference` marker is excluded from both documented commands above
-because it calls real LLM provider APIs and requires provider credentials.
+`cold_bootstrap`, `e2e_inference`; see [`pyproject.toml`](pyproject.toml)),
+so any subset can also be run directly, e.g. `uv run --extra test pytest -m
+unit`. The `e2e_inference` and `cold_bootstrap` markers are excluded from the
+documented full command above: `e2e_inference` because it calls real LLM
+provider APIs and requires provider credentials, and `cold_bootstrap`
+because CI runs it in its own path-gated and scheduled job.
 
 ### Managing Tool Versions
 
