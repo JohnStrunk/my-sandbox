@@ -8,7 +8,6 @@ credentials.
 """
 
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -19,6 +18,7 @@ from tests.conftest import (
     HOST_CONFIG_ENV_VARS,
     ISOLATION_ENV_VARS,
     UNLISTED_SENSITIVE_ENV_VARS,
+    run_in_process_group,
 )
 
 
@@ -65,7 +65,7 @@ def test_isolation_holds_even_when_host_process_has_credentials(
     for name in ISOLATION_ENV_VARS:
         env[name] = f"host-{name.lower()}"
 
-    res = subprocess.run(
+    res = run_in_process_group(
         [
             sys.executable,
             "-m",
@@ -78,11 +78,8 @@ def test_isolation_holds_even_when_host_process_has_credentials(
             "tests/unit/test_isolated_test_environment.py::"
             "test_host_config_overrides_are_absent_by_default",
         ],
+        timeout=60,
         cwd=repo_root,
         env=env,
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
     )
     assert res.returncode == 0, res.stdout + res.stderr

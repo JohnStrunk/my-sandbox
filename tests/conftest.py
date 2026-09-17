@@ -463,6 +463,9 @@ def remove_devbox(
     except subprocess.TimeoutExpired as exc:
         result = None
         launcher_error = f"launcher cleanup timed out: {exc}"
+        cleanup = getattr(exc, "process_group_cleanup", "")
+        if cleanup:
+            launcher_error += f"; process-group cleanup failed: {cleanup}"
     else:
         launcher_error = (
             f"launcher cleanup exited with status {result.returncode}"
@@ -501,15 +504,39 @@ KILL_GRACE_SECONDS = 2.0
 
 
 def _process_group_alive(pgid: int) -> bool:
-    """True if any member of process group ``pgid`` still exists."""
+    """True if any live member of process group ``pgid`` still exists.
+
+    Zombies count as gone: a killed member whose parent dies without
+    reaping it (e.g. under an init-less PID 1) can linger as a zombie
+    forever, and killpg(2) treats zombies as live members. /proc is used
+    where available to see through zombies; otherwise fall back to
+    killpg(2) semantics.
+    """
     try:
-        os.killpg(pgid, 0)
-    except ProcessLookupError:
-        return False
+        entries = os.listdir("/proc")
     except OSError:
-        # PermissionError or anything unexpected: assume alive, escalate.
+        try:
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            return False
+        except OSError:
+            # PermissionError or anything unexpected: assume alive, escalate.
+            return True
         return True
-    return True
+
+    for name in entries:
+        if not name.isdigit():
+            continue
+        try:
+            stat = Path("/proc", name, "stat").read_text()
+        except OSError:
+            continue  # exited mid-scan
+        # Fields after comm (which may contain spaces/parens):
+        # state, ppid, pgrp, session, ...
+        fields = stat[stat.rfind(")") + 1 :].split()
+        if len(fields) >= 3 and fields[2] == str(pgid) and fields[0] != "Z":
+            return True
+    return False
 
 
 def _wait_process_group_gone(
@@ -539,6 +566,8 @@ def _terminate_process_group(
     terminated/reaped.
     """
     pgid = proc.pid  # start_new_session=True makes the child a group leader
+    if os.getpgid(pgid) != pgid:
+        return f"pid {pgid} is not a process group leader; refusing to signal it"
     failures: list[str] = []
 
     try:
@@ -598,7 +627,18 @@ def run_in_process_group(
         stdout, stderr = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired as exc:
         cleanup_error = _terminate_process_group(proc)
-        proc.communicate()  # reap the terminated group leader
+        try:
+            proc.communicate(timeout=KILL_GRACE_SECONDS)  # reap + drain pipes
+        except subprocess.TimeoutExpired:
+            # A descendant escaped the group and holds the pipes open; do
+            # not turn the bounded timeout into an unbounded hang.
+            for stream in (proc.stdout, proc.stderr):
+                if stream is not None:
+                    stream.close()
+            cleanup_error = cleanup_error or (
+                "output pipes stayed open after group termination "
+                "(a descendant escaped the process group)"
+            )
         exc.process_group_cleanup = cleanup_error  # type: ignore[attr-defined]
         if cleanup_error:
             print(
