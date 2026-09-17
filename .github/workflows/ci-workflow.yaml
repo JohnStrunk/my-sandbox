@@ -11,6 +11,10 @@ on:  # yamllint disable-line rule:truthy
     # The branches below must be a subset of the branches above
     branches:
       - main
+  # Nightly full validation on main, including the cold pre-commit bootstrap
+  # path that ordinary pull requests run only when their change affects it.
+  schedule:
+    - cron: "17 6 * * *"
   workflow_dispatch:
     inputs:
       kind_integration:
@@ -23,6 +27,45 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    name: "Detect cold bootstrap relevance"
+    runs-on: ubuntu-latest
+    outputs:
+      cold_bootstrap: ${{ steps.filter.outputs.cold_bootstrap }}
+
+    steps:
+      - name: Checkout repository
+        # https://github.com/actions/checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: "recursive"
+          fetch-depth: 0
+
+      - name: Evaluate cold bootstrap path filters
+        id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          # Paths that can change how pre-commit hooks bootstrap inside the
+          # devbox image. Everything else keeps the fast cached validation.
+          relevant='^(\.pre-commit-config\.yaml|\.github/workflows/|container/|pyproject\.toml|uv\.lock|scripts/sanitized-test\.sh|tests/container/test_image_binaries\.py)'
+          cold_bootstrap=true
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            if ! changed="$(git diff --name-only "$BASE_SHA" HEAD 2>/dev/null)"; then
+              echo "Base commit unavailable; defaulting to cold bootstrap."
+            elif grep -Eq "$relevant" <<<"$changed"; then
+              echo "Cold bootstrap requested by changed paths:"
+              grep -E "$relevant" <<<"$changed"
+            else
+              cold_bootstrap=false
+            fi
+          fi
+          printf 'cold_bootstrap=%s\n' "$cold_bootstrap" >> "$GITHUB_OUTPUT"
+          echo "cold_bootstrap=${cold_bootstrap}" >> "$GITHUB_STEP_SUMMARY"
+
   pre-commit:
     name: "Pre-commit checks"
     runs-on: ubuntu-latest
@@ -111,6 +154,8 @@ jobs:
 
   test:
     name: "Automated Tests"
+    needs:
+      - changes
     runs-on: ubuntu-latest
 
     steps:
@@ -204,10 +249,21 @@ jobs:
             --directory "$HOME/.local/share/containers/storage" .
 
       - name: Run test suite
+        # The cold_bootstrap check needs an empty hook cache to be meaningful;
+        # it runs as its own gated step instead of slowing down every PR.
         run: >-
           ./scripts/sanitized-test.sh --require-podman --
           env UV_CACHE_DIR="${HOME}/.cache/uv"
-          uv run --extra test pytest -m "not e2e_inference"
+          uv run --extra test pytest -m "not e2e_inference and not cold_bootstrap"
+
+      # Reuses the image and Podman storage the test suite already built, so
+      # only the network-dependent hook-environment download is repeated.
+      - name: Run cold pre-commit bootstrap check
+        if: needs.changes.outputs.cold_bootstrap == 'true'
+        run: >-
+          ./scripts/sanitized-test.sh --require-podman --
+          env UV_CACHE_DIR="${HOME}/.cache/uv"
+          uv run --extra test pytest -m cold_bootstrap
 
       - name: Save Podman layer cache
         if: success() && github.ref == 'refs/heads/main' && steps.podman-cache.outputs.cache-hit != 'true'
@@ -255,6 +311,7 @@ jobs:
     name: CI Workflow - Success
     if: always()
     needs:
+      - changes
       - pre-commit
       - test
       - kind-integration
