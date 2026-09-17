@@ -61,7 +61,7 @@ import sys
 value = json.load(sys.stdin)
 print(json.dumps({{
     item["id"]: {{
-        "name": item["id"],
+        "name": item.get("display_name") or item["id"],
         "limit": {{"context": 262144, "output": 8192}},
         "reasoning": True,
         "variants": {{
@@ -270,7 +270,12 @@ exit 0
         {
             "object": "list",
             "data": [
-                {"id": "gpt-5.6-luna"},
+                {
+                    "id": "Inferact/Qwen3.8-Flash-Next-NVFP4",
+                    "display_name": (
+                        "Qwen 3.8 Flash Next (hosted, $0.15/$0.47 per MTok)"
+                    ),
+                },
                 {"id": "gpt-5.4"},
                 {"id": "gpt-5.4-mini"},
                 {"id": "gpt-5.3-codex"},
@@ -874,7 +879,11 @@ def test_devbox_pricetag_env_and_provider_config(
     config = json.loads(config_value.split("=", 1)[1])
     expected_models = {
         model_id: {
-            "name": model_id,
+            "name": (
+                "Qwen 3.8 Flash Next (hosted, $0.15/$0.47 per MTok)"
+                if model_id == "Inferact/Qwen3.8-Flash-Next-NVFP4"
+                else model_id
+            ),
             "limit": {"context": 262144, "output": 8192},
             "reasoning": True,
             "variants": {
@@ -884,7 +893,7 @@ def test_devbox_pricetag_env_and_provider_config(
             },
         }
         for model_id in (
-            "gpt-5.6-luna",
+            "Inferact/Qwen3.8-Flash-Next-NVFP4",
             "gpt-5.4",
             "gpt-5.4-mini",
             "gpt-5.3-codex",
