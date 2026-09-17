@@ -2,7 +2,10 @@ import hashlib
 import os
 import shlex
 import shutil
+import signal
 import subprocess
+import sys
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -470,12 +473,10 @@ def remove_devbox(
         return
 
     try:
-        fallback = subprocess.run(
+        fallback = run_in_process_group(
             ["podman", "rm", "-f", devbox_container_name(test_dir)],
-            env=env,
-            capture_output=True,
             timeout=timeout,
-            check=False,
+            env=env,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise AssertionError(f"{launcher_error}; host cleanup failed: {exc}") from exc
@@ -487,6 +488,128 @@ def remove_devbox(
         )
 
 
+# Process-group bounded command runner (issue #211)
+# ---------------------------------------------------------------------------
+# `subprocess.run(timeout=...)` kills only the direct child on timeout, so a
+# timed-out launcher/test command leaks its descendants (e.g. `devbox` ->
+# `podman build` -> buildah) which keep consuming CPU, storage, and nested
+# containers after the command "returned". These runners launch each bounded
+# command in a dedicated process group (`start_new_session=True`) and, on
+# timeout, terminate/reap the entire group, reporting any cleanup failure.
+TERM_GRACE_SECONDS = 2.0
+KILL_GRACE_SECONDS = 2.0
+
+
+def _process_group_alive(pgid: int) -> bool:
+    """True if any member of process group ``pgid`` still exists."""
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        # PermissionError or anything unexpected: assume alive, escalate.
+        return True
+    return True
+
+
+def _wait_process_group_gone(
+    pgid: int, proc: "subprocess.Popen[str]", grace: float
+) -> bool:
+    deadline = time.monotonic() + grace
+    while True:
+        # Reap the leader as soon as it dies: a zombie leader still counts
+        # as a live group member for killpg(2), which would mask cleanup.
+        proc.poll()
+        if not _process_group_alive(pgid):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.02)
+
+
+def _terminate_process_group(
+    proc: "subprocess.Popen[str]",
+    term_grace: float = TERM_GRACE_SECONDS,
+    kill_grace: float = KILL_GRACE_SECONDS,
+) -> str:
+    """Terminate process group ``proc.pid`` (a session leader).
+
+    Escalates SIGTERM to SIGKILL and reaps the leader. Returns an empty
+    string on clean cleanup, or a description of what could not be
+    terminated/reaped.
+    """
+    pgid = proc.pid  # start_new_session=True makes the child a group leader
+    failures: list[str] = []
+
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    except OSError as exc:
+        failures.append(f"SIGTERM to process group {pgid} failed: {exc}")
+
+    if not _wait_process_group_gone(pgid, proc, term_grace):
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except OSError as exc:
+            failures.append(f"SIGKILL to process group {pgid} failed: {exc}")
+        if not _wait_process_group_gone(pgid, proc, kill_grace):
+            failures.append(
+                f"process group {pgid} still has live members after SIGKILL"
+            )
+
+    if proc.poll() is None:
+        try:
+            proc.wait(timeout=kill_grace)
+        except subprocess.TimeoutExpired:
+            failures.append(f"command process {proc.pid} could not be reaped")
+
+    return "; ".join(failures)
+
+
+def run_in_process_group(
+    cmd: list[str],
+    timeout: float,
+    env: dict[str, str] | None = None,
+    cwd: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run ``cmd`` in a dedicated process group, bounded by ``timeout``.
+
+    Mirrors ``subprocess.run(..., capture_output=True, text=True,
+    timeout=..., check=False)`` for the success path, but on timeout the
+    *entire* process group is terminated (SIGTERM, escalating to SIGKILL)
+    so no descendants survive. The raised ``TimeoutExpired`` carries a
+    ``process_group_cleanup`` attribute: an empty string when cleanup was
+    clean, otherwise a description of the failure (also reported to
+    stderr).
+    """
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+        cwd=str(cwd) if cwd else None,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        cleanup_error = _terminate_process_group(proc)
+        proc.communicate()  # reap the terminated group leader
+        exc.process_group_cleanup = cleanup_error  # type: ignore[attr-defined]
+        if cleanup_error:
+            print(
+                f"WARNING: process-group cleanup for {cmd[0]!r} failed: "
+                f"{cleanup_error}",
+                file=sys.stderr,
+            )
+        raise
+    return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+
+
 def run_bash_script(
     script_path: Path,
     args: list[str] | None = None,
@@ -495,15 +618,7 @@ def run_bash_script(
     timeout: int = 30,
 ) -> subprocess.CompletedProcess[str]:
     cmd = [str(script_path)] + (args or [])
-    return subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        env=env,
-        cwd=str(cwd) if cwd else None,
-        timeout=timeout,
-        check=False,
-    )
+    return run_in_process_group(cmd, timeout=timeout, env=env, cwd=cwd)
 
 
 def run_in_devbox(
@@ -521,10 +636,4 @@ def run_in_devbox(
             exec_cmd.extend(["--volume", v])
     exec_cmd.append(image)
     exec_cmd.extend(cmd)
-    return subprocess.run(
-        exec_cmd,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        check=False,
-    )
+    return run_in_process_group(exec_cmd, timeout=timeout)
