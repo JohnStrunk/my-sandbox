@@ -53,7 +53,7 @@ jobs:
           # Paths that can change how pre-commit hooks bootstrap or behave
           # inside the devbox image. Everything else keeps the fast cached
           # validation.
-          relevant='^(\.pre-commit-config\.yaml|\.secrets\.baseline|\.github/workflows/|container/|pyproject\.toml|uv\.lock|scripts/sanitized-test\.sh|scripts/validate_tool_versions\.py|tests/container/test_image_binaries\.py)'
+          relevant='^(\.pre-commit-config\.yaml|\.secrets\.baseline|\.github/workflows/|container/|pyproject\.toml|uv\.lock|scripts/sanitized-test\.sh|scripts/validate_tool_versions\.py|scripts/detect_secrets_filters\.py|tests/container/test_image_binaries\.py)'
           cold_bootstrap=true
           if [[ "$EVENT_NAME" == "pull_request" ]]; then
             if ! changed="$(git diff --name-only "$BASE_SHA" HEAD 2>/dev/null)"; then
