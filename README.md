@@ -701,6 +701,18 @@ python3 scripts/verify_provenance.py           # check (non-zero if stale)
 python3 scripts/verify_provenance.py --update  # recompute and rewrite digests
 ```
 
+The detect-secrets hook uses `scripts/detect_secrets_filters.py` to ignore only
+the intentional SHA-256 values inside the manifest's `checksums` objects. The
+manifest is still scanned for every other detector and every other field, so a
+real secret must not be added to the checksum metadata. After changing a
+version or checksum, run the supported refresh and validation workflow without
+editing `.secrets.baseline`:
+
+```shell
+python3 scripts/verify_provenance.py --update
+pre-commit run detect-secrets --all-files
+```
+
 The check retries transient network errors and fails closed: an asset that
 cannot be fetched (or has not yet been published for a bumped version) is
 reported distinctly from a checksum mismatch, and the command exits non-zero

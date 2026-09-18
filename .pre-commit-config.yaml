@@ -110,8 +110,11 @@ repos:
     hooks:
       # Prevent secrets from being committed
       - id: detect-secrets
-        args: ['--baseline', '.secrets.baseline']
-        # exclude: package.lock.json
+        args:
+          - --baseline
+          - .secrets.baseline
+          - --filter
+          - file://scripts/detect_secrets_filters.py::is_manifest_release_checksum
 
   - repo: https://gitlab.com/bmares/check-json5
     rev: "v1.0.1"
