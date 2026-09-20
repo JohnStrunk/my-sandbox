@@ -203,7 +203,7 @@
       }
     },
     "ruff": {
-      "version": "0.16.6",
+      "version": "0.16.7",
       "datasource": "pypi",
       "depName": "ruff",
       "consumers": {
@@ -221,7 +221,7 @@
       }
     },
     "renovatebot_hooks": {
-      "version": "44.61.6",
+      "version": "44.79.2",
       "datasource": "github-tags",
       "depName": "renovatebot/pre-commit-hooks",
       "consumers": {
@@ -254,7 +254,7 @@
       }
     },
     "zizmor": {
-      "version": "1.30.0",
+      "version": "1.30.1",
       "datasource": "github-tags",
       "depName": "zizmorcore/zizmor-pre-commit",
       "consumers": {
