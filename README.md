@@ -41,7 +41,7 @@ This repository provides:
   - **Cloud & Productivity CLIs**: GitHub CLI (`gh`), GitLab CLI (`glab`),
     Google Cloud SDK (`gcloud`), Google Workspace CLI (`gws`), Atlassian CLI
     (`acli`), Google Antigravity (`agy`), OpenCode (`opencode`), Repomix
-    (`repomix`), ripwire (`ripwire`), ast-grep (`ast-grep`, `sg`), and Semble
+    (`repomix`), ast-grep (`ast-grep`, `sg`), and Semble
     (`semble`).
   - **Linters & Utilities**: `pre-commit`, `ripgrep`, `jq`, `shellcheck`,
     `hadolint`, `markdownlint-cli2`, `ffmpeg`, and process diagnostics
@@ -337,7 +337,6 @@ devbox container is created:
 | The Source | Search and fetch capabilities for The Source, Red Hat's intranet. | All of `IGLOO_MCP_COMMUNITY`, `IGLOO_MCP_COMMUNITY_KEY`, `IGLOO_MCP_APP_PASS`, `IGLOO_MCP_APP_ID`, `IGLOO_MCP_USERNAME`, and `IGLOO_MCP_PASSWORD`. |
 | Context7 | Up-to-date documentation and code examples for software libraries. | `CONTEXT7_API_KEY`. |
 | Tavily | Web search, extraction, crawling, and mapping through Tavily's remote MCP server. | `TAVILY_API_KEY`. |
-| Ripwire | Local repository context mapping and code-navigation tools through CLI and MCP. | Always enabled; included in the devbox image. |
 | Semble | Natural-language semantic code search through the local OpenCode MCP server. | Always enabled; included in the devbox image. |
 | Anthropic | Direct Anthropic models, including Anthropic-compatible endpoints. | `ANTHROPIC_API_KEY` enables the built-in provider; optional `ANTHROPIC_BASE_URL` selects a custom endpoint. |
 | OCTO Open Models | OpenAI-compatible Qwen 3.8 Frontier, Core, and Bulk models. | Both `OCTO_OPEN_URL` (gateway `/v1` URL) and `OCTO_OPEN_KEY`. |
@@ -397,8 +396,8 @@ For syntax-aware code searches and structural rewrites, use the staged
 ast-grep --lang python -p 'print($ARG)' -r 'logger.info($ARG)' -U path/to/file.py
 ```
 
-Test a pattern or rule against a fixture first, and use ripwire for symbol or
-call-graph questions and `rg` for plain-text searches.
+Test a pattern or rule against a fixture first, then use `rg` for plain-text
+searches where syntax is not relevant.
 
 For one-shot repository snapshots, use the image-installed `repomix` command.
 Always pass an explicit token budget so an oversized artifact fails rather than
@@ -410,8 +409,8 @@ repomix --token-budget 12000 --compress
 
 Use `--no-files` for a cheap directory and metadata map. Repomix's default
 Secretlint scan remains enabled, so do not pass `--no-security-check` in agent
-workflows. Use ripwire for ranked, incremental repository context or `rg` for
-plain-text searches when a portable snapshot is not needed.
+workflows. Use Semble for natural-language searches over a live repository, or
+`rg` for targeted text searches when a portable snapshot is not needed.
 
 For vague natural-language code searches, use Semble before broad text searches:
 
@@ -422,8 +421,8 @@ semble search "where are failed requests retried" . --json
 Semble combines lexical and local static-embedding search. Its embedding model
 is included in the image, and its incremental index is stored in the shared
 `devbox-semble-cache` volume, so queries do not need an API key or network after
-the image is built. Use ripwire for symbol, call-graph, and impact questions,
-and `rg` for exact literal matches.
+the image is built. Use ast-grep for syntax-aware structural queries, or `rg`
+for exact literal matches.
 
 ---
 

@@ -462,24 +462,6 @@ EOF
 )"
   )
 
-  # Ripwire MCP integration. The CLI and skills are always present in the
-  # image, so this local stdio server does not need credentials or network
-  # access after the image has been built.
-  opencode_config+=(
-    "$(cat <<'EOF'
-{
-  "mcp": {
-    "ripwire": {
-      "type": "local",
-      "command": ["ripwire", "--mcp"],
-      "enabled": true
-    }
-  }
-}
-EOF
-)"
-  )
-
   # Semble MCP integration. The model is baked into the image and the index
   # cache is backed by a shared named volume, so this stays local after build.
   opencode_config+=(
