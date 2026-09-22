@@ -37,16 +37,6 @@ repository `AGENTS.md` or README.
 
 ## Current Capability
 
-### Ripwire
-
-- Runtime command: `ripwire`
-- Agent integration: the launcher registers the local `ripwire --mcp` server
-  and the image stages Ripwire skills.
-- Use it for repository mapping, ranked code navigation, call-graph queries,
-  impact analysis, and change-safety checks.
-- Prefer the relevant Ripwire skill and MCP operation over broad repository
-  dumps or repeated grep/read loops.
-
 ### ast-grep
 
 - Runtime command: `ast-grep` (with the `sg` alias).
@@ -55,8 +45,7 @@ repository `AGENTS.md` or README.
 - Use it for syntax-aware code search, lint rules, and AST-accurate rewrites;
   start with `ast-grep --lang python -p '...' -r '...' path` and verify a
   pattern or rule on a fixture before applying `-U` rewrites.
-- Fall back to ripwire for symbol/call-graph questions and `rg` for plain-text
-  searches where syntax is not relevant.
+- Use `rg` for plain-text searches where syntax is not relevant.
 
 ### Repomix
 
@@ -68,8 +57,8 @@ repository `AGENTS.md` or README.
   command exits non-zero when the packed output exceeds the limit.
 - Repomix's default Secretlint scan remains enabled. Do not pass
   `--no-security-check` in agent workflows.
-- Fall back to ripwire for ranked live-repository navigation or `rg` for plain
-  text searches when a portable snapshot is not needed.
+- Use Semble for natural-language searches over a live repository, or `rg` for
+  targeted text searches when a portable snapshot is not needed.
 - The container test verifies both this active guidance and the budget gate in
   `tests/container/test_opencode_config.py` and
   `tests/container/test_image_binaries.py`.
@@ -81,8 +70,8 @@ repository `AGENTS.md` or README.
 - Agent integration: OpenCode receives the always-on local `semble` MCP server.
 - Use it for vague natural-language code searches, for example:
   `semble search "where are failed requests retried" . --json`.
-- Fall back to ripwire for symbol, call-graph, and impact questions, or `rg` for
-  exact literal matches.
+- Use ast-grep for syntax-aware structural queries, or `rg` for exact literal
+  matches.
 - The embedding model is baked into the image and incremental indexes live in
   the shared `/sandbox/.cache/semble` volume, so queries need no network or API
   key after the image is built.

@@ -8,11 +8,6 @@ import pytest
 
 from tests.conftest import CREDENTIAL_ENV_VARS, run_bash_script
 
-RIPWIRE_MCP = {
-    "type": "local",
-    "command": ["ripwire", "--mcp"],
-    "enabled": True,
-}
 SEMBLE_MCP = {
     "type": "local",
     "command": ["semble"],
@@ -516,7 +511,6 @@ def test_devbox_github_mcp_config_from_token(
             },
         },
         "mcp": {
-            "ripwire": RIPWIRE_MCP,
             "semble": SEMBLE_MCP,
             "github": GITHUB_MCP,
         },
@@ -575,7 +569,6 @@ def test_devbox_context7_mcp_config_from_api_key(
             },
         },
         "mcp": {
-            "ripwire": RIPWIRE_MCP,
             "semble": SEMBLE_MCP,
             "context7": {
                 "type": "remote",
@@ -647,7 +640,6 @@ def test_devbox_does_not_add_github_mcp_without_credentials(
             },
         },
         "mcp": {
-            "ripwire": RIPWIRE_MCP,
             "semble": SEMBLE_MCP,
         },
     }
@@ -706,7 +698,6 @@ def test_devbox_the_source_mcp_config(
             },
         },
         "mcp": {
-            "ripwire": RIPWIRE_MCP,
             "semble": SEMBLE_MCP,
             "the-source": {
                 "enabled": True,
@@ -773,7 +764,7 @@ def test_devbox_merges_mcp_configurations(
         value for value in env_values if value.startswith("OPENCODE_CONFIG_CONTENT=")
     )
     config = json.loads(config_value.split("=", 1)[1])
-    assert set(config["mcp"]) == {"ripwire", "semble", "github", "the-source"}
+    assert set(config["mcp"]) == {"semble", "github", "the-source"}
     assert config["mcp"]["github"] == GITHUB_MCP
     assert config["mcp"]["github"]["environment"] == {
         "GITHUB_PERSONAL_ACCESS_TOKEN": "{env:GH_TOKEN}",

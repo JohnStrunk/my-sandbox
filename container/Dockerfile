@@ -162,30 +162,6 @@ RUN github_mcp_version="$(jq -er '.tools.github_mcp_server.version' /tmp/devbox-
     && install -Dm755 /tmp/github-mcp-server/github-mcp-server /usr/local/bin/github-mcp-server \
     && rm -rf "/tmp/${github_mcp_asset}" /tmp/github-mcp-server
 
-# Install ripwire and stage its agent assets. Verify the pinned release's
-# published checksum before extracting anything from the archive.
-RUN ripwire_version="$(jq -er '.tools.ripwire.version' /tmp/devbox-tool-versions.json)" \
-    && ripwire_version="${ripwire_version#v}" \
-    && case "${TARGETARCH}" in \
-        amd64) ripwire_arch=x64 ;; \
-        arm64) ripwire_arch=arm64 ;; \
-        *) echo "Unsupported architecture for ripwire: ${TARGETARCH}" >&2; exit 1 ;; \
-    esac \
-    && ripwire_asset="ripwire-${ripwire_version}-linux-${ripwire_arch}.tar.gz" \
-    && curl -fsSL "https://github.com/redhat-et/ripwire/releases/download/v${ripwire_version}/${ripwire_asset}" -o "/tmp/${ripwire_asset}" \
-    && curl -fsSL "https://github.com/redhat-et/ripwire/releases/download/v${ripwire_version}/${ripwire_asset}.sha256" -o "/tmp/${ripwire_asset}.sha256" \
-    && ripwire_checksum="$(cut -d ' ' -f1 "/tmp/${ripwire_asset}.sha256")" \
-    && printf '%s  %s\n' "${ripwire_checksum}" "/tmp/${ripwire_asset}" | sha256sum -c - \
-    && ripwire_root="/tmp/${ripwire_asset%.tar.gz}" \
-    && tar -C /tmp -xzf "/tmp/${ripwire_asset}" \
-    && install -Dm755 "${ripwire_root}/ripwire" /usr/local/bin/ripwire \
-    && install -d /usr/local/share/ripwire \
-    && cp -R "${ripwire_root}/skills" /usr/local/share/ripwire/ \
-    && if [ -d "${ripwire_root}/hooks" ]; then cp -R "${ripwire_root}/hooks" /usr/local/share/ripwire/; fi \
-    && chmod +x /usr/local/share/ripwire/skills/install.sh \
-    && if [ -d /usr/local/share/ripwire/hooks ]; then chmod +x /usr/local/share/ripwire/hooks/*.sh; fi \
-    && rm -rf "/tmp/${ripwire_asset}" "/tmp/${ripwire_asset}.sha256" "${ripwire_root}"
-
 # Install ast-grep and stage the official agent skills. Verify both the
 # platform archive and the skill source archive before extracting them.
 RUN ast_grep_version="$(jq -er '.tools.ast_grep.version' /tmp/devbox-tool-versions.json)" \
@@ -306,8 +282,7 @@ RUN useradd --create-home --user-group --home-dir /sandbox --shell /bin/bash san
 RUN mkdir -p /sandbox/.agents/skills \
     && cp -R /usr/local/share/devbox/skills/devbox-* /sandbox/.agents/skills/ \
     && cp -R /usr/local/share/ast-grep/skills/ast-grep* /sandbox/.agents/skills/ \
-    && chown -R sandbox:sandbox /sandbox/.agents \
-    && /usr/sbin/runuser -u sandbox -- /usr/local/share/ripwire/skills/install.sh --codex
+    && chown -R sandbox:sandbox /sandbox/.agents
 
 # sandbox's /etc/subuid and /etc/subgid entries, needed so its own nested
 # Podman can build a further user namespace for the containers *it* runs,

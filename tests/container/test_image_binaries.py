@@ -33,7 +33,6 @@ BINARIES = [
     ("github-mcp-server", ["github-mcp-server", "--help"]),
     ("github-mcp-server-proxy", ["github-mcp-server-proxy", "--help"]),
     ("repomix", ["repomix", "--version"]),
-    ("ripwire", ["ripwire", "--version"]),
     ("ast-grep", ["ast-grep", "--version"]),
     ("semble", ["semble", "--version"]),
     ("tokei", ["tokei", "--version"]),
@@ -41,7 +40,6 @@ BINARIES = [
     ("difft", ["difft", "--version"]),
     ("hyperfine", ["hyperfine", "--version"]),
     ("fd", ["fd", "--version"]),
-    ("which", ["which", "ripwire"]),
     ("rg", ["rg", "--version"]),
     ("jq", ["jq", "--version"]),
     ("shellcheck", ["shellcheck", "--version"]),
@@ -84,7 +82,6 @@ tar \
   --exclude='./.venv' \
   --exclude='./.pytest_cache' \
   --exclude='./.ruff_cache' \
-  --exclude='./.ripwire_quality_baseline' \
   -C /workspace -cf - . | tar -xf - -C "$fixture"
 git -C "$fixture" init -q
 git -C "$fixture" add --all

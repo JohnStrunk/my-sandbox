@@ -46,16 +46,6 @@ def test_devbox_lifecycle_create_exec_recreate_remove(
         assert test_file.exists()
         assert test_file.read_text().strip() == "hello from container"
 
-        ripwire_version = run_bash_script(
-            devbox_path,
-            ["ripwire", "--version"],
-            env=isolated_env,
-            cwd=test_dir,
-            timeout=60,
-        )
-        assert ripwire_version.returncode == 0
-        assert "0.5.0" in ripwire_version.stdout
-        assert (host_agents / "skills" / "ripwire-orient" / "SKILL.md").is_file()
         assert (host_agents / "skills" / "devbox-tools" / "SKILL.md").is_file()
         assert (host_agents / "skills" / "ast-grep" / "SKILL.md").is_file()
         assert (host_agents / "skills" / "ast-grep-outline" / "SKILL.md").is_file()

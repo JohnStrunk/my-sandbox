@@ -76,7 +76,6 @@ sync_builtin_skills() {
   done
 }
 
-sync_builtin_skills /usr/local/share/ripwire/skills ripwire- ripwire true
 sync_builtin_skills /usr/local/share/devbox/skills devbox- devbox
 sync_builtin_skills /usr/local/share/ast-grep/skills ast-grep ast-grep
 
