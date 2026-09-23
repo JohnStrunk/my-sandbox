@@ -16,9 +16,11 @@ RUN dnf install -y --setopt=install_weak_deps=False \
     difftastic \
     fd-find \
     ffmpeg-free \
+    gcc \
     gh \
     git \
     glab \
+    glibc-devel \
     gnupg2 \
     hyperfine \
     just \

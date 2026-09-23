@@ -9,6 +9,7 @@ from tests.conftest import run_in_devbox
 
 BINARIES = [
     ("go", ["go", "version"]),
+    ("gcc", ["gcc", "--version"]),
     ("devbox-go", ["devbox-go", "--help"]),
     ("rustc", ["rustc", "--version"]),
     ("cargo", ["cargo", "--version"]),
@@ -61,6 +62,62 @@ def test_container_binary_presence_and_execution(
     valid_returncodes = (0, 2) if binary_name == "markdownlint-cli2" else (0,)
     assert res.returncode in valid_returncodes, (
         f"Command '{' '.join(cmd)}' failed with code {res.returncode}.\n"
+        f"Stdout: {res.stdout}\nStderr: {res.stderr}"
+    )
+
+
+@pytest.mark.container
+def test_go_cgo_race_test_and_static_build(devbox_image: str):
+    command = r"""
+set -euo pipefail
+fixture="$(mktemp -d)"
+trap 'rm -rf -- "$fixture"' EXIT
+cat > "$fixture/go.mod" <<'EOF'
+module example.test/cgotoolchain
+
+go 1.27.0
+EOF
+cat > "$fixture/main.go" <<'EOF'
+package main
+
+func main() {}
+EOF
+cat > "$fixture/cgo.go" <<'EOF'
+package main
+
+/*
+static int answer(void) { return 42; }
+*/
+import "C"
+
+func answerFromC() int {
+	return int(C.answer())
+}
+EOF
+cat > "$fixture/main_test.go" <<'EOF'
+package main
+
+import "testing"
+
+func TestCgoToolchain(t *testing.T) {
+	if got := answerFromC(); got != 42 {
+		t.Fatalf("answerFromC() = %d, want 42", got)
+	}
+}
+EOF
+cd "$fixture"
+CGO_ENABLED=1 go test -race ./...
+CGO_ENABLED=0 go build -o "$fixture/static-build" .
+"$fixture/static-build"
+"""
+    res = run_in_devbox(
+        devbox_image,
+        ["bash", "-ceu", command],
+        user="sandbox",
+        timeout=300,
+    )
+    assert res.returncode == 0, (
+        "Go could not run a cgo race test and a CGO_ENABLED=0 static build.\n"
         f"Stdout: {res.stdout}\nStderr: {res.stderr}"
     )
 
