@@ -200,6 +200,10 @@ them; installed binaries are placed in the persistent Go cache's `bin` path,
 which the image adds to `PATH`. Use a precompiled tool's own version-selection
 mechanism otherwise.
 
+The image includes `gcc` and `glibc-devel` for Go projects that use cgo,
+including the race detector with `CGO_ENABLED=1 go test -race ./...`.
+Pure-Go static builds with `CGO_ENABLED=0` remain supported.
+
 ### Git Identity & GitHub Authentication
 
 When a container is created, `devbox` configures a Git identity inside it: any
