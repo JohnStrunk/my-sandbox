@@ -14,7 +14,6 @@ def test_devbox_help(devbox_path: Path):
     assert "-r, --remove" in res.stdout
     assert "--recreate" in res.stdout
     assert "--new" in res.stdout
-    assert "--kind" in res.stdout
 
 
 @pytest.mark.unit
@@ -26,10 +25,11 @@ def test_devbox_short_help(devbox_path: Path):
 
 @pytest.mark.unit
 def test_devbox_invalid_option(devbox_path: Path):
-    res = run_bash_script(devbox_path, ["--invalid-flag-xyz"])
-    assert res.returncode == 1
-    assert "Unknown option: --invalid-flag-xyz" in res.stderr
-    assert "Usage: devbox" in res.stderr
+    for option in ("--invalid-flag-xyz", "--kind"):
+        res = run_bash_script(devbox_path, [option])
+        assert res.returncode == 1
+        assert f"Unknown option: {option}" in res.stderr
+        assert "Usage: devbox" in res.stderr
 
 
 @pytest.mark.unit

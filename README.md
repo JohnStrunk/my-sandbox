@@ -292,40 +292,6 @@ blocks nested user namespaces), `devbox` prints a warning but still starts
 the container normally; regular devbox usage, including plain nested
 `podman run`, is unaffected.
 
-### Rootless kind Kubernetes Clusters
-
-The image includes `kind` and `kubectl`, and `devbox-kind` selects the
-supported rootless Podman provider. kind needs cgroup v2 with the `cpu`,
-`memory`, and `pids` controllers delegated to the invoking user, plus a
-working rootless netavark bridge. The ordinary devbox mode intentionally
-disables nested cgroups and can fall back to pasta networking, so create a
-kind-enabled container from a delegated host scope:
-
-```shell
-systemd-run --scope --user -p Delegate=yes devbox --recreate --kind
-devbox --kind devbox-kind preflight
-devbox --kind devbox-kind create cluster --name devbox --wait 5m
-devbox --kind kubectl get nodes --context kind-devbox
-devbox --kind kubectl get --raw=/version --context kind-devbox
-devbox --kind devbox-kind delete cluster --name devbox
-```
-
-`devbox-kind preflight` checks the binaries, rootless Podman cgroup
-controllers, kind-specific log/PID settings, and bridge-network creation
-before a cluster is started. Capability failures return status `125` and name
-the missing host/runtime prerequisite; they are not treated as successful
-cluster tests. The kind configuration uses cgroupfs inside the delegated
-outer namespace, the `k8s-file` log driver, a 65536 PID limit, and no added
-capabilities or `--privileged` mode. If the outer host cannot delegate cgroups
-or configure the bridge sysctls, use the preflight report to select a supported
-runner rather than weakening the devbox security posture.
-
-The normal CI suite records unsupported-host capability skips explicitly. A
-`workflow_dispatch` run with the `kind_integration` input enabled executes the
-same integration path in strict mode on a runner that must provide delegated
-cgroup v2 and nested user namespaces; a status `125` then fails that opt-in
-acceptance job instead of being converted into a skip.
-
 ### Automatic OpenCode Integrations
 
 The integrations below are enabled when their requirements are present while a

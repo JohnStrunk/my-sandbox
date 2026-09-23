@@ -1,0 +1,7 @@
+# ripwire quality acks v1 — written by --quality-ack; a finding stays suppressed until it worsens past its acked magnitude
+# format: ack <kind> <16-hex-key> <ackNow> [cid=<16-hex-content-id>] [by=<scope that acked it>] <reason to end of line> — one per line, kept SORTED by (kind,key) on every write (merge-friendly)
+ack short-horizon-churn 0c2f8db1e504aa2a 19 cid=84930a5e06dc7f51 Intentional rollback of recently added kind support per user decision; the short-horizon re-edit removes an unviable feature.
+ack short-horizon-churn 54f0599527b71235 14 cid=6b348fbff7bfcd57 Intentional rollback of recently added kind support per user decision; the short-horizon re-edit removes an unviable feature.
+ack short-horizon-churn 5bf8ea0683067d31 7 cid=ae9105dec73abb7f Intentional rollback of recently added kind support per user decision; the short-horizon re-edit removes an unviable feature.
+ack short-horizon-churn c6af1726e5b70c39 3 cid=6837be6c94f0c7a2 Intentional rollback of recently added kind support per user decision; the short-horizon re-edit removes an unviable feature.
+ack short-horizon-churn e877722ba3b68211 19 cid=04c1961ecca27fd4 Intentional rollback of recently added kind support per user decision; the short-horizon re-edit removes an unviable feature.

@@ -58,37 +58,16 @@ def test_containers_storage_conf(devbox_image: str):
 
 
 @pytest.mark.container
-@pytest.mark.parametrize(
-    ("name", "requirements"),
-    [
-        (
-            "containers.conf",
-            (
-                'cgroups = "disabled"',
-                'volumes = ["/proc:/proc"]',
-                'utsns = "host"',
-                'netns = "pasta"',
-                'network_backend = "netavark"',
-                'default_rootless_network_cmd = "pasta"',
-            ),
-        ),
-        (
-            "kind-containers.conf",
-            (
-                'cgroups = "enabled"',
-                'cgroupns = "host"',
-                "default_sysctls = []",
-                'log_driver = "k8s-file"',
-                "pids_limit = 65536",
-                'netns = "bridge"',
-                'cgroup_manager = "cgroupfs"',
-            ),
-        ),
-    ],
-)
-def test_containers_config(devbox_image: str, name: str, requirements: tuple[str, ...]):
-    content = _read_container_config(devbox_image, name)
-    for requirement in requirements:
+def test_containers_config(devbox_image: str):
+    content = _read_container_config(devbox_image, "containers.conf")
+    for requirement in (
+        'cgroups = "disabled"',
+        'volumes = ["/proc:/proc"]',
+        'utsns = "host"',
+        'netns = "pasta"',
+        'network_backend = "netavark"',
+        'default_rootless_network_cmd = "pasta"',
+    ):
         assert requirement in content
 
 

@@ -117,26 +117,6 @@ repository `AGENTS.md` or README.
 - Unit coverage is in `tests/unit/test_devbox_go.py`; container availability is
   covered by `tests/container/test_image_binaries.py`.
 
-### kind Kubernetes clusters
-
-- Runtime commands: `kind`, `kubectl`, and `devbox-kind`.
-- Use `devbox-kind` when a task needs a real local Kubernetes cluster. It
-  selects rootless Podman and a kind-specific cgroup, logging, PID, and bridge
-  configuration; run `devbox-kind preflight` before `devbox-kind create ...`.
-- Launch the outer container with `devbox --kind` from a host scope that has
-  cgroup v2 delegation, for example:
-  `systemd-run --scope --user -p Delegate=yes devbox --recreate --kind`.
-- A host-capability preflight failure returns infrastructure status `125`; an
-  image/tool/configuration failure returns status `2`. Both report the exact
-  problem, and neither should be replaced with `--privileged`; use a supported
-  delegated runner for host limitations instead.
-- For a minimal cluster check, use `devbox --kind devbox-kind create cluster
-  --name devbox --wait 5m`, `devbox --kind kubectl get nodes --context
-  kind-devbox`, and `devbox --kind devbox-kind delete cluster --name devbox`.
-- If kind cannot be supported by the current host, use the preflight report and
-  the unit/container tests; do not silently turn the integration test into a
-  product pass.
-
 ### Token-hygiene utilities
 
 The Fedora package names are `tokei`, `just`, `difftastic`, `hyperfine`, and
