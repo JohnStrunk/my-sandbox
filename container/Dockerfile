@@ -15,6 +15,7 @@ RUN dnf install -y --setopt=install_weak_deps=False \
     curl \
     difftastic \
     fd-find \
+    file \
     ffmpeg-free \
     gcc \
     gh \

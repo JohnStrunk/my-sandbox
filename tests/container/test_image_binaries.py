@@ -39,6 +39,7 @@ BINARIES = [
     ("hyperfine", ["hyperfine", "--version"]),
     ("fd", ["fd", "--version"]),
     ("rg", ["rg", "--version"]),
+    ("file", ["file", "--version"]),
     ("jq", ["jq", "--version"]),
     ("shellcheck", ["shellcheck", "--version"]),
     ("hadolint", ["hadolint", "--version"]),
@@ -119,6 +120,23 @@ CGO_ENABLED=0 go build -o "$fixture/static-build" .
     assert res.returncode == 0, (
         "Go could not run a cgo race test and a CGO_ENABLED=0 static build.\n"
         f"Stdout: {res.stdout}\nStderr: {res.stderr}"
+    )
+
+
+@pytest.mark.container
+def test_file_identifies_elf_executable(devbox_image: str):
+    res = run_in_devbox(
+        devbox_image,
+        ["file", "--brief", "/usr/bin/bash"],
+        user="sandbox",
+    )
+
+    assert res.returncode == 0, (
+        "file failed to inspect /usr/bin/bash.\n"
+        f"Stdout: {res.stdout}\nStderr: {res.stderr}"
+    )
+    assert "ELF" in res.stdout, (
+        f"file did not identify /usr/bin/bash as ELF.\nOutput: {res.stdout}"
     )
 
 

@@ -117,6 +117,18 @@ repository `AGENTS.md` or README.
 - Unit coverage is in `tests/unit/test_devbox_go.py`; container availability is
   covered by `tests/container/test_image_binaries.py`.
 
+### Release artifact inspection
+
+- Runtime command: `file` (Fedora package `file`).
+- When checking a downloaded Linux release artifact, run `file <artifact>` to
+  identify its format and architecture without executing it. This is a local
+  inspection, not a publisher or checksum verification.
+- For ELF header details, or as a fallback when `file` is unavailable, use
+  `readelf -h <artifact>` when `readelf` is installed.
+- Persistent devbox containers need `devbox --recreate` after image changes.
+- Runtime coverage is in `tests/container/test_image_binaries.py`; staged
+  guidance is checked in `tests/container/test_opencode_config.py`.
+
 ### Token-hygiene utilities
 
 The Fedora package names are `tokei`, `just`, `difftastic`, `hyperfine`, and

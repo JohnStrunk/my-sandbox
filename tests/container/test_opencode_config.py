@@ -126,6 +126,36 @@ END { exit !(repomix && budget && security) }
 
 
 @pytest.mark.container
+def test_file_guidance_is_staged_and_active(devbox_image: str):
+    res = run_in_devbox(
+        devbox_image,
+        [
+            "bash",
+            "-ceu",
+            r"""
+source=/usr/local/share/devbox/skills/devbox-tools/SKILL.md
+active=/sandbox/.agents/skills/devbox-tools/SKILL.md
+test "$(sha256sum "$source" | cut -d ' ' -f1)" = \
+  "$(sha256sum "$active" | cut -d ' ' -f1)"
+awk '
+/^### Release artifact inspection$/ { in_section=1; next }
+/^### / { in_section=0 }
+in_section && /file <artifact>/ { command=1 }
+in_section && /readelf -h <artifact>/ { fallback=1 }
+in_section && /devbox --recreate/ { recreate=1 }
+END { exit !(command && fallback && recreate) }
+' "$active"
+""",
+        ],
+        user="sandbox",
+    )
+    assert res.returncode == 0, (
+        "Release artifact guidance is not available to a fresh OpenCode session.\n"
+        f"Stdout: {res.stdout}\nStderr: {res.stderr}"
+    )
+
+
+@pytest.mark.container
 def test_fresh_opencode_session_discovers_semble(devbox_image: str):
     config = json.dumps(
         {

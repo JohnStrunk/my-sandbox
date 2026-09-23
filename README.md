@@ -44,8 +44,8 @@ This repository provides:
     (`repomix`), ast-grep (`ast-grep`, `sg`), and Semble
     (`semble`).
   - **Linters & Utilities**: `pre-commit`, `ripgrep`, `jq`, `shellcheck`,
-    `hadolint`, `markdownlint-cli2`, `ffmpeg`, and process diagnostics
-    (`ps`, `pgrep`) via `procps-ng`.
+    `hadolint`, `markdownlint-cli2`, `ffmpeg`, `file` for release artifacts,
+    and process diagnostics (`ps`, `pgrep`) via `procps-ng`.
   - **Agent token-hygiene utilities**: Fedora 44 packages `tokei` 14.0.0,
     `just` 1.57.0, `difftastic` 0.69.0 (command `difft`), `hyperfine` 1.20.0,
     and `fd-find` 10.4.2 (command `fd`).
@@ -655,6 +655,15 @@ Pinned versions for tools installed in the devbox image or CI are maintained in
 and workflow read that manifest directly. Pre-commit requires literal `rev`
 values, so its revisions are checked against the manifest by the validation
 hook.
+
+For local inspection of a downloaded Linux release artifact, prefer
+`file /path/to/artifact` to identify its format and architecture before
+execution. This checks the artifact's contents; it does not establish its
+publisher or integrity. The checksum workflow below validates expected digests
+for release assets pinned in `container/tool-versions.json`; it does not verify
+arbitrary downloads or authenticate a publisher. For other artifacts, verify
+the checksum and publisher signature or attestation using the project's trusted
+release metadata.
 
 Run the consistency check directly when changing a tool version:
 
