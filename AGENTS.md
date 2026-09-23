@@ -6,6 +6,23 @@
 - Before committing or opening a PR, fetch `origin/main` again and rebase the
   feature branch if it has advanced.
 - Create worktrees in `.worktrees/`
+- Immediately after creating a worktree, enter it and bootstrap the test
+  environment before editing Python files:
+
+  ```shell
+  cd .worktrees/<worktree>
+  uv sync --extra test
+  ```
+
+  This creates the worktree's `.venv` and installs `pytest` and the other test
+  dependencies. The project Pyright config points the language server at this
+  local environment so test imports resolve before the first test run.
+- Start or reopen OpenCode with the active worktree as its project root (for
+  example, run `opencode .worktrees/<worktree>` from the repository root). Do
+  not edit files from multiple worktrees in one session rooted at the main
+  checkout.
+  OpenCode scopes LSP workspaces to the active project directory, which keeps
+  diagnostics from sibling worktrees out of the current session.
 - Shell commands and file-tool paths are independent: relative shell paths use
   the shell's current working directory. Every shell command that reads or
   writes worktree files must pass the intended worktree as `workdir` or use an
