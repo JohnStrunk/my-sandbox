@@ -15,14 +15,6 @@ on:  # yamllint disable-line rule:truthy
   # path that ordinary pull requests run only when their change affects it.
   schedule:
     - cron: "17 6 * * *"
-  workflow_dispatch:
-    inputs:
-      kind_integration:
-        description: "Run kind on a runner with delegated cgroup v2 and user namespaces"
-        required: false
-        default: false
-        type: boolean
-
 permissions:
   contents: read
 
@@ -274,40 +266,6 @@ jobs:
           path: ${{ runner.temp }}/podman-storage.tar.zst
           key: podman-storage-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.podman-version.outputs.version }}-${{ hashFiles('container/**') }}
 
-  kind-integration:
-    name: "kind Kubernetes integration (opt-in)"
-    if: github.event_name == 'workflow_dispatch' && inputs.kind_integration == true
-    needs:
-      - test
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          submodules: "recursive"
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
-        with:
-          save-cache: false
-
-      - name: Install Podman
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -y --no-install-recommends podman zstd
-
-      - name: Verify delegated user scope
-        run: systemd-run --scope --user -p Delegate=yes true
-
-      - name: Run strict kind integration
-        run: >-
-          systemd-run --scope --user -p Delegate=yes
-          ./scripts/sanitized-test.sh --require-podman --
-          env DEVBOX_KIND_REQUIRE=1 UV_CACHE_DIR="${HOME}/.cache/uv"
-          uv run --extra test pytest -m integration tests/integration/test_kind.py
-
   # This is a dummy job to determine success of the CI workflow
   ci-success:
     name: CI Workflow - Success
@@ -316,18 +274,13 @@ jobs:
       - changes
       - pre-commit
       - test
-      - kind-integration
     runs-on: ubuntu-latest
     steps:
       - name: Check all jobs
         env:
           RESULTS: "${{ join(needs.*.result, ' ') }}"
-          KIND_INTEGRATION_REQUESTED: "${{ github.event_name == 'workflow_dispatch' && inputs.kind_integration == true }}"
         run: |
           for r in $RESULTS; do
-            if [[ "$r" == "skipped" && "$KIND_INTEGRATION_REQUESTED" != "true" ]]; then
-              continue
-            fi
             if [[ "$r" != "success" ]]; then
               echo "::error::❌ One or more required jobs failed, were cancelled, or were skipped ❌"
               exit 1

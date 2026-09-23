@@ -26,7 +26,6 @@ BIND_DIR="$(realpath "$PWD")"
 NAME="devbox-$(basename "$BIND_DIR")"
 WORKDIR="/sandbox/$(basename "$BIND_DIR")"
 SOURCE_FINGERPRINT_LABEL="io.github.johnstrunk.my-sandbox.devbox-context-fingerprint"
-KIND_RUNTIME_LABEL="io.github.johnstrunk.my-sandbox.devbox-kind-runtime"
 SUBID_READY_FILE="/sandbox/.devbox-subids-ready"
 DEVBOX_LOCK_FD=""
 
@@ -35,7 +34,7 @@ export XDG_DATA_HOME=
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") [-r|--remove] [--recreate|--new] [--kind] [-h|--help] [--] [command [arg ...]]
+Usage: $(basename "$0") [-r|--remove] [--recreate|--new] [-h|--help] [--] [command [arg ...]]
 
 Bind-mounts the current directory ($BIND_DIR) into a devbox container
 named '$NAME': creating it if it doesn't exist, or exec'ing a command/shell
@@ -46,8 +45,6 @@ Options:
       --recreate,
       --new           Remove the container (if it exists) and create a
                        fresh one
-      --kind           Create or enter a container with the delegated cgroup
-                        namespace required by rootless kind
   -h, --help          Show this help message
 
 Arguments:
@@ -93,24 +90,7 @@ warn_stale_container() {
   echo "    Run 'devbox --recreate' to refresh it; the host-backed project directory is preserved." >&2
 }
 
-require_kind_runtime_container() {
-  if [[ "$KIND_RUNTIME" != true ]]; then
-    return 0
-  fi
-  local configured_kind_runtime
-  configured_kind_runtime="$(podman inspect \
-    -f "{{ index .Config.Labels \"$KIND_RUNTIME_LABEL\" }}" \
-    "$NAME" 2>/dev/null || true)"
-  if [[ "$configured_kind_runtime" == true ]]; then
-    return 0
-  fi
-  echo "==> ERROR: container '$NAME' was not created with --kind." >&2
-  echo "    Run 'devbox --recreate --kind' before using rootless kind." >&2
-  return 1
-}
-
 ACTION="run"
-KIND_RUNTIME=false
 COMMAND=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -120,10 +100,6 @@ while [ $# -gt 0 ]; do
       ;;
     --recreate | --new)
       ACTION="recreate"
-      shift
-      ;;
-    --kind)
-      KIND_RUNTIME=true
       shift
       ;;
     -h | --help)
@@ -858,19 +834,12 @@ EOF
     --userns "keep-id:uid=$sandbox_uid,gid=$sandbox_gid"
     --name "$NAME"
     --label "$SOURCE_FINGERPRINT_LABEL=$source_fingerprint"
-    --label "$KIND_RUNTIME_LABEL=$KIND_RUNTIME"
     --stop-timeout 0
     --device /dev/fuse
     --device /dev/net/tun
     --security-opt label=disable
     --env "DEVBOX_SUBID_READY_FILE=$SUBID_READY_FILE"
   )
-  if [[ "$KIND_RUNTIME" == true ]]; then
-    # Rootless kind needs the delegated cgroup controllers from the host's
-    # user scope. The kind wrapper enables cgroups only for kind's node
-    # containers; ordinary devboxes keep their isolated default namespace.
-    base_run_args+=(--cgroupns host)
-  fi
   # Nested Podman's Docker-compatible API defaults new containers to the
   # pasta network (see container/Dockerfile), which already supports
   # published ports without any of this. An *explicit* netavark bridge
@@ -1286,7 +1255,6 @@ case "$ACTION" in
     ;;
   run)
     if container_exists; then
-      require_kind_runtime_container || exit 1
       expected_source_fingerprint="$(container_context_fingerprint)"
       if container_is_stale "$expected_source_fingerprint"; then
         warn_stale_container

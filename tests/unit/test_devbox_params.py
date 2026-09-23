@@ -387,7 +387,7 @@ def test_devbox_records_context_fingerprint_on_container(
         if arg == "--label"
         for value in [run_call[index + 1]]
     ]
-    assert len(run_labels) == 2
+    assert len(run_labels) == 1
     fingerprint_labels = [
         label
         for label in run_labels
@@ -1546,20 +1546,6 @@ def test_devbox_requests_nested_bridge_sysctls(
         for call in calls
         if call
     )
-
-    kind_dir = tmp_path / "kind-workdir"
-    kind_dir.mkdir()
-    res = run_bash_script(devbox_path, ["--kind", "true"], env=env, cwd=kind_dir)
-    assert res.returncode == 0, res.stderr
-
-    run_calls = [
-        c for c in parse_podman_calls(log_file) if c and c[0] == "run" and "-d" in c
-    ]
-    assert len(run_calls) == 2
-    run_call = run_calls[-1]
-    assert "--cgroupns" in run_call
-    assert run_call[run_call.index("--cgroupns") + 1] == "host"
-    assert "io.github.johnstrunk.my-sandbox.devbox-kind-runtime=true" in run_call
 
 
 @pytest.mark.unit

@@ -35,8 +35,7 @@ def test_devbox_lifecycle_create_exec_recreate_remove(
             env=isolated_env,
             cwd=test_dir,
             # A sanitized runner rebuilds the image in its isolated Podman
-            # store; the kind/kubectl downloads make a cold build slower than
-            # the normal command-execution budget.
+            # store, so the initial image build needs a larger time budget.
             timeout=600,
         )
         assert res_create.returncode == 0, (
