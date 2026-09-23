@@ -5,6 +5,7 @@ import os
 import shlex
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -31,6 +32,8 @@ def _make_fake_podman(
     message: str = "",
     run_status: int = 0,
     run_message: str = "",
+    rm_status: int = 0,
+    exists_status: int = 0,
 ) -> None:
     log = shlex.quote(str(log_path))
     fake_podman = bin_dir / "podman"
@@ -64,6 +67,14 @@ if [[ "${{1-}}" == run && {run_status} -ne 0 ]]; then
   printf '%s\\n' {shlex.quote(run_message)} >&2
   exit {run_status}
 fi
+if [[ "${{1-}}" == rm && {rm_status} -ne 0 ]]; then
+  printf 'simulated probe removal failure\\n' >&2
+  exit {rm_status}
+fi
+if [[ "${{1-}}" == container && "${{2-}}" == exists && {exists_status} -ne 0 ]]; then
+  printf 'simulated container status failure\\n' >&2
+  exit {exists_status}
+fi
 if [[ "${{1-}}" == info ]]; then
   if [[ {status} -ne 0 ]]; then
     printf '%s\\n' {shlex.quote(message)} >&2
@@ -82,9 +93,11 @@ def _podman_environment(
     host_config = tmp_path / "host-config"
     host_data = tmp_path / "host-data"
     host_runtime = tmp_path / "host-runtime"
+    host_cache = tmp_path / "host-cache"
     host_config.mkdir()
     host_data.mkdir()
     host_runtime.mkdir()
+    host_cache.mkdir()
     host_containers = host_config / "containers"
     host_containers.mkdir()
     (host_containers / "containers.conf").write_text(
@@ -99,6 +112,7 @@ def _podman_environment(
             "XDG_CONFIG_HOME": str(host_config),
             "XDG_DATA_HOME": str(host_data),
             "XDG_RUNTIME_DIR": str(host_runtime),
+            "XDG_CACHE_HOME": str(host_cache),
             "GH_TOKEN": "host-secret-token",  # pragma: allowlist secret
             "TAVILY_API_KEY": "host-tavily-token",  # pragma: allowlist secret
             "CONTAINERS_CONF": str(tmp_path / "host-secret.conf"),
@@ -226,6 +240,143 @@ def test_wrapper_distinguishes_container_preflight_failure(
     assert "Podman container preflight failed" in result.stderr
     assert "probe registry configuration unavailable" in result.stderr
     assert not marker.exists()
+    assert "rm -f my-sandbox-podman-probe-" in log_path.read_text()
+
+
+@pytest.mark.unit
+def test_wrapper_reports_unknown_probe_cleanup_status(
+    repo_root: Path, tmp_path: Path
+) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    host_home = tmp_path / "host-home"
+    host_home.mkdir()
+    log_path = host_home / "podman.log"
+    _make_fake_podman(
+        fake_bin,
+        log_path,
+        run_status=42,
+        run_message="probe runtime unavailable",
+        rm_status=17,
+        exists_status=125,
+    )
+    env = _podman_environment(tmp_path, fake_bin, host_home)
+    marker = tmp_path / "product-command-ran"
+
+    result = _run_wrapper(
+        repo_root,
+        [
+            "--require-podman",
+            "--",
+            sys.executable,
+            "-c",
+            f"Path({str(marker)!r}).touch()",
+        ],
+        env,
+    )
+
+    assert result.returncode == 125
+    assert "could not confirm removal of Podman probe container" in result.stderr
+    assert "container exists check exited 125" in result.stderr
+    assert not marker.exists()
+
+
+@pytest.mark.unit
+def test_wrapper_reports_probe_container_left_after_cleanup_failure(
+    repo_root: Path, tmp_path: Path
+) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    host_home = tmp_path / "host-home"
+    host_home.mkdir()
+    log_path = host_home / "podman.log"
+    _make_fake_podman(
+        fake_bin,
+        log_path,
+        run_status=42,
+        run_message="probe runtime unavailable",
+        rm_status=17,
+        exists_status=0,
+    )
+    env = _podman_environment(tmp_path, fake_bin, host_home)
+    marker = tmp_path / "product-command-ran"
+
+    result = _run_wrapper(
+        repo_root,
+        [
+            "--require-podman",
+            "--",
+            sys.executable,
+            "-c",
+            f"Path({str(marker)!r}).touch()",
+        ],
+        env,
+    )
+
+    assert result.returncode == 125
+    assert "WARNING: could not remove Podman probe container" in result.stderr
+    assert not marker.exists()
+
+
+@pytest.mark.unit
+def test_wrapper_serializes_podman_runtime_sessions(
+    repo_root: Path, tmp_path: Path
+) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    host_home = tmp_path / "host-home"
+    host_home.mkdir()
+    log_path = host_home / "podman.log"
+    _make_fake_podman(fake_bin, log_path)
+    env = _podman_environment(tmp_path, fake_bin, host_home)
+
+    active = tmp_path / "test-session-active"
+    overlap = tmp_path / "test-session-overlap"
+    command = [
+        sys.executable,
+        "-c",
+        """
+import os
+import pathlib
+import sys
+import time
+
+active, overlap = map(pathlib.Path, sys.argv[1:])
+lock_file = pathlib.Path(os.environ["MY_SANDBOX_PODMAN_RUNTIME_LOCK_FILE"])
+if os.environ.get("MY_SANDBOX_PODMAN_RUNTIME_LOCK_HELD") != "1":
+    raise SystemExit("runtime lock marker was not passed to the test command")
+if not lock_file.is_file():
+    raise SystemExit("runtime lock file was not created")
+try:
+    active.mkdir()
+except FileExistsError:
+    overlap.touch()
+time.sleep(0.2)
+try:
+    active.rmdir()
+except OSError:
+    pass
+""",
+        str(active),
+        str(overlap),
+    ]
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(
+                _run_wrapper,
+                repo_root,
+                ["--require-podman", "--", *command],
+                env,
+            )
+            for _ in range(2)
+        ]
+        results = [future.result(timeout=45) for future in futures]
+
+    assert all(result.returncode == 0 for result in results), [
+        result.stderr for result in results
+    ]
+    assert not overlap.exists()
 
 
 @pytest.mark.unit

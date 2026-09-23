@@ -85,8 +85,14 @@ cd /path/to/project
 ```
 
 The container is named after the current directory (`devbox-<dirname>`), so
-each project directory gets its own persistent container. The first run
-builds the `devbox:latest` image (if not already built), configures user
+each project directory gets its own persistent container. The first run builds
+or reuses an image tagged from the launcher and container-context fingerprint.
+When `devbox` is used from another project, that image is also assigned to the
+shared `devbox:latest` tag, so normal consumers keep sharing one image. When
+developing `my-sandbox` from a checkout or worktree, the launcher uses the
+context-specific tag directly and leaves `devbox:latest` untouched. A shared
+per-user Podman runtime lock serializes launcher lifecycle operations across
+worktrees. The launcher then configures user
 namespace delegations, passes relevant host configuration and environment
 variables, and opens an interactive bash shell in the bind-mounted directory.
 Subsequent runs from the same directory just exec a new shell into the
@@ -530,7 +536,12 @@ For container and integration tests, add `--require-podman`:
 `--require-podman` uses `docker.io/library/alpine:3.22` for its bounded real
 container probe. Pre-pull a locally available probe image and select it with
 `--podman-probe-image IMAGE` when registry access requires custom proxy or CA
-setup; command arguments after `--` run only after this preflight.
+setup; command arguments after `--` run only after this preflight. It takes the
+same per-user Podman runtime lock as the launcher and holds it across the probe
+and test command, so separate worktrees do not concurrently mutate or probe the
+shared Podman store. The probe has a unique name and the wrapper removes it on
+failure or interruption; launcher subprocesses inherit the lock-held marker to
+avoid deadlocking against their parent test run.
 
 The wrapper gives the outer `podman` process an isolated `HOME`, a temporary
 Podman config root containing only the allowlisted non-secret container config

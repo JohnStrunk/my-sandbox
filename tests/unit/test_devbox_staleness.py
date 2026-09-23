@@ -10,7 +10,7 @@ from tests.conftest import devbox_context_fingerprint, run_bash_script
 
 def _expected_fingerprint(launcher: Path, context_dir: Path) -> str:
     """Mirror of the launcher's `container_context_fingerprint` (issue #179):
-    container build-context files plus a content hash of the launcher."""
+    container build-context entries plus launcher contents and mode."""
     result = subprocess.run(
         [
             "bash",
@@ -18,9 +18,26 @@ def _expected_fingerprint(launcher: Path, context_dir: Path) -> str:
             """{
     (
         cd "$1"
-        find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum
+        find . -mindepth 1 -print0 | LC_ALL=C sort -z |
+        while IFS= read -r -d '' path; do
+            mode="$(stat -c '%a' -- "$path")"
+            if [ -L "$path" ]; then
+                printf 'symlink\\0%s\\0%s\\0' "$mode" "$path"
+                readlink --zero -- "$path"
+            elif [ -d "$path" ]; then
+                printf 'directory\\0%s\\0%s\\0' "$mode" "$path"
+            elif [ -f "$path" ]; then
+                printf 'file\\0%s\\0%s\\0' "$mode" "$path"
+                sha256sum < "$path" | cut -d ' ' -f 1
+                printf '\\0'
+            else
+                printf '%s\\0%s\\0%s\\0' "$(stat -c '%F' -- "$path")" "$mode" "$path"
+            fi
+        done
     )
-    printf 'launcher %s\\n' "$(sha256sum < "$2" | cut -d ' ' -f 1)"
+    printf 'launcher mode=%s hash=%s\\n' \\
+        "$(stat -c '%a' -- "$2")" \\
+        "$(sha256sum < "$2" | cut -d ' ' -f 1)"
 } | sha256sum | cut -d ' ' -f 1
 """,
             "bash",
@@ -237,3 +254,90 @@ def test_devbox_test_image_fingerprint_changes_with_context(tmp_path: Path):
     dockerfile.write_text("FROM fedora:latest\nRUN true\n")
 
     assert devbox_context_fingerprint(context_dir) != first_fingerprint
+
+
+@pytest.mark.unit
+def test_devbox_context_fingerprint_changes_with_file_mode(
+    devbox_path: Path, tmp_path: Path
+):
+    launcher = _isolated_launcher_copy(devbox_path, tmp_path)
+    dockerfile = launcher.parent / "container" / "Dockerfile"
+    first_fingerprint = _expected_fingerprint(launcher, dockerfile.parent)
+
+    dockerfile.chmod(dockerfile.stat().st_mode | stat.S_IXUSR)
+
+    assert _expected_fingerprint(launcher, dockerfile.parent) != first_fingerprint
+
+
+@pytest.mark.unit
+def test_devbox_context_fingerprint_changes_with_symlink_target(
+    devbox_path: Path, tmp_path: Path
+):
+    launcher = _isolated_launcher_copy(devbox_path, tmp_path)
+    context_dir = launcher.parent / "container"
+    first_target = context_dir / "first-target"
+    second_target = context_dir / "second-target"
+    link = context_dir / "linked-file"
+    first_target.write_text("first\n")
+    second_target.write_text("second\n")
+    link.symlink_to(first_target.name)
+    first_fingerprint = _expected_fingerprint(launcher, context_dir)
+
+    link.unlink()
+    link.symlink_to(second_target.name)
+
+    assert _expected_fingerprint(launcher, context_dir) != first_fingerprint
+
+
+@pytest.mark.unit
+def test_devbox_warns_when_file_mode_changes_in_build_context(
+    devbox_path: Path, tmp_path: Path, isolated_env: dict[str, str]
+):
+    launcher = _isolated_launcher_copy(devbox_path, tmp_path)
+    context_dir = launcher.parent / "container"
+    dockerfile = context_dir / "Dockerfile"
+    project = tmp_path / "project"
+    project.mkdir()
+    env = _mock_podman(
+        tmp_path,
+        isolated_env,
+        recorded_fingerprint=_expected_fingerprint(launcher, context_dir),
+        container_image="current-image",
+        current_image="current-image",
+    )
+    dockerfile.chmod(dockerfile.stat().st_mode | stat.S_IXUSR)
+
+    result = run_bash_script(launcher, ["true"], env=env, cwd=project)
+
+    assert result.returncode == 0
+    assert "is stale" in result.stderr
+
+
+@pytest.mark.unit
+def test_devbox_warns_when_symlink_target_changes_in_build_context(
+    devbox_path: Path, tmp_path: Path, isolated_env: dict[str, str]
+):
+    launcher = _isolated_launcher_copy(devbox_path, tmp_path)
+    context_dir = launcher.parent / "container"
+    first_target = context_dir / "first-target"
+    second_target = context_dir / "second-target"
+    link = context_dir / "linked-file"
+    project = tmp_path / "project"
+    project.mkdir()
+    first_target.write_text("first\n")
+    second_target.write_text("second\n")
+    link.symlink_to(first_target.name)
+    env = _mock_podman(
+        tmp_path,
+        isolated_env,
+        recorded_fingerprint=_expected_fingerprint(launcher, context_dir),
+        container_image="current-image",
+        current_image="current-image",
+    )
+    link.unlink()
+    link.symlink_to(second_target.name)
+
+    result = run_bash_script(launcher, ["true"], env=env, cwd=project)
+
+    assert result.returncode == 0
+    assert "is stale" in result.stderr
