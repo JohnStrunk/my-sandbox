@@ -1519,6 +1519,122 @@ def _git_config_set_calls(calls: list[list[str]], key: str) -> list[list[str]]:
     ]
 
 
+def _github_https_rewrite_calls(calls: list[list[str]]) -> list[list[str]]:
+    return [
+        c
+        for c in calls
+        if len(c) == 8
+        and c[0] == "exec"
+        and c[2:7]
+        == [
+            "git",
+            "config",
+            "--global",
+            "--add",
+            "url.https://github.com/.insteadOf",
+        ]
+    ]
+
+
+@pytest.mark.unit
+def test_devbox_rewrites_github_ssh_remotes_to_https(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, log_file = mock_podman_env
+    env["GH_TOKEN"] = "mock-github-token"  # pragma: allowlist secret
+    host_gitconfig = tmp_path / "host.gitconfig"
+    host_gitconfig.write_text("[user]\n\tname = Host User\n", encoding="utf-8")
+    env["GIT_CONFIG_GLOBAL"] = str(host_gitconfig)
+    host_config_before = host_gitconfig.read_bytes()
+
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0
+    assert host_gitconfig.read_bytes() == host_config_before
+
+    calls = parse_podman_calls(log_file)
+    rewrite_calls = _github_https_rewrite_calls(calls)
+    assert [call[7] for call in rewrite_calls] == [
+        "git@github.com:",
+        "ssh://git@github.com/",
+    ]
+
+    # Apply the actual container Git config commands to an isolated config and
+    # verify Git resolves existing remotes to HTTPS without changing their
+    # stored URLs or rewriting unrelated SSH hosts.
+    container_gitconfig = tmp_path / "container.gitconfig"
+    git_env = env.copy()
+    git_env["GIT_CONFIG_GLOBAL"] = str(container_gitconfig)
+    git_env["GIT_CONFIG_NOSYSTEM"] = "1"
+    for call in rewrite_calls:
+        subprocess.run(
+            call[2:],
+            env=git_env,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    subprocess.run(
+        ["git", "init", "--quiet", str(repo_dir)],
+        env=git_env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    remotes = {
+        "github-scp": (
+            "git@github.com:owner/repo.git",
+            "https://github.com/owner/repo.git",
+        ),
+        "github-ssh": (
+            "ssh://git@github.com/owner/repo.git",
+            "https://github.com/owner/repo.git",
+        ),
+        "gitlab": (
+            "git@gitlab.com:owner/repo.git",
+            "git@gitlab.com:owner/repo.git",
+        ),
+    }
+    for name, (remote_url, expected_url) in remotes.items():
+        subprocess.run(
+            ["git", "-C", str(repo_dir), "remote", "add", name, remote_url],
+            env=git_env,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        result = subprocess.run(
+            ["git", "-C", str(repo_dir), "remote", "get-url", name],
+            env=git_env,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert result.stdout.strip() == expected_url
+
+    result = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo_dir),
+            "config",
+            "--local",
+            "--get",
+            "remote.github-scp.url",
+        ],
+        env=git_env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert result.stdout.strip() == "git@github.com:owner/repo.git"
+
+
 @pytest.mark.unit
 def test_devbox_configures_git_identity_from_host_config(
     devbox_path: Path, mock_podman_env, tmp_path: Path
@@ -1623,7 +1739,11 @@ def test_devbox_runs_gh_auth_setup_git_when_token_available(
     assert res.returncode == 0
 
     calls = parse_podman_calls(log_file)
-    assert any(c[:5] == ["exec", c[1], "gh", "auth", "setup-git"] for c in calls)
+    setup_git_calls = [
+        c for c in calls if c[:5] == ["exec", c[1], "gh", "auth", "setup-git"]
+    ]
+    assert len(setup_git_calls) == 1
+    assert setup_git_calls[0][5:] == ["--hostname", "github.com", "--force"]
 
 
 @pytest.mark.unit
@@ -1639,10 +1759,30 @@ def test_devbox_warns_when_no_github_token_for_setup_git(
 
     res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0
+    assert "authenticated Git operations against github.com" in res.stderr
     assert "gh auth login && gh auth setup-git" in res.stderr
 
     calls = parse_podman_calls(log_file)
     assert not any(c[:5] == ["exec", c[1], "gh", "auth", "setup-git"] for c in calls)
+    assert [call[7] for call in _github_https_rewrite_calls(calls)] == [
+        "git@github.com:",
+        "ssh://git@github.com/",
+    ]
+
+
+@pytest.mark.unit
+def test_devbox_warns_when_github_https_rewrite_fails(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, _ = mock_podman_env
+    env["MOCK_GIT_CONFIG_SET_FAILS"] = "1"
+
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0
+    assert res.stderr.count("Failed to configure GitHub HTTPS URL rewrite") == 2
 
 
 @pytest.mark.unit

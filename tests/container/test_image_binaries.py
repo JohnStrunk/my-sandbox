@@ -124,6 +124,32 @@ CGO_ENABLED=0 go build -o "$fixture/static-build" .
 
 
 @pytest.mark.container
+def test_gh_env_token_configures_git_credential_helper(devbox_image: str):
+    command = r"""
+set -euo pipefail
+fixture="$(mktemp -d)"
+trap 'rm -rf -- "$fixture"' EXIT
+export GH_CONFIG_DIR="$fixture/gh"
+export GIT_CONFIG_GLOBAL="$fixture/gitconfig"
+export GIT_CONFIG_NOSYSTEM=1
+export GH_TOKEN=mock-github-token  # pragma: allowlist secret
+gh auth setup-git --hostname github.com --force
+printf 'protocol=https\nhost=github.com\n\n' \
+  | git credential fill 2>/dev/null \
+  | grep -Fqx "password=$GH_TOKEN"
+"""
+    res = run_in_devbox(
+        devbox_image,
+        ["bash", "-ceu", command],
+        user="sandbox",
+    )
+    assert res.returncode == 0, (
+        "gh did not expose the environment-only token through Git's credential "
+        f"helper.\nStdout: {res.stdout}\nStderr: {res.stderr}"
+    )
+
+
+@pytest.mark.container
 def test_file_identifies_elf_executable(devbox_image: str):
     res = run_in_devbox(
         devbox_image,

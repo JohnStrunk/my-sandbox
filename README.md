@@ -214,14 +214,27 @@ Git config is only ever read, never modified. If neither source has an
 identity, `devbox` prints a warning explaining how to set one with
 `git config --global user.name/user.email` inside the container.
 
-The devbox has no usable SSH access to GitHub, so all Git operations against
-`github.com` must go over HTTPS, authenticated through the `gh` CLI. Whenever
-a GitHub token is available (see the GitHub integration below), `devbox` runs
-`gh auth setup-git` inside the container automatically, registering `gh` as
-Git's credential helper so `git clone`/`fetch`/`push` against
-`https://github.com/...` URLs work without SSH keys or an agent. Otherwise, it
-prints a warning explaining how to run `gh auth login && gh auth setup-git`
-manually.
+The devbox has no usable SSH access to GitHub, so GitHub SSH remotes are routed
+to HTTPS inside the container. Operations that require authentication,
+including pushes and private-repository access, use the `gh` CLI. When a
+mounted repository has a GitHub SSH remote such as
+`git@github.com:OWNER/REPO.git` or
+`ssh://git@github.com/OWNER/REPO.git`, `devbox` rewrites it to HTTPS through a
+container-local Git configuration rule. This leaves the host Git config and
+the mounted repository's `.git/config` unchanged, and does not affect SSH
+remotes for other hosts. GitHub host SSH keys are not mounted, and SSH host-key
+verification is not disabled.
+
+Whenever a GitHub token is available (see the GitHub integration below),
+`devbox` runs `gh auth setup-git --hostname github.com --force` inside the
+container automatically. The explicit hostname and `--force` also register
+Git's credential helper when the token is supplied only through
+`GH_TOKEN`/`GITHUB_TOKEN` and no stored `gh` host configuration exists. The
+helper supplies credentials for authenticated clone/fetch/push operations;
+public repository reads can still be anonymous. Without a token, the launcher
+prints a warning with the manual `gh auth login` and `gh auth setup-git` steps.
+Run `devbox --recreate` to apply the URL rewrite to an existing persistent
+container.
 
 ### Persistent Storage
 
