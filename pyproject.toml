@@ -27,6 +27,10 @@ markers = [
     "e2e_inference: End-to-end LLM inference tests for API providers",
 ]
 
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+
 [tool.ruff]
 line-length = 88
 target-version = "py310"
