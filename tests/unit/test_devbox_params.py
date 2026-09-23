@@ -1,7 +1,11 @@
+import fcntl
 import json
 import os
+import shutil
 import stat
 import subprocess
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -47,7 +51,9 @@ with open(sys.argv[1], "a") as f:
 ' "{log_file}" "$@"
 
 if [ "$1" = "run" ] && [ "$2" = "--rm" ]; then
-    if [ "$3" = "-i" ] && [ "$4" = "devbox:latest" ] && [ "$5" = "jq" ]; then
+    if [ "$3" = "-i" ] \
+        && [[ "$4" == devbox:* || "$4" == localhost/devbox:* ]] \
+        && [ "$5" = "jq" ]; then
         if echo "$*" | grep -q 'select(.id'; then
             python3 -c '
 import json
@@ -111,6 +117,37 @@ print(json.dumps(result, separators=(",", ":")))
         echo "1000"
         exit 0
     fi
+fi
+
+if [ "$1" = "image" ] && [ "$2" = "exists" ]; then
+    [ "${{MOCK_CONTEXT_IMAGE_EXISTS:-}}" = "1" ] && exit 0
+    exit 1
+fi
+
+if [ "$1" = "image" ] && [ "$2" = "inspect" ]; then
+    if [ "${{5:-}}" = "devbox:latest" ]; then
+        [ -n "${{MOCK_LATEST_IMAGE_ID:-}}" ] || exit 1
+        echo "$MOCK_LATEST_IMAGE_ID"
+    else
+        echo "${{MOCK_CONTEXT_IMAGE_ID:-mock-context-image}}"
+    fi
+    exit 0
+fi
+
+if [ "$1" = "build" ]; then
+    if [ -n "${{MOCK_BUILD_ACTIVE_DIR:-}}" ]; then
+        if ! mkdir "${{MOCK_BUILD_ACTIVE_DIR}}" 2>/dev/null; then
+            : > "${{MOCK_BUILD_OVERLAP_FILE}}"
+        else
+            sleep "${{MOCK_BUILD_SLEEP:-0.2}}"
+            rmdir "${{MOCK_BUILD_ACTIVE_DIR}}"
+        fi
+    fi
+    exit 0
+fi
+
+if [ "$1" = "tag" ]; then
+    exit 0
 fi
 
 if [ "$1" = "run" ] && [ "$2" = "-d" ] \
@@ -316,6 +353,18 @@ def _init_repository(repo_dir: Path) -> None:
     )
 
 
+def _copy_devbox_checkout(
+    devbox_path: Path, checkout: Path, dockerfile_contents: str
+) -> Path:
+    (checkout / "container").mkdir(parents=True)
+    launcher = checkout / "devbox"
+    shutil.copyfile(devbox_path, launcher)
+    launcher.chmod(launcher.stat().st_mode | stat.S_IEXEC)
+    (checkout / "container" / "Dockerfile").write_text(dockerfile_contents)
+    _init_repository(checkout)
+    return launcher
+
+
 def _assert_host_git_mount(volumes: list[str], path: Path) -> None:
     resolved = str(path.resolve())
     assert f"{resolved}:{resolved}" in volumes
@@ -400,6 +449,156 @@ def test_devbox_records_context_fingerprint_on_container(
         call and call[0] == "exec" and call[2:] == ["opencode", "models", "--refresh"]
         for call in calls
     )
+
+
+@pytest.mark.unit
+def test_devbox_consumer_uses_shared_latest_tag(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, log_file = mock_podman_env
+    project = tmp_path / "consumer-project"
+    project.mkdir()
+
+    result = run_bash_script(devbox_path, ["true"], env=env, cwd=project)
+
+    assert result.returncode == 0, result.stderr
+    calls = parse_podman_calls(log_file)
+    build_call = next(call for call in calls if call and call[0] == "build")
+    context_tag = build_call[build_call.index("--tag") + 1]
+    assert context_tag.startswith("localhost/devbox:context-")
+    assert ["tag", context_tag, "devbox:latest"] in calls
+    run_call = next(
+        call for call in calls if call and call[0] == "run" and "-d" in call
+    )
+    assert run_call[-1] == "devbox:latest"
+
+
+@pytest.mark.unit
+def test_devbox_reuses_context_image(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, log_file = mock_podman_env
+    env["MOCK_CONTEXT_IMAGE_EXISTS"] = "1"
+    env["MOCK_LATEST_IMAGE_ID"] = "mock-context-image"
+    project = tmp_path / "consumer-project"
+    project.mkdir()
+
+    result = run_bash_script(devbox_path, ["true"], env=env, cwd=project)
+
+    assert result.returncode == 0, result.stderr
+    calls = parse_podman_calls(log_file)
+    assert not any(call and call[0] == "build" for call in calls)
+    assert not any(call and call[0] == "tag" for call in calls)
+    run_call = next(
+        call for call in calls if call and call[0] == "run" and "-d" in call
+    )
+    assert run_call[-1] == "devbox:latest"
+
+
+@pytest.mark.unit
+def test_devbox_worktrees_use_distinct_images_and_share_the_build_lock(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, log_file = mock_podman_env
+    env.pop("MY_SANDBOX_PODMAN_RUNTIME_LOCK_HELD", None)
+    env["MY_SANDBOX_PODMAN_RUNTIME_LOCK_FILE"] = str(
+        tmp_path / "runtime-locks" / "podman-runtime.lock"
+    )
+    active_build = tmp_path / "active-build"
+    overlapping_build = tmp_path / "overlapping-build"
+    env["MOCK_BUILD_ACTIVE_DIR"] = str(active_build)
+    env["MOCK_BUILD_OVERLAP_FILE"] = str(overlapping_build)
+    env["MOCK_BUILD_SLEEP"] = "0.2"
+
+    checkouts = (
+        tmp_path / "worktree-a",
+        tmp_path / "worktree-b",
+    )
+    launchers = [
+        _copy_devbox_checkout(
+            devbox_path,
+            checkout,
+            f"FROM fedora:latest\nRUN echo {index}\n",
+        )
+        for index, checkout in enumerate(checkouts, start=1)
+    ]
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(
+                run_bash_script,
+                launcher,
+                ["true"],
+                env=env,
+                cwd=checkout,
+                timeout=30,
+            )
+            for launcher, checkout in zip(launchers, checkouts, strict=True)
+        ]
+        results = [future.result(timeout=45) for future in futures]
+
+    assert all(result.returncode == 0 for result in results), [
+        result.stderr for result in results
+    ]
+    assert not overlapping_build.exists()
+
+    calls = parse_podman_calls(log_file)
+    build_calls = [call for call in calls if call and call[0] == "build"]
+    build_tags = [call[call.index("--tag") + 1] for call in build_calls]
+    assert len(build_tags) == 2
+    assert len(set(build_tags)) == 2
+    assert all(tag.startswith("localhost/devbox:context-") for tag in build_tags)
+    assert not any(call and call[0] == "tag" for call in calls)
+    runtime_images = {
+        call[-1] for call in calls if call and call[0] == "run" and "-d" in call
+    }
+    assert runtime_images == set(build_tags)
+
+
+@pytest.mark.unit
+def test_devbox_lifecycle_lock_order_allows_test_child_to_remove_container(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    env, _ = mock_podman_env
+    env.pop("MY_SANDBOX_PODMAN_RUNTIME_LOCK_HELD", None)
+    env["MOCK_CONTAINER_EXISTS"] = "1"
+    runtime_lock = tmp_path / "runtime-locks" / "podman-runtime.lock"
+    runtime_lock.parent.mkdir()
+    env["MY_SANDBOX_PODMAN_RUNTIME_LOCK_FILE"] = str(runtime_lock)
+    project = tmp_path / "shared-project"
+    project.mkdir()
+
+    with runtime_lock.open("w") as parent_lock:
+        fcntl.flock(parent_lock, fcntl.LOCK_EX)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            regular_launcher = executor.submit(
+                run_bash_script,
+                devbox_path,
+                ["--remove"],
+                env=env,
+                cwd=project,
+                timeout=10,
+            )
+            time.sleep(0.1)
+            assert not regular_launcher.done(), (
+                "a normal launcher should wait for the shared runtime lock"
+            )
+
+            test_child_env = env.copy()
+            test_child_env["MY_SANDBOX_PODMAN_RUNTIME_LOCK_HELD"] = "1"
+            test_child = run_bash_script(
+                devbox_path,
+                ["--remove"],
+                env=test_child_env,
+                cwd=project,
+                timeout=5,
+            )
+            assert test_child.returncode == 0, test_child.stderr
+
+            fcntl.flock(parent_lock, fcntl.LOCK_UN)
+            regular_result = regular_launcher.result(timeout=15)
+
+    assert regular_result.returncode == 0, regular_result.stderr
 
 
 @pytest.mark.unit

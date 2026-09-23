@@ -28,6 +28,8 @@ WORKDIR="/sandbox/$(basename "$BIND_DIR")"
 SOURCE_FINGERPRINT_LABEL="io.github.johnstrunk.my-sandbox.devbox-context-fingerprint"
 SUBID_READY_FILE="/sandbox/.devbox-subids-ready"
 DEVBOX_LOCK_FD=""
+PODMAN_RUNTIME_LOCK_FD=""
+DEVBOX_IMAGE_TAG="devbox:latest"
 
 # Clear XDG_DATA_HOME so `devbox` works inside vscode terminal sessions
 export XDG_DATA_HOME=
@@ -53,29 +55,74 @@ EOF
 }
 
 container_context_fingerprint() {
+  local mode path
   # Covers the container build context *and* the launcher itself: bind
   # mounts, injected env, and exec contracts live in this script, so a
   # container built by an older launcher must be reported stale (issue
   # #179). Hashing stdin keeps the value independent of where the repo
-  # is checked out.
+  # is checked out. Preserve metadata that can change COPY results too:
+  # executable bits, directory entries, and symlink targets are all part of
+  # the effective build context.
   {
     (
       cd "$HERE/container"
-      find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum
+      find . -mindepth 1 -print0 | LC_ALL=C sort -z |
+        while IFS= read -r -d '' path; do
+          mode="$(stat -c '%a' -- "$path")"
+          if [ -L "$path" ]; then
+            printf 'symlink\0%s\0%s\0' "$mode" "$path"
+            readlink --zero -- "$path"
+          elif [ -d "$path" ]; then
+            printf 'directory\0%s\0%s\0' "$mode" "$path"
+          elif [ -f "$path" ]; then
+            printf 'file\0%s\0%s\0' "$mode" "$path"
+            sha256sum < "$path" | cut -d ' ' -f 1
+            printf '\0'
+          else
+            printf '%s\0%s\0%s\0' "$(stat -c '%F' -- "$path")" "$mode" "$path"
+          fi
+        done
     )
-    printf 'launcher %s\n' "$(sha256sum < "$LAUNCHER_SCRIPT" | cut -d ' ' -f 1)"
+    printf 'launcher mode=%s hash=%s\n' \
+      "$(stat -c '%a' -- "$LAUNCHER_SCRIPT")" \
+      "$(sha256sum < "$LAUNCHER_SCRIPT" | cut -d ' ' -f 1)"
   } | sha256sum | cut -d ' ' -f 1
+}
+
+devbox_development_checkout() {
+  local repository_root
+  repository_root="$(git -C "$HERE" rev-parse --show-toplevel 2>/dev/null || true)"
+  [ -n "$repository_root" ] || return 1
+
+  case "$BIND_DIR/" in
+    "$repository_root/"*) return 0 ;;
+  esac
+  return 1
+}
+
+devbox_context_image_tag() {
+  printf 'localhost/devbox:context-%s' "$1"
+}
+
+devbox_runtime_image_tag() {
+  local fingerprint="$1"
+  if devbox_development_checkout; then
+    devbox_context_image_tag "$fingerprint"
+  else
+    printf 'devbox:latest'
+  fi
 }
 
 container_is_stale() {
   local expected_fingerprint="$1"
+  local image_tag="$2"
   local recorded_fingerprint container_image current_image
 
   recorded_fingerprint="$(podman inspect \
     -f "{{ index .Config.Labels \"$SOURCE_FINGERPRINT_LABEL\" }}" \
     "$NAME" 2>/dev/null || true)"
   container_image="$(podman inspect -f '{{.Image}}' "$NAME" 2>/dev/null || true)"
-  current_image="$(podman image inspect -f '{{.Id}}' devbox:latest 2>/dev/null || true)"
+  current_image="$(podman image inspect -f '{{.Id}}' "$image_tag" 2>/dev/null || true)"
 
   if [ "$recorded_fingerprint" = "$expected_fingerprint" ] \
     && [ -n "$current_image" ] \
@@ -158,17 +205,35 @@ acquire_devbox_lock() {
   if [[ -n "$DEVBOX_LOCK_FD" ]]; then
     return 0
   fi
+  # Always take the shared runtime lock first; sanitized test runs hold it
+  # while launching devbox children, so the order prevents cross-worktree
+  # deadlocks on a per-container lock.
+  local runtime_lock_acquired=false
+  if [[ -z "$PODMAN_RUNTIME_LOCK_FD" \
+    && "${MY_SANDBOX_PODMAN_RUNTIME_LOCK_HELD:-}" != "1" ]]; then
+    if ! acquire_podman_runtime_lock; then
+      return 1
+    fi
+    runtime_lock_acquired=true
+  fi
+
   local lock_root="${XDG_CACHE_HOME:-$HOME/.cache}/devbox/locks"
   local lock_file="$lock_root/devbox-${NAME}.lock"
   local lock_fd
   if ! mkdir -p "$lock_root" || ! chmod 700 "$lock_root" \
     || ! exec {lock_fd}>"$lock_file"; then
     echo "==> Could not create the devbox creation lock '$lock_file'" >&2
+    if [[ "$runtime_lock_acquired" == true ]]; then
+      release_podman_runtime_lock
+    fi
     return 1
   fi
   if ! flock "$lock_fd"; then
     echo "==> Could not acquire the devbox creation lock '$lock_file'" >&2
     exec {lock_fd}>&-
+    if [[ "$runtime_lock_acquired" == true ]]; then
+      release_podman_runtime_lock
+    fi
     return 1
   fi
   DEVBOX_LOCK_FD="$lock_fd"
@@ -179,6 +244,47 @@ release_devbox_lock() {
     flock -u "$DEVBOX_LOCK_FD" || true
     exec {DEVBOX_LOCK_FD}>&-
     DEVBOX_LOCK_FD=""
+  fi
+  release_podman_runtime_lock
+}
+
+acquire_podman_runtime_lock() {
+  # Container-enabled test runs hold this lock for the duration of their
+  # shared-storage work and pass the marker through to launcher subprocesses.
+  # Avoid trying to acquire the same flock again from those children.
+  if [[ "${MY_SANDBOX_PODMAN_RUNTIME_LOCK_HELD:-}" == "1" ]]; then
+    return 0
+  fi
+  if [[ -n "$PODMAN_RUNTIME_LOCK_FD" ]]; then
+    return 0
+  fi
+
+  local lock_file="${MY_SANDBOX_PODMAN_RUNTIME_LOCK_FILE:-${XDG_CACHE_HOME:-$HOME/.cache}/devbox/locks/podman-runtime.lock}"
+  local lock_root="${lock_file%/*}"
+  local lock_fd
+  if ! mkdir -p "$lock_root" || ! chmod 700 "$lock_root" \
+    || ! exec {lock_fd}>"$lock_file"; then
+    echo "==> Could not create the shared Podman runtime lock '$lock_file'" >&2
+    return 1
+  fi
+  if ! chmod 600 "$lock_file"; then
+    echo "==> Could not secure the shared Podman runtime lock '$lock_file'" >&2
+    exec {lock_fd}>&-
+    return 1
+  fi
+  if ! flock "$lock_fd"; then
+    echo "==> Could not acquire the shared Podman runtime lock '$lock_file'" >&2
+    exec {lock_fd}>&-
+    return 1
+  fi
+  PODMAN_RUNTIME_LOCK_FD="$lock_fd"
+}
+
+release_podman_runtime_lock() {
+  if [[ -n "$PODMAN_RUNTIME_LOCK_FD" ]]; then
+    flock -u "$PODMAN_RUNTIME_LOCK_FD" || true
+    exec {PODMAN_RUNTIME_LOCK_FD}>&-
+    PODMAN_RUNTIME_LOCK_FD=""
   fi
 }
 
@@ -312,7 +418,7 @@ pricetag_hosted_models() {
     --connect-timeout 5 --max-time 15 \
     -H "x-api-key: ${PRICETAG_API_KEY}" \
     "$models_url" | \
-    podman run --rm -i "devbox:latest" jq -c '
+    podman run --rm -i "$DEVBOX_IMAGE_TAG" jq -c '
       (.data // [])
       | map(
           select(.id | type == "string" and length > 0)
@@ -339,19 +445,36 @@ pricetag_hosted_models() {
 create_container_locked() {
   local source_fingerprint
   source_fingerprint="$(container_context_fingerprint)"
+  local context_image_tag
+  context_image_tag="$(devbox_context_image_tag "$source_fingerprint")"
+  DEVBOX_IMAGE_TAG="$(devbox_runtime_image_tag "$source_fingerprint")"
 
-  podman build \
-    --layers \
-    --file "$HERE/container/Dockerfile" \
-    --tag "devbox:latest" \
-    "$HERE/container"
+  if podman image exists "$context_image_tag" >/dev/null 2>&1; then
+    echo "==> Reusing devbox image '$context_image_tag'"
+  else
+    echo "==> Building devbox image '$context_image_tag'"
+    podman build \
+      --layers \
+      --file "$HERE/container/Dockerfile" \
+      --tag "$context_image_tag" \
+      "$HERE/container"
+  fi
+
+  if [[ "$DEVBOX_IMAGE_TAG" == "devbox:latest" ]]; then
+    local context_image latest_image
+    context_image="$(podman image inspect -f '{{.Id}}' "$context_image_tag")"
+    latest_image="$(podman image inspect -f '{{.Id}}' "$DEVBOX_IMAGE_TAG" 2>/dev/null || true)"
+    if [[ "$context_image" != "$latest_image" ]]; then
+      podman tag "$context_image_tag" "$DEVBOX_IMAGE_TAG"
+    fi
+  fi
 
   # Look up the sandbox account's UID/GID from the image instead of
   # hardcoding them, so this keeps working if the base image ever changes
   # them.
   local sandbox_uid sandbox_gid
-  sandbox_uid="$(podman run --rm "devbox:latest" id -u sandbox)"
-  sandbox_gid="$(podman run --rm "devbox:latest" id -g sandbox)"
+  sandbox_uid="$(podman run --rm "$DEVBOX_IMAGE_TAG" id -u sandbox)"
+  sandbox_gid="$(podman run --rm "$DEVBOX_IMAGE_TAG" id -g sandbox)"
 
   local params=()
   # Each entry is a complete OpenCode config object. They are merged below so
@@ -821,7 +944,7 @@ EOF
     opencode_config_content="$({
       printf '%s\n' "{\"\$schema\":\"https://opencode.ai/config.json\"}"
       printf '%s\n' "${opencode_config[@]}"
-    } | podman run --rm -i "devbox:latest" jq -s -c \
+    } | podman run --rm -i "$DEVBOX_IMAGE_TAG" jq -s -c \
       "reduce .[] as \$item ({}; . * \$item)")"
     params+=(
       --env "OPENCODE_CONFIG_CONTENT=$opencode_config_content" \
@@ -878,7 +1001,7 @@ EOF
   local run_output
   if run_output="$(
     podman "${base_run_args[@]}" "${nested_bridge_sysctls[@]}" \
-      "${params[@]}" "devbox:latest" 2>&1
+      "${params[@]}" "$DEVBOX_IMAGE_TAG" 2>&1
   )"; then
     printf '%s\n' "$run_output"
     nested_bridge_networks_enabled=true
@@ -886,7 +1009,7 @@ EOF
     echo "==> Outer Podman rejected the nested-bridge-network sysctls; retrying without them" >&2
     printf '%s\n' "$run_output" >&2
     cleanup_failed_create
-    if ! run_output="$(podman "${base_run_args[@]}" "${params[@]}" "devbox:latest" 2>&1)"; then
+    if ! run_output="$(podman "${base_run_args[@]}" "${params[@]}" "$DEVBOX_IMAGE_TAG" 2>&1)"; then
       printf '%s\n' "$run_output" >&2
       cleanup_failed_create
       trap - INT TERM
@@ -1254,9 +1377,13 @@ case "$ACTION" in
     enter_container "${COMMAND[@]}"
     ;;
   run)
+    if ! acquire_devbox_lock; then
+      exit 1
+    fi
     if container_exists; then
       expected_source_fingerprint="$(container_context_fingerprint)"
-      if container_is_stale "$expected_source_fingerprint"; then
+      expected_image_tag="$(devbox_runtime_image_tag "$expected_source_fingerprint")"
+      if container_is_stale "$expected_source_fingerprint" "$expected_image_tag"; then
         warn_stale_container
       fi
     else

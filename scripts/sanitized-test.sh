@@ -90,11 +90,15 @@ host_home="${HOME-}"
 host_xdg_config_home="${XDG_CONFIG_HOME-}"
 host_xdg_data_home="${XDG_DATA_HOME-}"
 host_xdg_runtime_dir="${XDG_RUNTIME_DIR-}"
+host_xdg_cache_home="${XDG_CACHE_HOME-}"
 if [[ -z "$host_xdg_config_home" && -n "$host_home" ]]; then
   host_xdg_config_home="$host_home/.config"
 fi
 if [[ -z "$host_xdg_data_home" && -n "$host_home" ]]; then
   host_xdg_data_home="$host_home/.local/share"
+fi
+if [[ -z "$host_xdg_cache_home" && -n "$host_home" ]]; then
+  host_xdg_cache_home="$host_home/.cache"
 fi
 host_graphroot=""
 if [[ -n "$host_xdg_data_home" ]]; then
@@ -108,6 +112,9 @@ host_containers_config_dir=""
 if [[ -n "$host_xdg_config_home" ]]; then
   host_containers_config_dir="$host_xdg_config_home/containers"
 fi
+podman_runtime_lock_file=""
+podman_runtime_lock_fd=""
+podman_probe_container=""
 podman_path="$(command -v podman || true)"
 
 runtime_root="$(mktemp -d "${TMPDIR:-/tmp}/my-sandbox-sanitized.XXXXXX")" || {
@@ -117,8 +124,28 @@ runtime_root="$(mktemp -d "${TMPDIR:-/tmp}/my-sandbox-sanitized.XXXXXX")" || {
 # The cleanup function is invoked by the EXIT trap rather than directly.
 # shellcheck disable=SC2329
 cleanup() {
+  local exit_status=$? exists_status
+  if [[ -n "${podman_probe_container:-}" \
+    && -n "${podman_wrapper:-}" \
+    && -x "${podman_wrapper:-}" ]] \
+    && declare -p safe_env &>/dev/null; then
+    if ! env -i -- "${safe_env[@]}" timeout 30 "$podman_wrapper" \
+      rm -f "$podman_probe_container" >/dev/null 2>&1; then
+      if env -i -- "${safe_env[@]}" timeout 30 "$podman_wrapper" \
+        container exists "$podman_probe_container" >/dev/null 2>&1; then
+        printf 'sanitized-test: WARNING: could not remove Podman probe container %s\n' \
+          "$podman_probe_container" >&2
+      else
+        exists_status=$?
+        if [[ "$exists_status" -ne 1 ]]; then
+          printf 'sanitized-test: WARNING: could not confirm removal of Podman probe container %s (container exists check exited %s)\n' \
+            "$podman_probe_container" "$exists_status" >&2
+        fi
+      fi
+    fi
+  fi
   if rm -rf -- "$runtime_root" 2>/dev/null; then
-    return 0
+    return "$exit_status"
   fi
   if [[ -n "${podman_wrapper:-}" && -x "${podman_wrapper:-}" ]] \
     && declare -p safe_env &>/dev/null; then
@@ -126,6 +153,7 @@ cleanup() {
       rm -rf -- "$runtime_root" >/dev/null 2>&1 || true
   fi
   rm -rf -- "$runtime_root" 2>/dev/null || true
+  return "$exit_status"
 }
 trap cleanup EXIT
 
@@ -271,6 +299,19 @@ safe_env=(
   "XDG_CACHE_HOME=$isolated_xdg_cache_home"
   "XDG_RUNTIME_DIR=$isolated_xdg_runtime_dir"
 )
+if [[ "$require_podman" == true ]]; then
+  if [[ -z "$host_xdg_cache_home" ]]; then
+    printf '%s\n' \
+      'sanitized-test: a host cache directory is needed for the shared Podman runtime lock.' \
+      'sanitized-test: this is an infrastructure/runtime configuration failure, not a product test failure.' >&2
+    exit 125
+  fi
+  podman_runtime_lock_file="$host_xdg_cache_home/devbox/locks/podman-runtime.lock"
+  safe_env+=(
+    "MY_SANDBOX_PODMAN_RUNTIME_LOCK_FILE=$podman_runtime_lock_file"
+    "MY_SANDBOX_PODMAN_RUNTIME_LOCK_HELD=1"
+  )
+fi
 for name in LANG LC_ALL LC_CTYPE TERM CI; do
   if [[ -n "${!name-}" ]]; then
     safe_env+=("$name=${!name}")
@@ -339,9 +380,11 @@ podman_preflight() {
     return 125
   fi
 
+  podman_probe_container="my-sandbox-podman-probe-${BASHPID:-$$}-${RANDOM}"
   if env -i -- "${safe_env[@]}" timeout 120 "$podman_wrapper" run \
-    --rm --pull=missing "$podman_probe_image" true >"$podman_probe_stdout" \
+    --rm --name "$podman_probe_container" --pull=missing "$podman_probe_image" true >"$podman_probe_stdout" \
     2>"$podman_probe_stderr"; then
+    podman_probe_container=""
     return 0
   fi
   probe_output="$(<"$podman_probe_stdout")"
@@ -370,6 +413,20 @@ if [[ "$resource_preflight_enabled" == true ]]; then
 fi
 
 if [[ "$require_podman" == true ]]; then
+  lock_root="${podman_runtime_lock_file%/*}"
+  if ! mkdir -p "$lock_root" || ! chmod 700 "$lock_root" \
+    || ! exec {podman_runtime_lock_fd}>"$podman_runtime_lock_file" \
+    || ! chmod 600 "$podman_runtime_lock_file"; then
+    printf 'sanitized-test: could not create the shared Podman runtime lock %s.\n' \
+      "$podman_runtime_lock_file" >&2
+    exit 125
+  fi
+  printf '%s\n' 'sanitized-test: waiting for the shared Podman runtime lock.' >&2
+  if ! flock "$podman_runtime_lock_fd"; then
+    printf 'sanitized-test: could not acquire the shared Podman runtime lock %s.\n' \
+      "$podman_runtime_lock_file" >&2
+    exit 125
+  fi
   if podman_preflight; then
     :
   else
