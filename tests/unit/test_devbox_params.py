@@ -288,32 +288,15 @@ exit 0
     fake_curl = bin_dir / "curl"
     fake_curl.write_text(
         "#!/usr/bin/env bash\n"
-        '[ "${MOCK_PRICETAG_DISCOVERY_FAIL:-}" = 1 ] && exit 1\n'
         '[ -z "${MOCK_PRICETAG_CURL_LOG:-}" ] || '
         'printf "%s\\n" "$*" >> "$MOCK_PRICETAG_CURL_LOG"\n'
-        "printf '%s\\n' \"$MOCK_PRICETAG_MODELS\"\n"
+        "exit 97\n"
     )
     fake_curl.chmod(fake_curl.stat().st_mode | stat.S_IEXEC)
 
     env = isolated_env
     env["PATH"] = f"{bin_dir}:{env.get('PATH', '')}"
     env["MOCK_PRICETAG_CURL_LOG"] = str(tmp_path / "pricetag_curl_calls.log")
-    env["MOCK_PRICETAG_MODELS"] = json.dumps(
-        {
-            "object": "list",
-            "data": [
-                {
-                    "id": "Inferact/Qwen3.8-Flash-Next-NVFP4",
-                    "display_name": (
-                        "Qwen 3.8 Flash Next (hosted, $0.15/$0.47 per MTok)"
-                    ),
-                },
-                {"id": "gpt-5.4"},
-                {"id": "gpt-5.4-mini"},
-                {"id": "gpt-5.3-codex"},
-            ],
-        }
-    )
     return env, log_file
 
 
@@ -1067,27 +1050,32 @@ def test_devbox_pricetag_env_and_provider_config(
         value for value in env_values if value.startswith("OPENCODE_CONFIG_CONTENT=")
     )
     config = json.loads(config_value.split("=", 1)[1])
+    expected_variants = {
+        "low": {"effort": "low"},
+        "medium": {"effort": "medium"},
+        "xhigh": {"effort": "xhigh"},
+    }
     expected_models = {
-        model_id: {
-            "name": (
-                "Qwen 3.8 Flash Next (hosted, $0.15/$0.47 per MTok)"
-                if model_id == "Inferact/Qwen3.8-Flash-Next-NVFP4"
-                else model_id
-            ),
-            "limit": {"context": 262144, "output": 8192},
+        "Inferact/Qwen3.8-Flash-Next-NVFP4": {
+            "name": "Qwen 3.8 Flash Next (hosted, $0.15/$0.47 per MTok)",
+            "limit": {"context": 262144, "output": 128000},
             "reasoning": True,
-            "variants": {
-                "low": {"effort": "low"},
-                "medium": {"effort": "medium"},
-                "xhigh": {"effort": "xhigh"},
+            "modalities": {
+                "input": ["text", "image"],
+                "output": ["text"],
             },
-        }
-        for model_id in (
-            "Inferact/Qwen3.8-Flash-Next-NVFP4",
-            "gpt-5.4",
-            "gpt-5.4-mini",
-            "gpt-5.3-codex",
-        )
+            "variants": expected_variants,
+        },
+        "rits/zai-org/glm-5-3": {
+            "name": "GLM 5.3 (hosted via curvebender)",
+            "limit": {"context": 262144, "output": 128000},
+            "reasoning": True,
+            "modalities": {
+                "input": ["text"],
+                "output": ["text"],
+            },
+            "variants": expected_variants,
+        },
     }
     assert config["provider"] == {
         "anthropic": {
@@ -1112,43 +1100,8 @@ def test_devbox_pricetag_env_and_provider_config(
             },
         },
     }
-    curl_log = (tmp_path / "pricetag_curl_calls.log").read_text()
-    assert "x-api-key: mock-pricetag-token" in curl_log
-    assert (
-        "https://ai-gateway-unified-ai-gateway-dogfood.dogfood-us-south-1-bxf-4x-"
-        "f196230f74f7ff44a5b4eeb1003c5bd5-0000.us-south.containers.appdomain.cloud/v1/models"
-        in curl_log
-    )
+    assert not (tmp_path / "pricetag_curl_calls.log").exists()
     assert "mock-pricetag-token" not in config_value
-
-
-@pytest.mark.unit
-def test_devbox_pricetag_hosted_discovery_failure_keeps_provider(
-    devbox_path: Path, mock_podman_env, tmp_path: Path
-):
-    env, log_file = mock_podman_env
-    env["PRICETAG_HOSTED_URL"] = "https://pricetag-hosted.example/v1"
-    env["PRICETAG_API_KEY"] = "mock-pricetag-token"  # pragma: allowlist secret
-    env["MOCK_PRICETAG_DISCOVERY_FAIL"] = "1"
-
-    run_dir = tmp_path / "workdir"
-    run_dir.mkdir()
-
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
-    assert res.returncode == 0
-    assert "could not discover PriceTag hosted models" in res.stderr
-
-    calls = parse_podman_calls(log_file)
-    run_call = next((c for c in calls if c and c[0] == "run" and "-d" in c), None)
-    assert run_call is not None
-    env_values = [
-        run_call[index + 1] for index, arg in enumerate(run_call[:-1]) if arg == "--env"
-    ]
-    config_value = next(
-        value for value in env_values if value.startswith("OPENCODE_CONFIG_CONTENT=")
-    )
-    config = json.loads(config_value.split("=", 1)[1])
-    assert config["provider"]["pricetag-hosted"]["models"] == {}
 
 
 @pytest.mark.unit
