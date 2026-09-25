@@ -202,6 +202,105 @@ def test_fresh_opencode_session_loads_semble_config(devbox_image: str):
 
 
 @pytest.mark.container
+def test_fresh_opencode_session_loads_provider_policies(devbox_image: str):
+    """The launcher's baseline config must load as native OpenCode v2 config.
+
+    The devbox baseline restricts providers with `experimental.policies`
+    provider-use deny statements (the v2 successor of the v1
+    `disabled_providers` list) and sets `external_directory` permissions.
+    OpenCode drops policy statements that fail validation, so verify the
+    generated shape is accepted and preserved by a fresh session.
+    """
+    config = json.dumps(
+        {
+            "$schema": "https://opencode.ai/config.json",
+            "experimental": {
+                "policies": [
+                    {
+                        "action": "provider.use",
+                        "resource": "github-copilot",
+                        "effect": "deny",
+                    },
+                    {
+                        "action": "provider.use",
+                        "resource": "gitlab",
+                        "effect": "deny",
+                    },
+                ]
+            },
+            "permissions": [
+                {
+                    "action": "external_directory",
+                    "resource": "/home/*",
+                    "effect": "allow",
+                },
+                {
+                    "action": "external_directory",
+                    "resource": "/root/*",
+                    "effect": "deny",
+                },
+                {
+                    "action": "external_directory",
+                    "resource": "/sandbox/*",
+                    "effect": "allow",
+                },
+                {
+                    "action": "external_directory",
+                    "resource": "/tmp/*",
+                    "effect": "allow",
+                },
+            ],
+        }
+    )
+    res = subprocess.run(
+        [
+            "podman",
+            "run",
+            "--rm",
+            "--network",
+            "none",
+            "--user",
+            "sandbox",
+            "--env",
+            f"OPENCODE_CONFIG_CONTENT={config}",
+            devbox_image,
+            "opencode",
+            "debug",
+            "config",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    output = f"{res.stdout}\n{res.stderr}"
+    assert res.returncode == 0, (
+        f"OpenCode could not load the provider policy config.\n{output}"
+    )
+    sources = json.loads(res.stdout)
+    inline = next(
+        source
+        for source in sources
+        if source.get("info", {}).get("experimental", {}).get("policies")
+    )
+    assert inline["info"]["experimental"]["policies"] == [
+        {"action": "provider.use", "resource": "github-copilot", "effect": "deny"},
+        {"action": "provider.use", "resource": "gitlab", "effect": "deny"},
+    ]
+    permissions = inline["info"]["permissions"]
+    assert {
+        "action": "external_directory",
+        "resource": "/root/*",
+        "effect": "deny",
+    } in permissions
+    assert {
+        "action": "external_directory",
+        "resource": "/sandbox/*",
+        "effect": "allow",
+    } in permissions
+
+
+@pytest.mark.container
 def test_fresh_opencode_session_loads_github_mcp_config(devbox_image: str):
     config = json.dumps(
         {
