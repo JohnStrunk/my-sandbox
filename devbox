@@ -809,6 +809,14 @@ EOF
 
   # Configure optional Pricetag provider overrides. The shared API key is
   # required for either interface, but each interface has its own endpoint.
+  # OpenCode v2 resolves a built-in provider's credential from its
+  # environment connection (for example OPENAI_API_KEY or ANTHROPIC_API_KEY)
+  # in preference to an override's settings.apiKey, so a direct-provider key
+  # passed through from the host would be sent to the gateway and rejected.
+  # Clearing the provider's environment credential list ("env": []) makes
+  # the gateway key from settings.apiKey authoritative while leaving the
+  # direct-provider variable itself available to other tools in the
+  # container.
   local pricetag_enabled=false
   if [ -n "${PRICETAG_API_KEY:-}" ]; then
     if [ -n "${PRICETAG_ANTHROPIC_URL:-}" ]; then
@@ -821,6 +829,7 @@ EOF
 {
   "providers": {
     "anthropic": {
+      "env": [],
       "settings": {
         "baseURL": "{env:PRICETAG_ANTHROPIC_URL}",
         "apiKey": "{env:PRICETAG_API_KEY}"
@@ -907,6 +916,7 @@ EOF
 {
   "providers": {
     "openai": {
+      "env": [],
       "settings": {
         "baseURL": "{env:PRICETAG_OPENAI_URL}",
         "apiKey": "{env:PRICETAG_API_KEY}"
