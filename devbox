@@ -869,8 +869,8 @@ EOF
           },
           "variants": {
             "low": {"effort": "low"},
-            "medium": {"effort": "medium"},
-            "xhigh": {"effort": "xhigh"}
+            "high": {"effort": "high"},
+            "max": {"effort": "max"}
           }
         }
       }

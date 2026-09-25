@@ -1050,10 +1050,15 @@ def test_devbox_pricetag_env_and_provider_config(
         value for value in env_values if value.startswith("OPENCODE_CONFIG_CONTENT=")
     )
     config = json.loads(config_value.split("=", 1)[1])
-    expected_variants = {
+    expected_qwen_variants = {
         "low": {"effort": "low"},
         "medium": {"effort": "medium"},
         "xhigh": {"effort": "xhigh"},
+    }
+    expected_glm_variants = {
+        "low": {"effort": "low"},
+        "high": {"effort": "high"},
+        "max": {"effort": "max"},
     }
     expected_models = {
         "Inferact/Qwen3.8-Flash-Next-NVFP4": {
@@ -1064,7 +1069,7 @@ def test_devbox_pricetag_env_and_provider_config(
                 "input": ["text", "image"],
                 "output": ["text"],
             },
-            "variants": expected_variants,
+            "variants": expected_qwen_variants,
         },
         "rits/zai-org/glm-5-3": {
             "name": "GLM 5.3 (hosted via curvebender)",
@@ -1074,7 +1079,7 @@ def test_devbox_pricetag_env_and_provider_config(
                 "input": ["text"],
                 "output": ["text"],
             },
-            "variants": expected_variants,
+            "variants": expected_glm_variants,
         },
     }
     assert config["provider"] == {
