@@ -328,7 +328,7 @@ devbox container is created:
 | Tavily | Web search, extraction, crawling, and mapping through Tavily's remote MCP server. | `TAVILY_API_KEY`. |
 | Semble | Natural-language semantic code search through the local OpenCode MCP server. | Always enabled; included in the devbox image. |
 | Anthropic | Direct Anthropic models, including Anthropic-compatible endpoints. | `ANTHROPIC_API_KEY` enables the built-in provider; optional `ANTHROPIC_BASE_URL` selects a custom endpoint. |
-| PriceTag (Hosted) | Static hosted Qwen 3.8 Flash Next and GLM 5.3 model definitions (262,144 context tokens, 128,000 output tokens, low/medium/xhigh effort; GLM is text-only). | Both `PRICETAG_HOSTED_URL` and `PRICETAG_API_KEY`. |
+| PriceTag (Hosted) | Static hosted Qwen 3.8 Flash Next and GLM 5.3 model definitions (262,144 context tokens, 128,000 output tokens; Qwen offers low/medium/xhigh effort, GLM offers low/high/max effort; GLM is text-only). | Both `PRICETAG_HOSTED_URL` and `PRICETAG_API_KEY`. |
 | OCTO Open Models | OpenAI-compatible Qwen 3.8 Frontier, Core, and Bulk models. | Both `OCTO_OPEN_URL` (gateway `/v1` URL) and `OCTO_OPEN_KEY`. |
 
 Runtime integrations can contribute any top-level OpenCode config property, with
