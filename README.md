@@ -336,8 +336,10 @@ devbox container is created:
 Runtime integrations can contribute any top-level OpenCode config property, with
 multiple MCP integrations combined under one `mcp` object in
 `OPENCODE_CONFIG_CONTENT`. The user's global `~/.config/opencode`
-configuration remains unchanged. Since the container is persistent, use
-`devbox --recreate` after adding or changing host
+configuration remains unchanged. The generated config also sets baseline
+`external_directory` permissions and native OpenCode v2 `provider.use` deny
+policies for the `github-copilot` and `gitlab` providers. Since the container
+is persistent, use `devbox --recreate` after adding or changing host
 credentials or integration triggers. On creation, the launcher also runs
 `opencode models` inside the container to start OpenCode v2's background service
 and load the model catalog before the first interactive client starts. If the

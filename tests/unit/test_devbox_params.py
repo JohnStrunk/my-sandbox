@@ -54,29 +54,6 @@ if [ "$1" = "run" ] && [ "$2" = "--rm" ]; then
     if [ "$3" = "-i" ] \
         && [[ "$4" == devbox:* || "$4" == localhost/devbox:* ]] \
         && [ "$5" = "jq" ]; then
-        if echo "$*" | grep -q 'select(.id'; then
-            python3 -c '
-import json
-import sys
-
-value = json.load(sys.stdin)
-print(json.dumps({{
-    item["id"]: {{
-        "name": item.get("display_name") or item["id"],
-        "limit": {{"context": 262144, "output": 8192}},
-        "reasoning": True,
-        "variants": {{
-            "low": {{"effort": "low"}},
-            "medium": {{"effort": "medium"}},
-            "xhigh": {{"effort": "xhigh"}},
-        }},
-    }}
-    for item in value.get("data", [])
-    if isinstance(item.get("id"), str) and item["id"]
-}}))
-'
-            exit 0
-        fi
         python3 -c '
 import json
 import sys
@@ -679,10 +656,20 @@ def test_devbox_github_mcp_config_from_token(
     config = json.loads(config_value.split("=", 1)[1])
     assert config == {
         "$schema": "https://opencode.ai/config.json",
-        "disabled_providers": [
-            "github-copilot",
-            "gitlab",
-        ],
+        "experimental": {
+            "policies": [
+                {
+                    "action": "provider.use",
+                    "resource": "github-copilot",
+                    "effect": "deny",
+                },
+                {
+                    "action": "provider.use",
+                    "resource": "gitlab",
+                    "effect": "deny",
+                },
+            ],
+        },
         "permissions": [
             {
                 "action": "external_directory",
@@ -752,10 +739,20 @@ def test_devbox_context7_mcp_config_from_api_key(
     config = json.loads(config_value.split("=", 1)[1])
     assert config == {
         "$schema": "https://opencode.ai/config.json",
-        "disabled_providers": [
-            "github-copilot",
-            "gitlab",
-        ],
+        "experimental": {
+            "policies": [
+                {
+                    "action": "provider.use",
+                    "resource": "github-copilot",
+                    "effect": "deny",
+                },
+                {
+                    "action": "provider.use",
+                    "resource": "gitlab",
+                    "effect": "deny",
+                },
+            ],
+        },
         "permissions": [
             {
                 "action": "external_directory",
@@ -838,10 +835,20 @@ def test_devbox_does_not_add_github_mcp_without_credentials(
     config = json.loads(config_value.split("=", 1)[1])
     assert config == {
         "$schema": "https://opencode.ai/config.json",
-        "disabled_providers": [
-            "github-copilot",
-            "gitlab",
-        ],
+        "experimental": {
+            "policies": [
+                {
+                    "action": "provider.use",
+                    "resource": "github-copilot",
+                    "effect": "deny",
+                },
+                {
+                    "action": "provider.use",
+                    "resource": "gitlab",
+                    "effect": "deny",
+                },
+            ],
+        },
         "permissions": [
             {
                 "action": "external_directory",
@@ -911,10 +918,20 @@ def test_devbox_the_source_mcp_config(
     config = json.loads(config_value.split("=", 1)[1])
     assert config == {
         "$schema": "https://opencode.ai/config.json",
-        "disabled_providers": [
-            "github-copilot",
-            "gitlab",
-        ],
+        "experimental": {
+            "policies": [
+                {
+                    "action": "provider.use",
+                    "resource": "github-copilot",
+                    "effect": "deny",
+                },
+                {
+                    "action": "provider.use",
+                    "resource": "gitlab",
+                    "effect": "deny",
+                },
+            ],
+        },
         "permissions": [
             {
                 "action": "external_directory",

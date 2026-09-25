@@ -507,16 +507,21 @@ create_container_locked() {
     --volume "$podman_storage_cache_dir:/sandbox/.local/share/containers/storage" \
   )
 
-  # Set safe defaults for paths that OpenCode can access from the devbox.
-  # OpenCode v2 consolidates google-vertex-anthropic into google-vertex, so
-  # carrying forward the old exclusion would also hide Vertex Gemini models.
+  # Set safe defaults for paths that OpenCode can access from the devbox and
+  # for the providers it may use. Provider restrictions use OpenCode v2's
+  # native provider-use deny policies, the successor to the v1
+  # disabled_providers list. OpenCode v2 consolidates
+  # google-vertex-anthropic into google-vertex, so carrying forward the old
+  # exclusion would also hide Vertex Gemini models.
   opencode_config+=(
     "$(cat <<'EOF'
 {
-  "disabled_providers": [
-    "github-copilot",
-    "gitlab"
-  ],
+  "experimental": {
+    "policies": [
+      {"action": "provider.use", "resource": "github-copilot", "effect": "deny"},
+      {"action": "provider.use", "resource": "gitlab", "effect": "deny"}
+    ]
+  },
   "permissions": [
     {"action": "external_directory", "resource": "/home/*", "effect": "allow"},
     {"action": "external_directory", "resource": "/root/*", "effect": "deny"},

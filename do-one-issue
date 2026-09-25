@@ -1,0 +1,19 @@
+#! /bin/bash
+
+set -e -o pipefail
+
+git checkout main
+git pull
+
+# OpenCode v2 dropped `run --command` (and `--variant`); commands are only
+# expanded by the interactive clients. Attach the command file to a headless
+# `opencode run` instead, and select the effort variant with the
+# provider/model#variant model reference syntax.
+devbox --new opencode run \
+  --agent build \
+  --model pricetag-hosted/Inferact/Qwen3.8-Flash-Next-NVFP4#xhigh \
+  --file .opencode/commands/grab-issue.md \
+  "Execute the task list in the attached file."
+
+git checkout main
+git pull
