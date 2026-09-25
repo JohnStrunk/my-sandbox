@@ -135,6 +135,10 @@ def test_wedged_build_times_out_and_terminates_tree(
     `subprocess.run` hung the whole session on exactly this shape.
     """
     pidfile = tmp_path / "wedge-pids"
+    # SIG_IGN survives fork and exec, so making the ignore explicit in the
+    # child (not just inherited from the parent) keeps the model honest for
+    # readers: both processes really do ignore SIGTERM, and only the
+    # runner's escalated group SIGKILL can stop them.
     _write_fake_podman(
         _fake_podman_bin(tmp_path),
         f"""
@@ -143,7 +147,7 @@ if [[ "$1 $2" == "image exists" ]]; then
 fi
 if [[ "$1" == "build" ]]; then
   trap '' TERM INT
-  sleep 300 &
+  (trap '' TERM INT; exec sleep 300) &
   child=$!
   printf '%s\\n%s\\n' $$ "$child" > {shlex.quote(str(pidfile))}
   wait
@@ -179,12 +183,15 @@ def test_wedged_image_exists_fails_loudly(
 ) -> None:
     """A runtime wedged on `image exists` must fail loudly, not hang."""
     pidfile = tmp_path / "wedge-pids"
+    # SIG_IGN survives fork and exec: with the ignore set explicitly in the
+    # child, both processes really do ignore SIGTERM, and only the runner's
+    # escalated group SIGKILL can stop them.
     _write_fake_podman(
         _fake_podman_bin(tmp_path),
         f"""
 if [[ "$1 $2" == "image exists" ]]; then
   trap '' TERM INT
-  sleep 300 &
+  (trap '' TERM INT; exec sleep 300) &
   child=$!
   printf '%s\\n%s\\n' $$ "$child" > {shlex.quote(str(pidfile))}
   wait
@@ -232,6 +239,6 @@ def test_image_build_timeout_env_override(
 def test_image_build_timeout_invalid_values_fall_back(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    for bad_value in ("not-a-number", "0", "-10", ""):
+    for bad_value in ("not-a-number", "0", "-10", "", "inf", "nan"):
         monkeypatch.setenv("DEVBOX_IMAGE_BUILD_TIMEOUT", bad_value)
         assert image_build_timeout() == DEFAULT_IMAGE_BUILD_TIMEOUT, bad_value

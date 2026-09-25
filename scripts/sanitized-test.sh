@@ -454,6 +454,11 @@ fi
 # works; SIGTERM/SIGHUP always do.
 TERM_GRACE_SECONDS=10
 KILL_GRACE_SECONDS=10
+# The test suite's runner (tests/conftest.py) uses 2s/2s for the same two
+# constants: it bounds single leaf commands (builds), while this wrapper
+# forwards interruption to whole test commands (pytest plus its fixtures),
+# which legitimately need longer to unwind. Keep the values in sync
+# deliberately, not accidentally.
 command_pid=""
 
 # These helpers are invoked from the signal traps (and each other) rather

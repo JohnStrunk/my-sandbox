@@ -430,10 +430,15 @@ def test_wrapper_sigint_exits_fast_with_command_cleanup(
     wrapper waiting out its whole escalation grace.
     """
     cleanup_marker = tmp_path / "int-cleanup-ran"
+    ready_marker = tmp_path / "int-command-ready"
     # Foreground sleep: an *async* sleep would ignore SIGINT (POSIX: async
     # commands in non-interactive shells inherit SIG_IGN for it) and turn
     # this into the escalation path instead of the graceful one.
-    command = "trap 'touch " + shlex.quote(str(cleanup_marker)) + "' INT\nsleep 30\n"
+    command = (
+        "trap 'touch " + shlex.quote(str(cleanup_marker)) + "' INT\n"
+        "touch " + shlex.quote(str(ready_marker)) + "\n"
+        "sleep 30\n"
+    )
     with (tmp_path / "out").open("w") as out, (tmp_path / "err").open("w") as err:
         proc = subprocess.Popen(
             [
@@ -451,9 +456,10 @@ def test_wrapper_sigint_exits_fast_with_command_cleanup(
         )
     try:
         deadline = time.monotonic() + 15
-        while time.monotonic() < deadline and proc.poll() is None:
+        while time.monotonic() < deadline and not ready_marker.exists():
+            assert proc.poll() is None, "command exited before the signal was sent"
             time.sleep(0.05)
-        assert proc.poll() is None, "command exited before the signal was sent"
+        assert ready_marker.exists(), "command never became ready"
 
         start = time.monotonic()
         proc.send_signal(signal.SIGINT)
@@ -481,9 +487,12 @@ def test_wrapper_sigterm_terminates_command_tree(
     kind of tree, which kept burning CPU after the run was over.
     """
     pidfile = tmp_path / "command-pids"
+    # SIG_IGN survives fork and exec, so the ignore is set explicitly in the
+    # child as well as the parent: both processes genuinely ignore SIGTERM
+    # and only the wrapper's escalated group SIGKILL can stop them.
     command = (
         "trap '' TERM INT\n"
-        "sleep 600 &\n"
+        "(trap '' TERM INT; exec sleep 600) &\n"
         f"printf '%s\\n%s\\n' $$ $! > {shlex.quote(str(pidfile))}\n"
         "wait\n"
     )
@@ -617,6 +626,10 @@ def test_wrapper_sigterm_terminates_detached_session_builds(
     # The wedged build ignored SIGTERM by construction: only the suite's
     # tracked-group handler (SIGKILL) or the wrapper's escalation can have
     # killed it. Either way, it must be dead -- no orphan left spinning.
+    stderr = (tmp_path / "err").read_text()
+    assert proc.returncode == 143, stderr  # 128 + SIGTERM
+    assert "received SIGTERM" in stderr
+    assert "terminating the command process group" in stderr
     assert _wait_pid_gone(build_pid), (
         f"detached-session build {build_pid} survived the wrapper interruption"
     )

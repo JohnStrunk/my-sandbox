@@ -8,6 +8,7 @@ keep their exact output and exit-status semantics.
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -153,18 +154,18 @@ def test_sigterm_handler_kills_tracked_session_groups(
     )
     proc = subprocess.Popen(
         [sys.executable, str(suite_mock)],
-        stdout=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
         text=True,
         start_new_session=True,
         cwd=repo_root,
     )
     try:
-        ready_line = proc.stdout.readline()
-        assert ready_line.strip() == "READY", (
-            f"suite mock did not start its wedge: {ready_line}"
-            f"{proc.stderr.read() if proc.poll() is not None else ''}"
-        )
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline and not build_pidfile.exists():
+            assert proc.poll() is None, f"suite mock exited early: {proc.stderr.read()}"
+            time.sleep(0.05)
+        assert build_pidfile.exists(), "detached build never started"
         build_pid = int(build_pidfile.read_text().strip())
 
         proc.send_signal(signal.SIGTERM)

@@ -407,7 +407,9 @@ def podman_probe_timeout() -> float:
         value = float(raw_value)
     except ValueError:
         return DEFAULT_PODMAN_PROBE_TIMEOUT
-    return value if value > 0 else DEFAULT_PODMAN_PROBE_TIMEOUT
+    if not math.isfinite(value) or value <= 0:
+        return DEFAULT_PODMAN_PROBE_TIMEOUT
+    return value
 
 
 def probe_podman_availability(timeout: float | None = None) -> PodmanProbeResult:
@@ -659,11 +661,17 @@ _tracked_process_groups: set[int] = set()
 
 def _kill_tracked_process_groups() -> None:
     """SIGKILL every in-flight ``run_in_process_group`` command group."""
-    for pgid in tuple(_tracked_process_groups):
+    while True:
         try:
-            os.killpg(pgid, signal.SIGKILL)
-        except OSError:
-            pass  # the group already exited
+            pgids = tuple(_tracked_process_groups)
+        except RuntimeError:  # a worker thread mutated the set mid-copy
+            continue
+        for pgid in pgids:
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except OSError:
+                pass  # the group already exited
+        return
 
 
 def _terminate_tracked_groups_and_exit(signum: int, frame: object) -> None:
@@ -675,10 +683,16 @@ def _terminate_tracked_groups_and_exit(signum: int, frame: object) -> None:
     wrapper) from leaving CPU-spinning processes behind (issue #252). The
     signal is then re-delivered with its default disposition so the process
     still exits with the correct 128+signal status.
+
+    The re-delivery runs in ``finally`` so a failure inside the kill loop
+    cannot leave the interpreter alive with the signal effectively
+    swallowed.
     """
-    _kill_tracked_process_groups()
-    signal.signal(signum, signal.SIG_DFL)
-    os.kill(os.getpid(), signum)
+    try:
+        _kill_tracked_process_groups()
+    finally:
+        signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
 
 
 def install_termination_handlers() -> None:
@@ -688,8 +702,10 @@ def install_termination_handlers() -> None:
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:
-    # SIGINT needs no handler: KeyboardInterrupt unwinds through
-    # run_in_process_group, whose except clause terminates the group.
+    # SIGINT needs no handler: KeyboardInterrupt is raised in the main
+    # thread, which is exactly where run_in_process_group blocks while a
+    # command runs, and it unwinds through the runner's BaseException
+    # cleanup below.
     install_termination_handlers()
 
 
@@ -819,6 +835,14 @@ def _terminate_process_group(
     return "; ".join(failures)
 
 
+def _force_kill_group(pgid: int) -> None:
+    """SIGKILL a process group, ignoring an already-dead group."""
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except OSError:
+        pass  # the group already exited
+
+
 def run_in_process_group(
     cmd: list[str],
     timeout: float,
@@ -852,19 +876,27 @@ def run_in_process_group(
         try:
             stdout, stderr = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired as exc:
-            cleanup_error = _terminate_process_group(proc)
             try:
-                proc.communicate(timeout=KILL_GRACE_SECONDS)  # reap + drain pipes
-            except subprocess.TimeoutExpired:
-                # A descendant escaped the group and holds the pipes open; do
-                # not turn the bounded timeout into an unbounded hang.
-                for stream in (proc.stdout, proc.stderr):
-                    if stream is not None:
-                        stream.close()
-                cleanup_error = cleanup_error or (
-                    "output pipes stayed open after group termination "
-                    "(a descendant escaped the process group)"
-                )
+                cleanup_error = _terminate_process_group(proc)
+                try:
+                    proc.communicate(timeout=KILL_GRACE_SECONDS)  # reap + drain pipes
+                except subprocess.TimeoutExpired:
+                    # A descendant escaped the group and holds the pipes
+                    # open; do not turn the bounded timeout into an
+                    # unbounded hang.
+                    for stream in (proc.stdout, proc.stderr):
+                        if stream is not None:
+                            stream.close()
+                    cleanup_error = cleanup_error or (
+                        "output pipes stayed open after group termination "
+                        "(a descendant escaped the process group)"
+                    )
+            except BaseException:
+                # An interrupt during timeout cleanup must not orphan a
+                # half-terminated, SIGTERM-ignoring command: force the kill
+                # before unwinding (issue #252).
+                _force_kill_group(proc.pid)
+                raise
             exc.process_group_cleanup = cleanup_error  # type: ignore[attr-defined]
             if cleanup_error:
                 print(
