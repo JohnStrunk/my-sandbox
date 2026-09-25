@@ -1145,6 +1145,7 @@ def test_devbox_pricetag_env_and_provider_config(
     }
     assert config["providers"] == {
         "anthropic": {
+            "env": [],
             "settings": {
                 "baseURL": "{env:PRICETAG_ANTHROPIC_URL}",
                 "apiKey": "{env:PRICETAG_API_KEY}",
@@ -1160,6 +1161,7 @@ def test_devbox_pricetag_env_and_provider_config(
             "models": expected_models,
         },
         "openai": {
+            "env": [],
             "settings": {
                 "baseURL": "{env:PRICETAG_OPENAI_URL}",
                 "apiKey": "{env:PRICETAG_API_KEY}",
@@ -1297,11 +1299,70 @@ def test_devbox_pricetag_builtin_provider_override_does_not_discover_models(
     )
     config = json.loads(config_value.split("=", 1)[1])
     assert config["providers"]["openai"] == {
+        "env": [],
         "settings": {
             "baseURL": "{env:PRICETAG_OPENAI_URL}",
             "apiKey": "{env:PRICETAG_API_KEY}",
-        }
+        },
     }
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("url_name", "provider_id", "credential_name"),
+    [
+        ("PRICETAG_OPENAI_URL", "openai", "OPENAI_API_KEY"),
+        ("PRICETAG_ANTHROPIC_URL", "anthropic", "ANTHROPIC_API_KEY"),
+    ],
+)
+def test_devbox_pricetag_override_ignores_direct_provider_credential(
+    devbox_path: Path,
+    mock_podman_env,
+    tmp_path: Path,
+    url_name: str,
+    provider_id: str,
+    credential_name: str,
+):
+    """A gateway override must win over a direct-provider credential variable.
+
+    OpenCode v2 resolves a built-in provider's credential from its
+    environment connection (OPENAI_API_KEY, ANTHROPIC_API_KEY) in
+    preference to the override's settings.apiKey. When both a direct
+    credential and a PriceTag gateway URL are present, the generated
+    provider override must clear the provider's environment credential
+    list so the gateway key is used; otherwise the direct key is sent to
+    the gateway and every request fails with HTTP 401. The direct
+    credential is still passed through to the container for other tools.
+    """
+    env, log_file = mock_podman_env
+    env[url_name] = "https://pricetag.example/v1"
+    env["PRICETAG_API_KEY"] = "mock-pricetag-token"  # pragma: allowlist secret
+    env[credential_name] = f"mock-{provider_id}-token"  # pragma: allowlist secret
+
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0
+
+    calls = parse_podman_calls(log_file)
+    run_call = next((c for c in calls if c and c[0] == "run" and "-d" in c), None)
+    assert run_call is not None
+
+    # The direct credential is still passed through to the container.
+    direct_credential_arg = f"{credential_name}=mock-{provider_id}-token"
+    assert direct_credential_arg in run_call  # pragma: allowlist secret
+
+    env_values = [
+        run_call[index + 1] for index, arg in enumerate(run_call[:-1]) if arg == "--env"
+    ]
+    config_value = next(
+        value for value in env_values if value.startswith("OPENCODE_CONFIG_CONTENT=")
+    )
+    config = json.loads(config_value.split("=", 1)[1])
+    provider_config = config["providers"][provider_id]
+    assert provider_config["env"] == []
+    assert provider_config["settings"]["apiKey"] == "{env:PRICETAG_API_KEY}"
 
 
 @pytest.mark.unit

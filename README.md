@@ -328,6 +328,8 @@ devbox container is created:
 | Tavily | Web search, extraction, crawling, and mapping through Tavily's remote MCP server. | `TAVILY_API_KEY`. |
 | Semble | Natural-language semantic code search through the local OpenCode MCP server. | Always enabled; included in the devbox image. |
 | Anthropic | Direct Anthropic models, including Anthropic-compatible endpoints. | `ANTHROPIC_API_KEY` enables the built-in provider; optional `ANTHROPIC_BASE_URL` selects a custom endpoint. |
+| PriceTag (OpenAI gateway) | Routes the built-in `openai` provider and its model catalog through the PriceTag OpenAI-compatible gateway. | Both `PRICETAG_OPENAI_URL` and `PRICETAG_API_KEY`. |
+| PriceTag (Anthropic gateway) | Routes the built-in `anthropic` provider and its model catalog through the PriceTag Anthropic-compatible gateway. | Both `PRICETAG_ANTHROPIC_URL` and `PRICETAG_API_KEY`. |
 | PriceTag (Hosted) | Static hosted Qwen 3.8 Flash Next and GLM 5.3 model definitions (262,144 context tokens, 128,000 output tokens; Qwen offers low/medium/xhigh effort, GLM offers low/high/max effort; GLM is text-only). | Both `PRICETAG_HOSTED_URL` and `PRICETAG_API_KEY`. |
 | OCTO Open Models | OpenAI-compatible Qwen 3.8 Frontier, Core, and Bulk models. | Both `OCTO_OPEN_URL` (gateway `/v1` URL) and `OCTO_OPEN_KEY`. |
 
@@ -358,6 +360,18 @@ When both PriceTag Hosted variables are set, select
 `pricetag-hosted/Inferact/Qwen3.8-Flash-Next-NVFP4` or
 `pricetag-hosted/rits/zai-org/glm-5-3`. The model catalog is configured
 statically; the launcher does not probe PriceTag during startup.
+
+When a PriceTag OpenAI or Anthropic gateway URL is set, the corresponding
+built-in provider is redirected to that gateway with `PRICETAG_API_KEY`, and
+models keep their built-in catalog IDs (`openai/<model-id>`,
+`anthropic/<model-id>`). OpenCode v2 resolves a built-in provider's credential
+from its environment connection (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) in
+preference to a provider override's `settings.apiKey`, so a direct-provider key
+passed through from the host would be sent to the gateway and rejected with
+HTTP 401. The generated overrides therefore clear the provider's environment
+credential list (`"env": []`), which makes the gateway key authoritative while
+leaving the direct-provider variable itself available to other tools in the
+container.
 
 OpenCode automatically discovers its built-in Anthropic provider from
 `ANTHROPIC_API_KEY` and the Anthropic SDK uses `ANTHROPIC_BASE_URL` for a custom
