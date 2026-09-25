@@ -213,6 +213,20 @@ def test_repomix_version_matches_manifest(devbox_image: str, repo_root: Path):
 
 
 @pytest.mark.container
+def test_opencode_v2_version_matches_manifest(devbox_image: str, repo_root: Path):
+    manifest = json.loads((repo_root / "container" / "tool-versions.json").read_text())
+    expected_version = manifest["tools"]["opencode"]["version"]
+
+    assert expected_version.startswith("2.")
+    res = run_in_devbox(devbox_image, ["opencode", "--version"], user="sandbox")
+
+    assert res.returncode == 0, (
+        f"OpenCode version check failed.\nStdout: {res.stdout}\nStderr: {res.stderr}"
+    )
+    assert res.stdout.strip().split()[-1].removeprefix("v") == expected_version
+
+
+@pytest.mark.container
 def test_project_go_toolchain_selector(devbox_image: str):
     res = run_in_devbox(
         devbox_image,

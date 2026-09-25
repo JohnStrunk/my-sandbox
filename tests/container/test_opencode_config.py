@@ -156,16 +156,19 @@ END { exit !(command && fallback && recreate) }
 
 
 @pytest.mark.container
-def test_fresh_opencode_session_discovers_semble(devbox_image: str):
+def test_fresh_opencode_session_loads_semble_config(devbox_image: str):
     config = json.dumps(
         {
+            "$schema": "https://opencode.ai/config.json",
             "mcp": {
-                "semble": {
-                    "type": "local",
-                    "command": ["semble"],
-                    "enabled": True,
+                "servers": {
+                    "semble": {
+                        "type": "local",
+                        "command": ["semble"],
+                        "disabled": False,
+                    },
                 }
-            }
+            },
         }
     )
     res = subprocess.run(
@@ -181,8 +184,8 @@ def test_fresh_opencode_session_discovers_semble(devbox_image: str):
             f"OPENCODE_CONFIG_CONTENT={config}",
             devbox_image,
             "opencode",
-            "mcp",
-            "list",
+            "debug",
+            "config",
         ],
         capture_output=True,
         text=True,
@@ -190,30 +193,36 @@ def test_fresh_opencode_session_discovers_semble(devbox_image: str):
         check=False,
     )
     output = f"{res.stdout}\n{res.stderr}"
-    assert res.returncode == 0, (
-        f"A fresh OpenCode session could not connect to Semble.\n{output}"
+    assert res.returncode == 0, f"OpenCode could not load the Semble config.\n{output}"
+    sources = json.loads(res.stdout)
+    assert any(
+        source.get("info", {}).get("mcp", {}).get("servers", {}).get("semble")
+        for source in sources
     )
-    assert "semble" in output
-    assert "connected" in output
 
 
 @pytest.mark.container
-def test_fresh_opencode_session_discovers_github_mcp(devbox_image: str):
+def test_fresh_opencode_session_loads_github_mcp_config(devbox_image: str):
     config = json.dumps(
         {
+            "$schema": "https://opencode.ai/config.json",
             "mcp": {
-                "github": {
-                    "type": "local",
-                    "command": ["github-mcp-server-proxy"],
-                    "enabled": True,
-                    "environment": {
-                        "GITHUB_PERSONAL_ACCESS_TOKEN": (
-                            "{env:GITHUB_PERSONAL_ACCESS_TOKEN}"
-                        ),
-                        "GITHUB_TOOLSETS": "context,repos,issues,pull_requests,users",
+                "servers": {
+                    "github": {
+                        "type": "local",
+                        "command": ["github-mcp-server-proxy"],
+                        "disabled": False,
+                        "environment": {
+                            "GITHUB_PERSONAL_ACCESS_TOKEN": (
+                                "{env:GITHUB_PERSONAL_ACCESS_TOKEN}"
+                            ),
+                            "GITHUB_TOOLSETS": (
+                                "context,repos,issues,pull_requests,users"
+                            ),
+                        },
                     },
                 }
-            }
+            },
         }
     )
     res = subprocess.run(
@@ -232,8 +241,8 @@ def test_fresh_opencode_session_discovers_github_mcp(devbox_image: str):
             f"OPENCODE_CONFIG_CONTENT={config}",
             devbox_image,
             "opencode",
-            "mcp",
-            "list",
+            "debug",
+            "config",
         ],
         capture_output=True,
         text=True,
@@ -242,8 +251,17 @@ def test_fresh_opencode_session_discovers_github_mcp(devbox_image: str):
     )
     output = f"{res.stdout}\n{res.stderr}"
     assert res.returncode == 0, (
-        f"A fresh OpenCode session could not connect to the local GitHub MCP proxy.\n"
-        f"{output}"
+        f"OpenCode could not load the local GitHub MCP config.\n{output}"
     )
-    assert "github" in output
-    assert "connected" in output
+    sources = json.loads(res.stdout)
+    github = next(
+        source["info"]["mcp"]["servers"]["github"]
+        for source in sources
+        if source.get("info", {}).get("mcp", {}).get("servers", {}).get("github")
+    )
+    assert github["type"] == "local"
+    assert github["command"] == ["github-mcp-server-proxy"]
+    assert github["disabled"] is False
+    assert github["environment"]["GITHUB_TOOLSETS"] == (
+        "context,repos,issues,pull_requests,users"
+    )

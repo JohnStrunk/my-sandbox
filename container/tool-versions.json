@@ -53,9 +53,9 @@
       }
     },
     "opencode": {
-      "version": "1.18.31",
-      "datasource": "github-releases",
-      "depName": "anomalyco/opencode",
+      "version": "2.0.16",
+      "datasource": "npm",
+      "depName": "@opencode/cli",
       "consumers": {
         "docker": true
       }

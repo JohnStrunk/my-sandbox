@@ -337,9 +337,9 @@ multiple MCP integrations combined under one `mcp` object in
 configuration remains unchanged. Since the container is persistent, use
 `devbox --recreate` after adding or changing host
 credentials or integration triggers. On creation, the launcher also runs
-`opencode models --refresh` inside the container so the first model picker uses
-the current Models.dev catalog. If the refresh command fails, devbox reports a
-warning and leaves any existing cache in place.
+`opencode models` inside the container to start OpenCode v2's background service
+and load the model catalog before the first interactive client starts. If the
+command fails, devbox reports a warning and leaves any existing cache in place.
 
 The GitHub MCP server runs locally from the pinned image binary through a
 response-bounding proxy, which keeps search behavior versioned and testable.
