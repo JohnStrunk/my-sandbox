@@ -1302,12 +1302,12 @@ EOF
     return 1
   fi
 
-  # OpenCode loads the Models.dev catalog into each process at startup. Warm
-  # the persistent cache before the first interactive process starts so newly
-  # published active models are available in the model picker.
-  echo "==> Refreshing OpenCode model catalog"
-  if ! timeout 30 podman exec "$NAME" opencode models --refresh >/dev/null; then
-    echo "==> WARNING: OpenCode model catalog refresh command failed; using the existing cache." >&2
+  # OpenCode v2 exposes its model catalog through the background service. Query
+  # it here so that service and its catalog are ready before the first
+  # interactive client starts.
+  echo "==> Loading OpenCode model catalog"
+  if ! timeout 30 podman exec "$NAME" opencode models >/dev/null; then
+    echo "==> WARNING: OpenCode model catalog command failed; using the existing cache." >&2
   fi
 
   trap - INT TERM
