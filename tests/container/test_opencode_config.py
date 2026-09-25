@@ -160,10 +160,12 @@ def test_fresh_opencode_session_discovers_semble(devbox_image: str):
     config = json.dumps(
         {
             "mcp": {
-                "semble": {
-                    "type": "local",
-                    "command": ["semble"],
-                    "enabled": True,
+                "servers": {
+                    "semble": {
+                        "type": "local",
+                        "command": ["semble"],
+                        "disabled": False,
+                    },
                 }
             }
         }
@@ -202,15 +204,19 @@ def test_fresh_opencode_session_discovers_github_mcp(devbox_image: str):
     config = json.dumps(
         {
             "mcp": {
-                "github": {
-                    "type": "local",
-                    "command": ["github-mcp-server-proxy"],
-                    "enabled": True,
-                    "environment": {
-                        "GITHUB_PERSONAL_ACCESS_TOKEN": (
-                            "{env:GITHUB_PERSONAL_ACCESS_TOKEN}"
-                        ),
-                        "GITHUB_TOOLSETS": "context,repos,issues,pull_requests,users",
+                "servers": {
+                    "github": {
+                        "type": "local",
+                        "command": ["github-mcp-server-proxy"],
+                        "disabled": False,
+                        "environment": {
+                            "GITHUB_PERSONAL_ACCESS_TOKEN": (
+                                "{env:GITHUB_PERSONAL_ACCESS_TOKEN}"
+                            ),
+                            "GITHUB_TOOLSETS": (
+                                "context,repos,issues,pull_requests,users"
+                            ),
+                        },
                     },
                 }
             }

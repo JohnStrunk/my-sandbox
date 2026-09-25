@@ -123,12 +123,10 @@ RUN agy_version="$(jq -er '.tools.antigravity_cli.version' /tmp/devbox-tool-vers
     && chmod +x /usr/local/bin/agy \
     && rm /tmp/agy.tgz
 
-# Install OpenCode
+# Install the pinned OpenCode v2 CLI
 RUN opencode_version="$(jq -er '.tools.opencode.version' /tmp/devbox-tool-versions.json)" \
     && opencode_version="${opencode_version#v}" \
-    && curl -fsSL https://opencode.ai/install | bash -s -- --version "${opencode_version}" && \
-    mv /root/.opencode/bin/opencode /usr/bin/ && \
-    chmod +x /usr/bin/opencode
+    && npm install -g --no-fund "@opencode/cli@${opencode_version}"
 
 # Install the pinned GitHub MCP server. Keep this local and versioned so search
 # field filtering and pagination behavior are testable instead of depending on

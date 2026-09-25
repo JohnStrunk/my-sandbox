@@ -79,6 +79,16 @@ def test_tool_version_manifest_contains_renovate_metadata(repo_root: Path):
         assert spec["consumers"], name
 
 
+@pytest.mark.unit
+def test_opencode_manifest_pins_the_v2_npm_cli(repo_root: Path):
+    manifest = json.loads((repo_root / "container" / "tool-versions.json").read_text())
+    opencode = manifest["tools"]["opencode"]
+
+    assert opencode["version"].startswith("2.")
+    assert opencode["datasource"] == "npm"
+    assert opencode["depName"] == "@opencode/cli"
+
+
 def _edit_manifest(copy_root: Path, mutate) -> None:
     manifest_path = copy_root / "container" / "tool-versions.json"
     data = json.loads(manifest_path.read_text())

@@ -15,12 +15,12 @@ from tests.conftest import CREDENTIAL_ENV_VARS, run_bash_script
 SEMBLE_MCP = {
     "type": "local",
     "command": ["semble"],
-    "enabled": True,
+    "disabled": False,
 }
 GITHUB_MCP = {
     "type": "local",
     "command": ["github-mcp-server-proxy"],
-    "enabled": True,
+    "disabled": False,
     "environment": {
         "GITHUB_PERSONAL_ACCESS_TOKEN": "{env:GH_TOKEN}",
         "GITHUB_TOOLSETS": "context,repos,issues,pull_requests,users",
@@ -32,7 +32,7 @@ TAVILY_MCP = {
     "headers": {
         "Authorization": "Bearer {env:TAVILY_API_KEY}",
     },
-    "enabled": True,
+    "disabled": False,
 }
 
 
@@ -682,19 +682,34 @@ def test_devbox_github_mcp_config_from_token(
         "disabled_providers": [
             "github-copilot",
             "gitlab",
-            "google-vertex-anthropic",
         ],
-        "permission": {
-            "external_directory": {
-                "/home/**": "allow",
-                "/root/**": "deny",
-                "/sandbox/**": "allow",
-                "/tmp/**": "allow",
+        "permissions": [
+            {
+                "action": "external_directory",
+                "resource": "/home/*",
+                "effect": "allow",
             },
-        },
+            {
+                "action": "external_directory",
+                "resource": "/root/*",
+                "effect": "deny",
+            },
+            {
+                "action": "external_directory",
+                "resource": "/sandbox/*",
+                "effect": "allow",
+            },
+            {
+                "action": "external_directory",
+                "resource": "/tmp/*",
+                "effect": "allow",
+            },
+        ],
         "mcp": {
-            "semble": SEMBLE_MCP,
-            "github": GITHUB_MCP,
+            "servers": {
+                "semble": SEMBLE_MCP,
+                "github": GITHUB_MCP,
+            },
         },
     }
     assert "mock-github-token" not in config_value
@@ -740,27 +755,42 @@ def test_devbox_context7_mcp_config_from_api_key(
         "disabled_providers": [
             "github-copilot",
             "gitlab",
-            "google-vertex-anthropic",
         ],
-        "permission": {
-            "external_directory": {
-                "/home/**": "allow",
-                "/root/**": "deny",
-                "/sandbox/**": "allow",
-                "/tmp/**": "allow",
+        "permissions": [
+            {
+                "action": "external_directory",
+                "resource": "/home/*",
+                "effect": "allow",
             },
-        },
+            {
+                "action": "external_directory",
+                "resource": "/root/*",
+                "effect": "deny",
+            },
+            {
+                "action": "external_directory",
+                "resource": "/sandbox/*",
+                "effect": "allow",
+            },
+            {
+                "action": "external_directory",
+                "resource": "/tmp/*",
+                "effect": "allow",
+            },
+        ],
         "mcp": {
-            "semble": SEMBLE_MCP,
-            "context7": {
-                "type": "remote",
-                "url": "https://mcp.context7.com/mcp",
-                "headers": {
-                    "Authorization": "Bearer {env:CONTEXT7_API_KEY}",
+            "servers": {
+                "semble": SEMBLE_MCP,
+                "context7": {
+                    "type": "remote",
+                    "url": "https://mcp.context7.com/mcp",
+                    "headers": {
+                        "Authorization": "Bearer {env:CONTEXT7_API_KEY}",
+                    },
+                    "disabled": False,
                 },
-                "enabled": True,
+                "tavily": TAVILY_MCP,
             },
-            "tavily": TAVILY_MCP,
         },
     }
     assert "mock-context7-token" not in config_value
@@ -811,18 +841,33 @@ def test_devbox_does_not_add_github_mcp_without_credentials(
         "disabled_providers": [
             "github-copilot",
             "gitlab",
-            "google-vertex-anthropic",
         ],
-        "permission": {
-            "external_directory": {
-                "/home/**": "allow",
-                "/root/**": "deny",
-                "/sandbox/**": "allow",
-                "/tmp/**": "allow",
+        "permissions": [
+            {
+                "action": "external_directory",
+                "resource": "/home/*",
+                "effect": "allow",
             },
-        },
+            {
+                "action": "external_directory",
+                "resource": "/root/*",
+                "effect": "deny",
+            },
+            {
+                "action": "external_directory",
+                "resource": "/sandbox/*",
+                "effect": "allow",
+            },
+            {
+                "action": "external_directory",
+                "resource": "/tmp/*",
+                "effect": "allow",
+            },
+        ],
         "mcp": {
-            "semble": SEMBLE_MCP,
+            "servers": {
+                "semble": SEMBLE_MCP,
+            },
         },
     }
 
@@ -869,41 +914,57 @@ def test_devbox_the_source_mcp_config(
         "disabled_providers": [
             "github-copilot",
             "gitlab",
-            "google-vertex-anthropic",
         ],
-        "permission": {
-            "external_directory": {
-                "/home/**": "allow",
-                "/root/**": "deny",
-                "/sandbox/**": "allow",
-                "/tmp/**": "allow",
+        "permissions": [
+            {
+                "action": "external_directory",
+                "resource": "/home/*",
+                "effect": "allow",
             },
-        },
+            {
+                "action": "external_directory",
+                "resource": "/root/*",
+                "effect": "deny",
+            },
+            {
+                "action": "external_directory",
+                "resource": "/sandbox/*",
+                "effect": "allow",
+            },
+            {
+                "action": "external_directory",
+                "resource": "/tmp/*",
+                "effect": "allow",
+            },
+        ],
         "mcp": {
-            "semble": SEMBLE_MCP,
-            "the-source": {
-                "enabled": True,
-                "type": "local",
-                "command": [
-                    "uvx",
-                    "--from",
-                    "git+https://github.com/johnstrunk/igloo-mcp",
-                    "igloo-mcp",
-                ],
-                "environment": {
-                    "IGLOO_MCP_COMMUNITY": "{env:IGLOO_MCP_COMMUNITY}",
-                    "IGLOO_MCP_COMMUNITY_KEY": "{env:IGLOO_MCP_COMMUNITY_KEY}",
-                    "IGLOO_MCP_APP_PASS": "{env:IGLOO_MCP_APP_PASS}",
-                    "IGLOO_MCP_APP_ID": "{env:IGLOO_MCP_APP_ID}",
-                    "IGLOO_MCP_USERNAME": "{env:IGLOO_MCP_USERNAME}",
-                    "IGLOO_MCP_PASSWORD": "{env:IGLOO_MCP_PASSWORD}",
-                    "IGLOO_MCP_SERVER_NAME": "The Source",
-                    "IGLOO_MCP_SERVER_INSTRUCTIONS": (
-                        "This server provides search and fetch capabilities for The "
-                        "Source, Red Hat's intranet, containing articles with guides, "
-                        "instructions, and useful information that helps team members "
-                        "do their jobs and contribute to Red Hat."
-                    ),
+            "servers": {
+                "semble": SEMBLE_MCP,
+                "the-source": {
+                    "disabled": False,
+                    "type": "local",
+                    "command": [
+                        "uvx",
+                        "--from",
+                        "git+https://github.com/johnstrunk/igloo-mcp",
+                        "igloo-mcp",
+                    ],
+                    "environment": {
+                        "IGLOO_MCP_COMMUNITY": "{env:IGLOO_MCP_COMMUNITY}",
+                        "IGLOO_MCP_COMMUNITY_KEY": "{env:IGLOO_MCP_COMMUNITY_KEY}",
+                        "IGLOO_MCP_APP_PASS": "{env:IGLOO_MCP_APP_PASS}",
+                        "IGLOO_MCP_APP_ID": "{env:IGLOO_MCP_APP_ID}",
+                        "IGLOO_MCP_USERNAME": "{env:IGLOO_MCP_USERNAME}",
+                        "IGLOO_MCP_PASSWORD": "{env:IGLOO_MCP_PASSWORD}",
+                        "IGLOO_MCP_SERVER_NAME": "The Source",
+                        "IGLOO_MCP_SERVER_INSTRUCTIONS": (
+                            "This server provides search and fetch capabilities for "
+                            "The Source, Red Hat's intranet, containing articles "
+                            "with guides, instructions, and useful information "
+                            "that helps team members do their jobs and contribute "
+                            "to Red Hat."
+                        ),
+                    },
                 },
             },
         },
@@ -946,15 +1007,15 @@ def test_devbox_merges_mcp_configurations(
         value for value in env_values if value.startswith("OPENCODE_CONFIG_CONTENT=")
     )
     config = json.loads(config_value.split("=", 1)[1])
-    assert set(config["mcp"]) == {"semble", "github", "the-source"}
-    assert config["mcp"]["github"] == GITHUB_MCP
-    assert config["mcp"]["github"]["environment"] == {
+    assert set(config["mcp"]["servers"]) == {"semble", "github", "the-source"}
+    assert config["mcp"]["servers"]["github"] == GITHUB_MCP
+    assert config["mcp"]["servers"]["github"]["environment"] == {
         "GITHUB_PERSONAL_ACCESS_TOKEN": "{env:GH_TOKEN}",
         "GITHUB_TOOLSETS": "context,repos,issues,pull_requests,users",
     }
-    assert config["mcp"]["the-source"]["environment"]["IGLOO_MCP_APP_ID"] == (
-        "{env:IGLOO_MCP_APP_ID}"
-    )
+    assert config["mcp"]["servers"]["the-source"]["environment"][
+        "IGLOO_MCP_APP_ID"
+    ] == ("{env:IGLOO_MCP_APP_ID}")
     assert "mock-github-token" not in config_value
 
 
@@ -1050,22 +1111,22 @@ def test_devbox_pricetag_env_and_provider_config(
         value for value in env_values if value.startswith("OPENCODE_CONFIG_CONTENT=")
     )
     config = json.loads(config_value.split("=", 1)[1])
-    expected_qwen_variants = {
-        "low": {"effort": "low"},
-        "medium": {"effort": "medium"},
-        "xhigh": {"effort": "xhigh"},
-    }
-    expected_glm_variants = {
-        "low": {"effort": "low"},
-        "high": {"effort": "high"},
-        "max": {"effort": "max"},
-    }
+    expected_qwen_variants = [
+        {"id": "low", "settings": {"effort": "low"}},
+        {"id": "medium", "settings": {"effort": "medium"}},
+        {"id": "xhigh", "settings": {"effort": "xhigh"}},
+    ]
+    expected_glm_variants = [
+        {"id": "low", "settings": {"effort": "low"}},
+        {"id": "high", "settings": {"effort": "high"}},
+        {"id": "max", "settings": {"effort": "max"}},
+    ]
     expected_models = {
         "Inferact/Qwen3.8-Flash-Next-NVFP4": {
             "name": "Qwen 3.8 Flash Next (hosted, $0.15/$0.47 per MTok)",
             "limit": {"context": 262144, "output": 128000},
-            "reasoning": True,
-            "modalities": {
+            "capabilities": {
+                "tools": True,
                 "input": ["text", "image"],
                 "output": ["text"],
             },
@@ -1074,32 +1135,32 @@ def test_devbox_pricetag_env_and_provider_config(
         "rits/zai-org/glm-5-3": {
             "name": "GLM 5.3 (hosted via curvebender)",
             "limit": {"context": 262144, "output": 128000},
-            "reasoning": True,
-            "modalities": {
+            "capabilities": {
+                "tools": True,
                 "input": ["text"],
                 "output": ["text"],
             },
             "variants": expected_glm_variants,
         },
     }
-    assert config["provider"] == {
+    assert config["providers"] == {
         "anthropic": {
-            "options": {
+            "settings": {
                 "baseURL": "{env:PRICETAG_ANTHROPIC_URL}",
                 "apiKey": "{env:PRICETAG_API_KEY}",
             },
         },
         "pricetag-hosted": {
-            "npm": "@ai-sdk/anthropic",
+            "package": "aisdk:@ai-sdk/anthropic",
             "name": "PriceTag (Hosted)",
-            "options": {
+            "settings": {
                 "baseURL": "{env:PRICETAG_HOSTED_URL}",
                 "apiKey": "{env:PRICETAG_API_KEY}",
             },
             "models": expected_models,
         },
         "openai": {
-            "options": {
+            "settings": {
                 "baseURL": "{env:PRICETAG_OPENAI_URL}",
                 "apiKey": "{env:PRICETAG_API_KEY}",
             },
@@ -1136,10 +1197,10 @@ def test_devbox_octo_open_env_and_provider_config(
         value for value in env_values if value.startswith("OPENCODE_CONFIG_CONTENT=")
     )
     config = json.loads(config_value.split("=", 1)[1])
-    assert config["provider"]["octo-open"] == {
-        "npm": "@ai-sdk/openai-compatible",
+    assert config["providers"]["octo-open"] == {
+        "package": "aisdk:@ai-sdk/openai-compatible",
         "name": "OCTO Open Models",
-        "options": {
+        "settings": {
             "baseURL": "{env:OCTO_OPEN_URL}",
             "apiKey": "{env:OCTO_OPEN_KEY}",
         },
@@ -1147,23 +1208,29 @@ def test_devbox_octo_open_env_and_provider_config(
             "qwen38-27b-frontier": {
                 "name": "Qwen 3.8 27B FP8 (Frontier)",
                 "limit": {"context": 131072, "output": 8192},
-                "tool_call": True,
-                "reasoning": True,
-                "temperature": True,
+                "capabilities": {
+                    "tools": True,
+                    "input": ["text"],
+                    "output": ["text"],
+                },
             },
             "qwen38-flash-next": {
                 "name": "Qwen 3.8 Flash Next NVFP4 (Core)",
                 "limit": {"context": 262144, "output": 8192},
-                "tool_call": True,
-                "reasoning": True,
-                "temperature": True,
+                "capabilities": {
+                    "tools": True,
+                    "input": ["text"],
+                    "output": ["text"],
+                },
             },
             "qwen38-27b-fast": {
                 "name": "Qwen 3.8 27B NVFP4 (Bulk)",
                 "limit": {"context": 32768, "output": 8192},
-                "tool_call": True,
-                "reasoning": True,
-                "temperature": True,
+                "capabilities": {
+                    "tools": True,
+                    "input": ["text"],
+                    "output": ["text"],
+                },
             },
         },
     }
@@ -1201,7 +1268,7 @@ def test_devbox_does_not_add_octo_open_without_both_credentials(
         value for value in env_values if value.startswith("OPENCODE_CONFIG_CONTENT=")
     )
     config = json.loads(config_value.split("=", 1)[1])
-    assert "octo-open" not in config.get("provider", {})
+    assert "octo-open" not in config.get("providers", {})
 
 
 @pytest.mark.unit
@@ -1229,8 +1296,8 @@ def test_devbox_pricetag_builtin_provider_override_does_not_discover_models(
         value for value in env_values if value.startswith("OPENCODE_CONFIG_CONTENT=")
     )
     config = json.loads(config_value.split("=", 1)[1])
-    assert config["provider"]["openai"] == {
-        "options": {
+    assert config["providers"]["openai"] == {
+        "settings": {
             "baseURL": "{env:PRICETAG_OPENAI_URL}",
             "apiKey": "{env:PRICETAG_API_KEY}",
         }
@@ -1277,7 +1344,7 @@ def test_devbox_does_not_add_pricetag_without_both_credentials(
         value for value in env_values if value.startswith("OPENCODE_CONFIG_CONTENT=")
     )
     config = json.loads(config_value.split("=", 1)[1])
-    assert "provider" not in config
+    assert "providers" not in config
 
 
 @pytest.mark.unit

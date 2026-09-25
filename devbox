@@ -508,22 +508,21 @@ create_container_locked() {
   )
 
   # Set safe defaults for paths that OpenCode can access from the devbox.
+  # OpenCode v2 consolidates google-vertex-anthropic into google-vertex, so
+  # carrying forward the old exclusion would also hide Vertex Gemini models.
   opencode_config+=(
     "$(cat <<'EOF'
 {
   "disabled_providers": [
     "github-copilot",
-    "gitlab",
-    "google-vertex-anthropic"
+    "gitlab"
   ],
-  "permission": {
-    "external_directory": {
-      "/home/**": "allow",
-      "/root/**": "deny",
-      "/sandbox/**": "allow",
-      "/tmp/**": "allow"
-    }
-  }
+  "permissions": [
+    {"action": "external_directory", "resource": "/home/*", "effect": "allow"},
+    {"action": "external_directory", "resource": "/root/*", "effect": "deny"},
+    {"action": "external_directory", "resource": "/sandbox/*", "effect": "allow"},
+    {"action": "external_directory", "resource": "/tmp/*", "effect": "allow"}
+  ]
 }
 EOF
 )"
@@ -535,10 +534,12 @@ EOF
     "$(cat <<'EOF'
 {
   "mcp": {
-    "semble": {
-      "type": "local",
-      "command": ["semble"],
-      "enabled": true
+    "servers": {
+      "semble": {
+        "type": "local",
+        "command": ["semble"],
+        "disabled": false
+      }
     }
   }
 }
@@ -582,13 +583,15 @@ EOF
       "$(cat <<'EOF'
 {
   "mcp": {
-    "github": {
-      "type": "local",
-      "command": ["github-mcp-server-proxy"],
-      "enabled": true,
-      "environment": {
-        "GITHUB_PERSONAL_ACCESS_TOKEN": "{env:GH_TOKEN}",
-        "GITHUB_TOOLSETS": "context,repos,issues,pull_requests,users"
+    "servers": {
+      "github": {
+        "type": "local",
+        "command": ["github-mcp-server-proxy"],
+        "disabled": false,
+        "environment": {
+          "GITHUB_PERSONAL_ACCESS_TOKEN": "{env:GH_TOKEN}",
+          "GITHUB_TOOLSETS": "context,repos,issues,pull_requests,users"
+        }
       }
     }
   }
@@ -607,13 +610,15 @@ EOF
       "$(cat <<'EOF'
 {
   "mcp": {
-    "context7": {
-      "type": "remote",
-      "url": "https://mcp.context7.com/mcp",
-      "headers": {
-        "Authorization": "Bearer {env:CONTEXT7_API_KEY}"
-      },
-      "enabled": true
+    "servers": {
+      "context7": {
+        "type": "remote",
+        "url": "https://mcp.context7.com/mcp",
+        "headers": {
+          "Authorization": "Bearer {env:CONTEXT7_API_KEY}"
+        },
+        "disabled": false
+      }
     }
   }
 }
@@ -631,13 +636,15 @@ EOF
       "$(cat <<'EOF'
 {
   "mcp": {
-    "tavily": {
-      "type": "remote",
-      "url": "https://mcp.tavily.com/mcp/",
-      "headers": {
-        "Authorization": "Bearer {env:TAVILY_API_KEY}"
-      },
-      "enabled": true
+    "servers": {
+      "tavily": {
+        "type": "remote",
+        "url": "https://mcp.tavily.com/mcp/",
+        "headers": {
+          "Authorization": "Bearer {env:TAVILY_API_KEY}"
+        },
+        "disabled": false
+      }
     }
   }
 }
@@ -665,24 +672,26 @@ EOF
       "$(cat <<'EOF'
 {
   "mcp": {
-    "the-source": {
-      "enabled": true,
-      "type": "local",
-      "command": [
-        "uvx",
-        "--from",
-        "git+https://github.com/johnstrunk/igloo-mcp",
-        "igloo-mcp"
-      ],
-      "environment": {
-        "IGLOO_MCP_COMMUNITY": "{env:IGLOO_MCP_COMMUNITY}",
-        "IGLOO_MCP_COMMUNITY_KEY": "{env:IGLOO_MCP_COMMUNITY_KEY}",
-        "IGLOO_MCP_APP_PASS": "{env:IGLOO_MCP_APP_PASS}",
-        "IGLOO_MCP_APP_ID": "{env:IGLOO_MCP_APP_ID}",
-        "IGLOO_MCP_USERNAME": "{env:IGLOO_MCP_USERNAME}",
-        "IGLOO_MCP_PASSWORD": "{env:IGLOO_MCP_PASSWORD}",
-        "IGLOO_MCP_SERVER_NAME": "The Source",
-        "IGLOO_MCP_SERVER_INSTRUCTIONS": "This server provides search and fetch capabilities for The Source, Red Hat's intranet, containing articles with guides, instructions, and useful information that helps team members do their jobs and contribute to Red Hat."
+    "servers": {
+      "the-source": {
+        "disabled": false,
+        "type": "local",
+        "command": [
+          "uvx",
+          "--from",
+          "git+https://github.com/johnstrunk/igloo-mcp",
+          "igloo-mcp"
+        ],
+        "environment": {
+          "IGLOO_MCP_COMMUNITY": "{env:IGLOO_MCP_COMMUNITY}",
+          "IGLOO_MCP_COMMUNITY_KEY": "{env:IGLOO_MCP_COMMUNITY_KEY}",
+          "IGLOO_MCP_APP_PASS": "{env:IGLOO_MCP_APP_PASS}",
+          "IGLOO_MCP_APP_ID": "{env:IGLOO_MCP_APP_ID}",
+          "IGLOO_MCP_USERNAME": "{env:IGLOO_MCP_USERNAME}",
+          "IGLOO_MCP_PASSWORD": "{env:IGLOO_MCP_PASSWORD}",
+          "IGLOO_MCP_SERVER_NAME": "The Source",
+          "IGLOO_MCP_SERVER_INSTRUCTIONS": "This server provides search and fetch capabilities for The Source, Red Hat's intranet, containing articles with guides, instructions, and useful information that helps team members do their jobs and contribute to Red Hat."
+        }
       }
     }
   }
@@ -732,11 +741,11 @@ EOF
     opencode_config+=(
       "$(cat <<'EOF'
 {
-  "provider": {
+  "providers": {
     "octo-open": {
-      "npm": "@ai-sdk/openai-compatible",
+      "package": "aisdk:@ai-sdk/openai-compatible",
       "name": "OCTO Open Models",
-      "options": {
+      "settings": {
         "baseURL": "{env:OCTO_OPEN_URL}",
         "apiKey": "{env:OCTO_OPEN_KEY}"
       },
@@ -747,9 +756,11 @@ EOF
             "context": 131072,
             "output": 8192
           },
-          "tool_call": true,
-          "reasoning": true,
-          "temperature": true
+          "capabilities": {
+            "tools": true,
+            "input": ["text"],
+            "output": ["text"]
+          }
         },
         "qwen38-flash-next": {
           "name": "Qwen 3.8 Flash Next NVFP4 (Core)",
@@ -757,9 +768,11 @@ EOF
             "context": 262144,
             "output": 8192
           },
-          "tool_call": true,
-          "reasoning": true,
-          "temperature": true
+          "capabilities": {
+            "tools": true,
+            "input": ["text"],
+            "output": ["text"]
+          }
         },
         "qwen38-27b-fast": {
           "name": "Qwen 3.8 27B NVFP4 (Bulk)",
@@ -767,9 +780,11 @@ EOF
             "context": 32768,
             "output": 8192
           },
-          "tool_call": true,
-          "reasoning": true,
-          "temperature": true
+          "capabilities": {
+            "tools": true,
+            "input": ["text"],
+            "output": ["text"]
+          }
         }
       }
     }
@@ -804,9 +819,9 @@ EOF
       opencode_config+=(
         "$(cat <<EOF
 {
-  "provider": {
+  "providers": {
     "anthropic": {
-      "options": {
+      "settings": {
         "baseURL": "{env:PRICETAG_ANTHROPIC_URL}",
         "apiKey": "{env:PRICETAG_API_KEY}"
       }
@@ -830,11 +845,11 @@ EOF
       opencode_config+=(
         "$(cat <<'EOF'
 {
-  "provider": {
+  "providers": {
     "pricetag-hosted": {
-      "npm": "@ai-sdk/anthropic",
+      "package": "aisdk:@ai-sdk/anthropic",
       "name": "PriceTag (Hosted)",
-      "options": {
+      "settings": {
         "baseURL": "{env:PRICETAG_HOSTED_URL}",
         "apiKey": "{env:PRICETAG_API_KEY}"
       },
@@ -845,16 +860,16 @@ EOF
             "context": 262144,
             "output": 128000
           },
-          "reasoning": true,
-          "modalities": {
+          "capabilities": {
+            "tools": true,
             "input": ["text", "image"],
             "output": ["text"]
           },
-          "variants": {
-            "low": {"effort": "low"},
-            "medium": {"effort": "medium"},
-            "xhigh": {"effort": "xhigh"}
-          }
+          "variants": [
+            {"id": "low", "settings": {"effort": "low"}},
+            {"id": "medium", "settings": {"effort": "medium"}},
+            {"id": "xhigh", "settings": {"effort": "xhigh"}}
+          ]
         },
         "rits/zai-org/glm-5-3": {
           "name": "GLM 5.3 (hosted via curvebender)",
@@ -862,16 +877,16 @@ EOF
             "context": 262144,
             "output": 128000
           },
-          "reasoning": true,
-          "modalities": {
+          "capabilities": {
+            "tools": true,
             "input": ["text"],
             "output": ["text"]
           },
-          "variants": {
-            "low": {"effort": "low"},
-            "high": {"effort": "high"},
-            "max": {"effort": "max"}
-          }
+          "variants": [
+            {"id": "low", "settings": {"effort": "low"}},
+            {"id": "high", "settings": {"effort": "high"}},
+            {"id": "max", "settings": {"effort": "max"}}
+          ]
         }
       }
     }
@@ -890,9 +905,9 @@ EOF
       opencode_config+=(
         "$(cat <<EOF
 {
-  "provider": {
+  "providers": {
     "openai": {
-      "options": {
+      "settings": {
         "baseURL": "{env:PRICETAG_OPENAI_URL}",
         "apiKey": "{env:PRICETAG_API_KEY}"
       }
