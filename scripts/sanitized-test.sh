@@ -312,7 +312,10 @@ if [[ "$require_podman" == true ]]; then
     "MY_SANDBOX_PODMAN_RUNTIME_LOCK_HELD=1"
   )
 fi
-for name in LANG LC_ALL LC_CTYPE TERM CI; do
+# Non-secret suite tuning knobs: the documented suite runs through this
+# wrapper's env allowlist, so a knob that cannot pass through is a no-op in
+# exactly the environments that need it (issue #252).
+for name in LANG LC_ALL LC_CTYPE TERM CI DEVBOX_IMAGE_BUILD_TIMEOUT DEVBOX_PODMAN_PROBE_TIMEOUT; do
   if [[ -n "${!name-}" ]]; then
     safe_env+=("$name=${!name}")
   fi
@@ -464,7 +467,7 @@ command_group_alive() {
   # members. /proc is optional: without it, kill(1) semantics apply.
   kill -0 -- "-$command_pid" 2>/dev/null || return 1
   [[ -r /proc/1/stat ]] || return 0
-  local entry line rest state pgrp
+  local entry line rest state _ppid pgrp _rest
   for entry in /proc/[0-9]*; do
     # stderr is silenced before the input redirect: processes exit between
     # the glob and the read, and bash reports the failed redirect on the

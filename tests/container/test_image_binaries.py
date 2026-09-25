@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.conftest import run_in_devbox
+from tests.conftest import run_in_devbox, run_in_process_group
 
 BINARIES = [
     ("go", ["go", "version"]),
@@ -250,11 +250,13 @@ grep -F 'GOTOOLCHAIN: go1.26.0+auto' <<<"$output"
     )
 
     cache_volume = f"devbox-go-test-{uuid.uuid4().hex}"
-    subprocess.run(
+    create_volume = run_in_process_group(
         ["podman", "volume", "create", cache_volume],
-        check=True,
-        capture_output=True,
-        text=True,
+        timeout=60,
+    )
+    assert create_volume.returncode == 0, (
+        f"Could not create cache volume {cache_volume}: "
+        f"exit {create_volume.returncode}: {create_volume.stderr.strip()}"
     )
     try:
         first = run_in_devbox(
@@ -299,11 +301,9 @@ test "$(cat "$marker")" = cached
     finally:
         # Surface cleanup failures instead of swallowing them (issue #178):
         # a non-zero exit here means the volume leaked.
-        rm_volume = subprocess.run(
+        rm_volume = run_in_process_group(
             ["podman", "volume", "rm", cache_volume],
-            check=False,
-            capture_output=True,
-            text=True,
+            timeout=60,
         )
         assert rm_volume.returncode == 0, (
             f"Leaked cache volume {cache_volume}: "
