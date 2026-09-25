@@ -312,7 +312,10 @@ if [[ "$require_podman" == true ]]; then
     "MY_SANDBOX_PODMAN_RUNTIME_LOCK_HELD=1"
   )
 fi
-for name in LANG LC_ALL LC_CTYPE TERM CI; do
+# Non-secret suite tuning knobs: the documented suite runs through this
+# wrapper's env allowlist, so a knob that cannot pass through is a no-op in
+# exactly the environments that need it (issue #252).
+for name in LANG LC_ALL LC_CTYPE TERM CI DEVBOX_IMAGE_BUILD_TIMEOUT DEVBOX_PODMAN_PROBE_TIMEOUT; do
   if [[ -n "${!name-}" ]]; then
     safe_env+=("$name=${!name}")
   fi
@@ -435,8 +438,113 @@ if [[ "$require_podman" == true ]]; then
   fi
 fi
 
+# Bounded interruption forwarding (issue #252)
+# ---------------------------------------------------------------------------
+# The wrapped command runs in its own process group (job control), and the
+# wrapper forwards TERM/INT/HUP it receives to that whole group, escalating
+# to SIGKILL after a bounded grace. Without this, interrupting or timing out
+# the wrapper orphaned the command tree: a wedged nested `podman build`
+# (fuse-overlayfs spin) ignores SIGTERM and kept burning CPU after the
+# wrapper was gone.
+#
+# SIGINT caveat: signals already ignored when the wrapper starts cannot be
+# trapped (POSIX), and a non-interactive parent that launches the wrapper as
+# an asynchronous command makes it inherit SIG_IGN for SIGINT. Started
+# normally (foreground, CI step, Popen), the wrapper's SIGINT handling
+# works; SIGTERM/SIGHUP always do.
+TERM_GRACE_SECONDS=10
+KILL_GRACE_SECONDS=10
+# The test suite's runner (tests/conftest.py) uses 2s/2s for the same two
+# constants: it bounds single leaf commands (builds), while this wrapper
+# forwards interruption to whole test commands (pytest plus its fixtures),
+# which legitimately need longer to unwind. Keep the values in sync
+# deliberately, not accidentally.
+command_pid=""
+
+# These helpers are invoked from the signal traps (and each other) rather
+# than directly, so shellcheck cannot trace their usage.
+# shellcheck disable=SC2329
+command_group_alive() {
+  # True while any non-zombie member of the command's process group remains.
+  # kill(1) with signal 0 answers for zombies too, so once the cheap check
+  # succeeds, /proc (mirroring tests/conftest.py's _process_group_alive)
+  # distinguishes reaping-lag zombies -- which burn no CPU -- from live
+  # members. /proc is optional: without it, kill(1) semantics apply.
+  kill -0 -- "-$command_pid" 2>/dev/null || return 1
+  [[ -r /proc/1/stat ]] || return 0
+  local entry line rest state _ppid pgrp _rest
+  for entry in /proc/[0-9]*; do
+    # stderr is silenced before the input redirect: processes exit between
+    # the glob and the read, and bash reports the failed redirect on the
+    # stderr that is current when the open fails.
+    IFS= read -r line 2>/dev/null < "$entry/stat" || continue
+    rest="${line##*)}"
+    read -r state _ppid pgrp _rest <<<"$rest"
+    if [[ "$pgrp" == "$command_pid" && "$state" != "Z" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# shellcheck disable=SC2329
+wait_command_group_gone() {
+  # Poll group liveness for $1 tenths of a second (10 = 1s). Returns
+  # success (0) only once the group is gone: `command_group_alive` uses
+  # shell semantics (0 = alive), so the final check is inverted.
+  local i
+  for ((i = 0; i < $1; i++)); do
+    command_group_alive || return 0
+    sleep 0.1
+  done
+  ! command_group_alive
+}
+
+# shellcheck disable=SC2329
+terminate_command_group() {
+  # Forward the received signal ($1, e.g. TERM) to the command's process
+  # group, then escalate to SIGKILL so a wedged, SIGTERM-ignoring build
+  # cannot outlive the interrupted run.
+  local forwarded="$1"
+  kill -"$forwarded" -- "-$command_pid" 2>/dev/null || true
+  if ! wait_command_group_gone $((TERM_GRACE_SECONDS * 10)); then
+    kill -KILL -- "-$command_pid" 2>/dev/null || true
+    if ! wait_command_group_gone $((KILL_GRACE_SECONDS * 10)); then
+      printf 'sanitized-test: WARNING: command process group %s still has live members after SIGKILL.\n' \
+        "$command_pid" >&2
+      return 1
+    fi
+  fi
+  # Reap the job quietly: otherwise job control reports the signal death
+  # ("... Killed env -i ...") on stderr when the interrupted run exits.
+  wait "$command_pid" 2>/dev/null || true
+  return 0
+}
+
+# shellcheck disable=SC2329
+forward_signal_to_command() {
+  # Signal names arrive from the trap dispatch ($1), e.g. TERM.
+  local received="$1"
+  printf 'sanitized-test: received SIG%s; terminating the command process group.\n' \
+    "$received" >&2
+  if [[ -n "$command_pid" ]]; then
+    terminate_command_group "$received" || true
+  fi
+  exit "$((128 + $(kill -l "$received")))"
+}
+
+trap 'forward_signal_to_command TERM' TERM
+trap 'forward_signal_to_command INT' INT
+trap 'forward_signal_to_command HUP' HUP
+
 set +e
-env -i -- "${safe_env[@]}" "$@"
-command_status=$?
+# Job control puts the command in its own process group ($! is its pgid) so
+# the whole tree can be terminated together on interruption.
+set -m
+env -i -- "${safe_env[@]}" "$@" &
+command_pid=$!
+command_status=0
+wait "$command_pid" || command_status=$?
+set +m
 set -e
 exit "$command_status"

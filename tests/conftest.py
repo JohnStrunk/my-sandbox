@@ -1,4 +1,5 @@
 import hashlib
+import math
 import os
 import shlex
 import shutil
@@ -406,7 +407,9 @@ def podman_probe_timeout() -> float:
         value = float(raw_value)
     except ValueError:
         return DEFAULT_PODMAN_PROBE_TIMEOUT
-    return value if value > 0 else DEFAULT_PODMAN_PROBE_TIMEOUT
+    if not math.isfinite(value) or value <= 0:
+        return DEFAULT_PODMAN_PROBE_TIMEOUT
+    return value
 
 
 def probe_podman_availability(timeout: float | None = None) -> PodmanProbeResult:
@@ -472,42 +475,105 @@ def is_podman_available(podman_probe_result: PodmanProbeResult) -> bool:
     return podman_probe_result.available
 
 
+# The devbox image build must never hang the test session (issue #252): a
+# wedged nested `podman build` -- observed inside devboxes as a
+# fuse-overlayfs spin near the `useradd` layer, burning kernel CPU with no
+# layer or network progress and ignoring SIGTERM -- otherwise spins
+# forever. This bound is deliberately generous next to a healthy build
+# (minutes); environments with legitimately slower cold builds can raise it.
+DEFAULT_IMAGE_BUILD_TIMEOUT = 1800.0
+IMAGE_BUILD_TIMEOUT_ENV_VAR = "DEVBOX_IMAGE_BUILD_TIMEOUT"
+
+# `podman image exists` is a storage lookup once `podman info` has already
+# succeeded (the session probe), so it only needs a short bound; like the
+# build bound, it exists so a wedged runtime fails loudly instead of
+# hanging the session.
+IMAGE_EXISTS_TIMEOUT = 60.0
+
+
+def image_build_timeout() -> float:
+    """Resolve the devbox image build timeout, honoring an env override."""
+    raw_value = os.environ.get(IMAGE_BUILD_TIMEOUT_ENV_VAR)
+    if not raw_value:
+        return DEFAULT_IMAGE_BUILD_TIMEOUT
+    try:
+        value = float(raw_value)
+    except ValueError:
+        return DEFAULT_IMAGE_BUILD_TIMEOUT
+    if not math.isfinite(value) or value <= 0:
+        return DEFAULT_IMAGE_BUILD_TIMEOUT
+    return value
+
+
+def ensure_devbox_image(dockerfile_path: Path) -> str:
+    """Return the context-fingerprinted devbox image tag, building if needed.
+
+    Both Podman invocations run through ``run_in_process_group`` (issue
+    #211) rather than plain ``subprocess.run``: the build gets its own
+    process group and a timeout, so a wedged nested `podman build` (issue
+    #252) is terminated -- SIGTERM escalating to SIGKILL on the whole group
+    -- and reported as a loud failure instead of hanging the session and
+    leaving an orphaned CPU-spinning build behind.
+    """
+    image_tag = (
+        f"localhost/devbox:test-{devbox_context_fingerprint(dockerfile_path.parent)}"
+    )
+    try:
+        exists_res = run_in_process_group(
+            ["podman", "image", "exists", image_tag],
+            timeout=IMAGE_EXISTS_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as exc:
+        cleanup = getattr(exc, "process_group_cleanup", "")
+        pytest.fail(
+            f"'podman image exists {image_tag}' did not complete within "
+            f"{IMAGE_EXISTS_TIMEOUT:g}s even though the session probe "
+            "succeeded; the Podman runtime appears wedged, so this is an "
+            "infrastructure failure, not a product test failure "
+            f"(process-group cleanup: {cleanup or 'clean'})."
+        )
+    if exists_res.returncode == 0:
+        return image_tag
+
+    build_timeout = image_build_timeout()
+    try:
+        build_res = run_in_process_group(
+            [
+                "podman",
+                "build",
+                "--file",
+                str(dockerfile_path),
+                "--tag",
+                image_tag,
+                str(dockerfile_path.parent),
+            ],
+            timeout=build_timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        cleanup = getattr(exc, "process_group_cleanup", "")
+        pytest.fail(
+            f"Timed out after {build_timeout:g}s building the devbox image "
+            f"({image_tag}); the nested 'podman build' made no progress and "
+            "its process group was terminated (SIGTERM escalated to SIGKILL; "
+            f"cleanup: {cleanup or 'clean'}). Sustained kernel CPU with no "
+            "layer or network progress matches the fuse-overlayfs wedge seen "
+            "inside devboxes (issue #252). Raise "
+            f"{IMAGE_BUILD_TIMEOUT_ENV_VAR} if this environment legitimately "
+            "needs a longer build."
+        )
+    if build_res.returncode == 0:
+        return image_tag
+    pytest.fail(f"Failed to build devbox image: {build_res.stderr}")
+    return image_tag
+
+
 @pytest.fixture(scope="session")
 def devbox_image(podman_probe_result: PodmanProbeResult, dockerfile_path: Path) -> str:
     if not podman_probe_result.available:
         pytest.skip(
             f"Podman is not available in the environment: {podman_probe_result.reason}"
         )
-
-    image_tag = (
-        f"localhost/devbox:test-{devbox_context_fingerprint(dockerfile_path.parent)}"
-    )
-    res = subprocess.run(
-        ["podman", "image", "exists", image_tag],
-        capture_output=True,
-        check=False,
-    )
-    if res.returncode == 0:
-        return image_tag
-
-    build_res = subprocess.run(
-        [
-            "podman",
-            "build",
-            "--file",
-            str(dockerfile_path),
-            "--tag",
-            image_tag,
-            str(dockerfile_path.parent),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if build_res.returncode == 0:
-        return image_tag
-    pytest.fail(f"Failed to build devbox image: {build_res.stderr}")
-    return image_tag
+    return ensure_devbox_image(dockerfile_path)
 
 
 def unique_workspace_dir(tmp_path: Path, label: str) -> Path:
@@ -580,6 +646,68 @@ def remove_devbox(
 # timeout, terminate/reap the entire group, reporting any cleanup failure.
 TERM_GRACE_SECONDS = 2.0
 KILL_GRACE_SECONDS = 2.0
+# The wrapper (scripts/sanitized-test.sh) uses 10s/10s for the same two
+# constants: it forwards interruption to whole test commands (pytest and
+# its fixtures), which legitimately need longer to unwind than a single
+# leaf build. Keep the values in sync deliberately, not accidentally.
+
+# In-flight process groups started by `run_in_process_group`. Commands run
+# in their own sessions (`start_new_session=True`), so a build survives any
+# group-wide signal aimed at the suite itself. When the suite is terminated
+# (SIGTERM/SIGHUP), the handlers below kill these groups first so an
+# interrupted run cannot orphan a wedged, CPU-spinning build (issue #252).
+_tracked_process_groups: set[int] = set()
+
+
+def _kill_tracked_process_groups() -> None:
+    """SIGKILL every in-flight ``run_in_process_group`` command group."""
+    while True:
+        try:
+            pgids = tuple(_tracked_process_groups)
+        except RuntimeError:  # a worker thread mutated the set mid-copy
+            continue
+        for pgid in pgids:
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except OSError:
+                pass  # the group already exited
+        return
+
+
+def _terminate_tracked_groups_and_exit(signum: int, frame: object) -> None:
+    """SIGTERM/SIGHUP handler: kill tracked groups, then die by the signal.
+
+    Python's default SIGTERM disposition kills the interpreter without
+    unwinding, which would orphan builds running in their own sessions.
+    Killing the tracked groups first keeps interrupting the run (or its
+    wrapper) from leaving CPU-spinning processes behind (issue #252). The
+    signal is then re-delivered with its default disposition so the process
+    still exits with the correct 128+signal status.
+
+    The re-delivery runs in ``finally`` so a failure inside the kill loop
+    cannot leave the interpreter alive with the signal effectively
+    swallowed.
+    """
+    try:
+        _kill_tracked_process_groups()
+    finally:
+        signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
+
+
+def install_termination_handlers() -> None:
+    """Install the suite's SIGTERM/SIGHUP termination handlers."""
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, _terminate_tracked_groups_and_exit)
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    # SIGINT needs no handler of its own: KeyboardInterrupt raised in the
+    # main thread unwinds through run_in_process_group, whose BaseException
+    # cleanup terminates the group. Commands started from worker threads
+    # cannot see that exception, but every runner call is timeout-bounded,
+    # so a lingering worker command still dies with its own escalation.
+    install_termination_handlers()
 
 
 def _process_group_alive(pgid: int) -> bool:
@@ -633,6 +761,37 @@ def _wait_process_group_gone(
         time.sleep(0.02)
 
 
+def _process_gone(pid: int) -> bool:
+    """True once ``pid`` no longer runs. A zombie counts as gone: the killed
+    child is reparented once its parent dies, and hosts without a reaping
+    init (e.g. pytest as container PID 1) keep zombies whose
+    ``kill(pid, 0)`` still succeeds.
+    """
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    # The state field follows the comm field's last closing paren.
+    state = stat[stat.rfind(")") + 1 :].split()[0]
+    return state == "Z"
+
+
+def _wait_pid_gone(pid: int, deadline_seconds: float = 15.0) -> bool:
+    """Poll until ``pid`` no longer runs (zombies count as gone)."""
+    deadline = time.monotonic() + deadline_seconds
+    while time.monotonic() < deadline:
+        if _process_gone(pid):
+            return True
+        time.sleep(0.05)
+    return False
+
+
 def _terminate_process_group(
     proc: "subprocess.Popen[str]",
     term_grace: float = TERM_GRACE_SECONDS,
@@ -677,6 +836,14 @@ def _terminate_process_group(
     return "; ".join(failures)
 
 
+def _force_kill_group(pgid: int) -> None:
+    """SIGKILL a process group, ignoring an already-dead group."""
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except OSError:
+        pass  # the group already exited
+
+
 def run_in_process_group(
     cmd: list[str],
     timeout: float,
@@ -702,30 +869,62 @@ def run_in_process_group(
         cwd=str(cwd) if cwd else None,
         start_new_session=True,
     )
+    # start_new_session=True makes the child a group leader, so its pgid is
+    # its pid. Tracking it lets the suite's termination handlers kill this
+    # group even though it lives in its own session (issue #252).
+    _tracked_process_groups.add(proc.pid)
     try:
-        stdout, stderr = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired as exc:
-        cleanup_error = _terminate_process_group(proc)
         try:
-            proc.communicate(timeout=KILL_GRACE_SECONDS)  # reap + drain pipes
-        except subprocess.TimeoutExpired:
-            # A descendant escaped the group and holds the pipes open; do
-            # not turn the bounded timeout into an unbounded hang.
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            try:
+                cleanup_error = _terminate_process_group(proc)
+                try:
+                    proc.communicate(timeout=KILL_GRACE_SECONDS)  # reap + drain pipes
+                except subprocess.TimeoutExpired:
+                    # A descendant escaped the group and holds the pipes
+                    # open; do not turn the bounded timeout into an
+                    # unbounded hang.
+                    for stream in (proc.stdout, proc.stderr):
+                        if stream is not None:
+                            stream.close()
+                    cleanup_error = cleanup_error or (
+                        "output pipes stayed open after group termination "
+                        "(a descendant escaped the process group)"
+                    )
+            except BaseException:
+                # An interrupt during timeout cleanup must not orphan a
+                # half-terminated, SIGTERM-ignoring command: force the kill
+                # before unwinding (issue #252).
+                _force_kill_group(proc.pid)
+                raise
+            exc.process_group_cleanup = cleanup_error  # type: ignore[attr-defined]
+            if cleanup_error:
+                print(
+                    f"WARNING: process-group cleanup for {cmd[0]!r} failed: "
+                    f"{cleanup_error}",
+                    file=sys.stderr,
+                )
+            raise
+        except BaseException:
+            # An interrupt (SIGINT raises KeyboardInterrupt, which unwinds
+            # through communicate()) must not orphan the command: terminate
+            # its whole process group on the way out, then keep unwinding
+            # (issue #252).
+            try:
+                _terminate_process_group(proc)
+            except BaseException:
+                # A second interrupt during cleanup (impatient double
+                # Ctrl-C) must not orphan a half-terminated,
+                # SIGTERM-ignoring command either: force the kill.
+                _force_kill_group(proc.pid)
+                raise
             for stream in (proc.stdout, proc.stderr):
                 if stream is not None:
                     stream.close()
-            cleanup_error = cleanup_error or (
-                "output pipes stayed open after group termination "
-                "(a descendant escaped the process group)"
-            )
-        exc.process_group_cleanup = cleanup_error  # type: ignore[attr-defined]
-        if cleanup_error:
-            print(
-                f"WARNING: process-group cleanup for {cmd[0]!r} failed: "
-                f"{cleanup_error}",
-                file=sys.stderr,
-            )
-        raise
+            raise
+    finally:
+        _tracked_process_groups.discard(proc.pid)
     return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
 
 

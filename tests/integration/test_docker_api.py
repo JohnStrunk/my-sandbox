@@ -7,6 +7,7 @@ from tests.conftest import (
     devbox_container_name,
     remove_devbox,
     run_bash_script,
+    run_in_process_group,
     unique_workspace_dir,
 )
 
@@ -191,7 +192,7 @@ def _run_node_smoke(
 
 
 def _assert_devbox_is_unprivileged(test_dir: Path, env: dict[str, str]) -> None:
-    result = subprocess.run(
+    result = run_in_process_group(
         [
             "podman",
             "inspect",
@@ -200,9 +201,7 @@ def _assert_devbox_is_unprivileged(test_dir: Path, env: dict[str, str]) -> None:
             devbox_container_name(test_dir),
         ],
         env=env,
-        capture_output=True,
-        text=True,
-        check=False,
+        timeout=60,
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "false"

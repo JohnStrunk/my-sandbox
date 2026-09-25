@@ -111,7 +111,7 @@ def test_probe_timeout_honors_env_var_override(monkeypatch):
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("bad_value", ["not-a-number", "-5", "0"])
+@pytest.mark.parametrize("bad_value", ["not-a-number", "-5", "0", "inf", "nan"])
 def test_probe_timeout_falls_back_on_invalid_env_var(monkeypatch, bad_value):
     monkeypatch.setenv(PODMAN_PROBE_TIMEOUT_ENV_VAR, bad_value)
 

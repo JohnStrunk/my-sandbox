@@ -3,14 +3,16 @@
 import json
 import os
 import shlex
+import signal
 import subprocess
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 
-from tests.conftest import run_in_process_group
+from tests.conftest import _wait_pid_gone, run_in_process_group
 
 
 def _run_wrapper(
@@ -388,3 +390,256 @@ def test_wrapper_propagates_command_status(repo_root: Path) -> None:
     )
 
     assert result.returncode == 23
+    # The background-job launch must not add job-control noise on the
+    # success path.
+    assert result.stderr == ""
+
+
+@pytest.mark.unit
+def test_wrapper_passes_suite_tuning_knobs(repo_root: Path) -> None:
+    """The documented suite runs through the wrapper's env allowlist, so the
+    build-timeout knobs must pass through it (issue #252): a knob the wrapper
+    scrubs is a no-op in exactly the environments that need it.
+    """
+    env = os.environ.copy()
+    env["DEVBOX_IMAGE_BUILD_TIMEOUT"] = "123.5"
+    env["DEVBOX_PODMAN_PROBE_TIMEOUT"] = "45.5"
+
+    result = _run_wrapper(
+        repo_root,
+        [
+            "--",
+            sys.executable,
+            "-c",
+            "import json, os; print(json.dumps(dict(os.environ)))",
+        ],
+        env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    child_env = json.loads(result.stdout)
+    assert child_env["DEVBOX_IMAGE_BUILD_TIMEOUT"] == "123.5"
+    assert child_env["DEVBOX_PODMAN_PROBE_TIMEOUT"] == "45.5"
+
+
+@pytest.mark.unit
+def test_wrapper_sigint_exits_fast_with_command_cleanup(
+    repo_root: Path, tmp_path: Path
+) -> None:
+    """A graceful command must shut down on the forwarded SIGINT without the
+    wrapper waiting out its whole escalation grace.
+    """
+    cleanup_marker = tmp_path / "int-cleanup-ran"
+    ready_marker = tmp_path / "int-command-ready"
+    # Foreground sleep: an *async* sleep would ignore SIGINT (POSIX: async
+    # commands in non-interactive shells inherit SIG_IGN for it) and turn
+    # this into the escalation path instead of the graceful one.
+    command = (
+        "trap 'touch " + shlex.quote(str(cleanup_marker)) + "' INT\n"
+        "touch " + shlex.quote(str(ready_marker)) + "\n"
+        "sleep 30\n"
+    )
+    with (tmp_path / "out").open("w") as out, (tmp_path / "err").open("w") as err:
+        proc = subprocess.Popen(
+            [
+                str(repo_root / "scripts" / "sanitized-test.sh"),
+                "--",
+                "bash",
+                "-c",
+                command,
+            ],
+            stdout=out,
+            stderr=err,
+            start_new_session=True,
+            cwd=repo_root,
+            env=os.environ.copy(),
+        )
+    try:
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline and not ready_marker.exists():
+            assert proc.poll() is None, (
+                "command exited before the signal was sent: "
+                f"{(tmp_path / 'err').read_text()}"
+            )
+            time.sleep(0.05)
+        assert ready_marker.exists(), "command never became ready"
+
+        start = time.monotonic()
+        proc.send_signal(signal.SIGINT)
+        proc.wait(timeout=30)
+        elapsed = time.monotonic() - start
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+
+    assert proc.returncode == 130, (tmp_path / "err").read_text()  # 128 + SIGINT
+    assert cleanup_marker.exists(), "command INT trap never ran"
+    assert elapsed < 5, f"graceful INT took {elapsed:.1f}s to shut down"
+
+
+@pytest.mark.unit
+def test_wrapper_sigterm_terminates_command_tree(
+    repo_root: Path, tmp_path: Path
+) -> None:
+    """Interrupting the wrapper must terminate the whole command tree (issue #252).
+
+    The command models a wedged nested `podman build`: both the command and
+    its child ignore SIGTERM, so only the wrapper's escalated group SIGKILL
+    can stop them. Before the fix, killing the wrapper orphaned exactly this
+    kind of tree, which kept burning CPU after the run was over.
+    """
+    pidfile = tmp_path / "command-pids"
+    # SIG_IGN survives fork and exec, so the ignore is set explicitly in the
+    # child as well as the parent: both processes genuinely ignore SIGTERM
+    # and only the wrapper's escalated group SIGKILL can stop them.
+    command = (
+        "trap '' TERM INT\n"
+        "(trap '' TERM INT; exec sleep 600) &\n"
+        f"printf '%s\\n%s\\n' $$ $! > {shlex.quote(str(pidfile))}\n"
+        "wait\n"
+    )
+    stdout_path = tmp_path / "wrapper.stdout"
+    stderr_path = tmp_path / "wrapper.stderr"
+    with stdout_path.open("w") as out, stderr_path.open("w") as err:
+        proc = subprocess.Popen(
+            [
+                str(repo_root / "scripts" / "sanitized-test.sh"),
+                "--",
+                "bash",
+                "-c",
+                command,
+            ],
+            stdout=out,
+            stderr=err,
+            start_new_session=True,
+            cwd=repo_root,
+            env=os.environ.copy(),
+        )
+    try:
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            if pidfile.exists():
+                break
+            assert proc.poll() is None, (
+                "wrapper exited before the command started: "
+                f"{(tmp_path / 'err').read_text()}"
+            )
+            time.sleep(0.05)
+        assert pidfile.exists(), "command never started before the signal"
+        command_pid, child_pid = (int(v) for v in pidfile.read_text().split())
+
+        proc.send_signal(signal.SIGTERM)
+        proc.wait(timeout=60)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+
+    stderr = stderr_path.read_text()
+
+    assert proc.returncode == 143, stderr  # 128 + SIGTERM
+    assert "received SIGTERM" in stderr
+    assert "terminating the command process group" in stderr
+    assert _wait_pid_gone(command_pid), (
+        f"command pid {command_pid} survived the wrapper interruption"
+    )
+    assert _wait_pid_gone(child_pid), (
+        f"SIGTERM-ignoring child {child_pid} survived the wrapper interruption"
+    )
+
+
+@pytest.mark.unit
+def test_wrapper_sigterm_terminates_detached_session_builds(
+    repo_root: Path, tmp_path: Path
+) -> None:
+    """Interrupting the wrapper must not orphan detached-session builds (issue #252).
+
+    This is the full chain from the issue: the suite launches builds via
+    `run_in_process_group`, which gives each one its own session, so a
+    wedged build survives any group-wide signal aimed at the suite itself.
+    The suite's SIGTERM handler must kill its tracked process groups before
+    the wrapper's group kill lands, or an interrupted run leaves a
+    CPU-spinning `podman build` behind.
+    """
+    build_pidfile = tmp_path / "detached-build.pid"
+    # A stand-in for the pytest process running under the wrapper: it
+    # installs the suite's termination handlers and starts a build through
+    # the suite's runner (own session, ignores SIGTERM).
+    suite_mock = tmp_path / "suite-mock.py"
+    suite_mock.write_text(
+        "import sys\n"
+        "import threading\n"
+        "import time\n"
+        f"sys.path.insert(0, {str(repo_root)!r})\n"
+        "from tests.conftest import (\n"
+        "    install_termination_handlers,\n"
+        "    run_in_process_group,\n"
+        ")\n"
+        "\n"
+        "install_termination_handlers()\n"
+        "\n"
+        "\n"
+        "def start_wedge() -> None:\n"
+        "    run_in_process_group(\n"
+        "        [\n"
+        "            'bash',\n"
+        "            '-c',\n"
+        "            \"trap '' TERM; printf '%s\\\\n' $$ > "
+        f"{str(build_pidfile)!r}; "
+        "(trap '' TERM; exec sleep 600) & wait\",\n"
+        "        ],\n"
+        "        timeout=600,\n"
+        "    )\n"
+        "\n"
+        "\n"
+        "worker = threading.Thread(target=start_wedge, daemon=True)\n"
+        "worker.start()\n"
+        "while not __import__('os').path.exists("
+        f"{str(build_pidfile)!r}):\n"
+        "    time.sleep(0.05)\n"
+        "print('READY', flush=True)\n"
+        "time.sleep(600)\n"
+    )
+    with (tmp_path / "out").open("w") as out, (tmp_path / "err").open("w") as err:
+        proc = subprocess.Popen(
+            [
+                str(repo_root / "scripts" / "sanitized-test.sh"),
+                "--",
+                sys.executable,
+                str(suite_mock),
+            ],
+            stdout=out,
+            stderr=err,
+            start_new_session=True,
+            cwd=repo_root,
+            env=os.environ.copy(),
+        )
+    try:
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline and not build_pidfile.exists():
+            assert proc.poll() is None, (
+                "wrapper exited before the build started: "
+                f"{(tmp_path / 'err').read_text()}"
+            )
+            time.sleep(0.05)
+        assert build_pidfile.exists(), "detached build never started"
+        build_pid = int(build_pidfile.read_text().strip())
+
+        proc.send_signal(signal.SIGTERM)
+        proc.wait(timeout=60)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+
+    # The wedged build ignored SIGTERM by construction: only the suite's
+    # tracked-group handler (SIGKILL) or the wrapper's escalation can have
+    # killed it. Either way, it must be dead -- no orphan left spinning.
+    stderr = (tmp_path / "err").read_text()
+    assert proc.returncode == 143, stderr  # 128 + SIGTERM
+    assert "received SIGTERM" in stderr
+    assert "terminating the command process group" in stderr
+    assert _wait_pid_gone(build_pid), (
+        f"detached-session build {build_pid} survived the wrapper interruption"
+    )
