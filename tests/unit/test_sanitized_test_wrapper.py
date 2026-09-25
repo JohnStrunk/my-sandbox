@@ -457,7 +457,10 @@ def test_wrapper_sigint_exits_fast_with_command_cleanup(
     try:
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline and not ready_marker.exists():
-            assert proc.poll() is None, "command exited before the signal was sent"
+            assert proc.poll() is None, (
+                "command exited before the signal was sent: "
+                f"{(tmp_path / 'err').read_text()}"
+            )
             time.sleep(0.05)
         assert ready_marker.exists(), "command never became ready"
 
@@ -518,7 +521,10 @@ def test_wrapper_sigterm_terminates_command_tree(
         while time.monotonic() < deadline:
             if pidfile.exists():
                 break
-            assert proc.poll() is None, "wrapper exited before the command started"
+            assert proc.poll() is None, (
+                "wrapper exited before the command started: "
+                f"{(tmp_path / 'err').read_text()}"
+            )
             time.sleep(0.05)
         assert pidfile.exists(), "command never started before the signal"
         command_pid, child_pid = (int(v) for v in pidfile.read_text().split())
@@ -580,7 +586,8 @@ def test_wrapper_sigterm_terminates_detached_session_builds(
         "            'bash',\n"
         "            '-c',\n"
         "            \"trap '' TERM; printf '%s\\\\n' $$ > "
-        f'{str(build_pidfile)!r}; sleep 600 & wait",\n'
+        f"{str(build_pidfile)!r}; "
+        "(trap '' TERM; exec sleep 600) & wait\",\n"
         "        ],\n"
         "        timeout=600,\n"
         "    )\n"
@@ -611,7 +618,10 @@ def test_wrapper_sigterm_terminates_detached_session_builds(
     try:
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline and not build_pidfile.exists():
-            assert proc.poll() is None, "wrapper exited before the build started"
+            assert proc.poll() is None, (
+                "wrapper exited before the build started: "
+                f"{(tmp_path / 'err').read_text()}"
+            )
             time.sleep(0.05)
         assert build_pidfile.exists(), "detached build never started"
         build_pid = int(build_pidfile.read_text().strip())

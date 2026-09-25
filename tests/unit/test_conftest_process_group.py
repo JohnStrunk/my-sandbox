@@ -139,7 +139,8 @@ def test_sigterm_handler_kills_tracked_session_groups(
         "            'bash',\n"
         "            '-c',\n"
         "            \"trap '' TERM; printf '%s\\\\n' $$ > "
-        f'{str(build_pidfile)!r}; sleep 600 & wait",\n'
+        f"{str(build_pidfile)!r}; "
+        "(trap '' TERM; exec sleep 600) & wait\",\n"
         "        ],\n"
         "        timeout=600,\n"
         "    )\n"
@@ -149,7 +150,6 @@ def test_sigterm_handler_kills_tracked_session_groups(
         "worker.start()\n"
         f"while not os.path.exists({str(build_pidfile)!r}):\n"
         "    time.sleep(0.05)\n"
-        "print('READY', flush=True)\n"
         "time.sleep(600)\n"
     )
     proc = subprocess.Popen(

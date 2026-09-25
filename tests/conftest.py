@@ -702,10 +702,11 @@ def install_termination_handlers() -> None:
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:
-    # SIGINT needs no handler: KeyboardInterrupt is raised in the main
-    # thread, which is exactly where run_in_process_group blocks while a
-    # command runs, and it unwinds through the runner's BaseException
-    # cleanup below.
+    # SIGINT needs no handler of its own: KeyboardInterrupt raised in the
+    # main thread unwinds through run_in_process_group, whose BaseException
+    # cleanup terminates the group. Commands started from worker threads
+    # cannot see that exception, but every runner call is timeout-bounded,
+    # so a lingering worker command still dies with its own escalation.
     install_termination_handlers()
 
 
@@ -910,7 +911,14 @@ def run_in_process_group(
             # through communicate()) must not orphan the command: terminate
             # its whole process group on the way out, then keep unwinding
             # (issue #252).
-            _terminate_process_group(proc)
+            try:
+                _terminate_process_group(proc)
+            except BaseException:
+                # A second interrupt during cleanup (impatient double
+                # Ctrl-C) must not orphan a half-terminated,
+                # SIGTERM-ignoring command either: force the kill.
+                _force_kill_group(proc.pid)
+                raise
             for stream in (proc.stdout, proc.stderr):
                 if stream is not None:
                     stream.close()
