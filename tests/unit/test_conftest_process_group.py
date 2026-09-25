@@ -5,48 +5,17 @@ child Podman/buildah builds cannot leak past the timeout, while normal runs
 keep their exact output and exit-status semantics.
 """
 
-import os
 import subprocess
-import time
 from pathlib import Path
 
 import pytest
 
 from tests.conftest import (
     _terminate_process_group,
+    _wait_pid_gone,
     run_bash_script,
     run_in_process_group,
 )
-
-
-def _process_gone(pid: int) -> bool:
-    """True once ``pid`` no longer runs. A reaped zombie counts as gone:
-    the killed child is reparented once its bash parent dies, and hosts
-    without a reaping init (e.g. pytest as container PID 1) keep zombies
-    whose ``kill(pid, 0)`` still succeeds.
-    """
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return True
-    try:
-        stat = Path(f"/proc/{pid}/stat").read_text()
-    except FileNotFoundError:
-        return True
-    except OSError:
-        return False
-    # The state field follows the comm field's last closing paren.
-    state = stat[stat.rfind(")") + 1 :].split()[0]
-    return state == "Z"
-
-
-def _wait_pid_gone(pid: int, deadline_seconds: float = 15.0) -> bool:
-    deadline = time.monotonic() + deadline_seconds
-    while time.monotonic() < deadline:
-        if _process_gone(pid):
-            return True
-        time.sleep(0.05)
-    return False
 
 
 @pytest.mark.unit

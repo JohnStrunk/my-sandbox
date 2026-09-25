@@ -472,42 +472,103 @@ def is_podman_available(podman_probe_result: PodmanProbeResult) -> bool:
     return podman_probe_result.available
 
 
+# The devbox image build must never hang the test session (issue #252): a
+# wedged nested `podman build` -- observed inside devboxes as a
+# fuse-overlayfs spin near the `useradd` layer, burning kernel CPU with no
+# layer or network progress and ignoring SIGTERM -- otherwise spins
+# forever. This bound is deliberately generous next to a healthy build
+# (minutes); environments with legitimately slower cold builds can raise it.
+DEFAULT_IMAGE_BUILD_TIMEOUT = 1800.0
+IMAGE_BUILD_TIMEOUT_ENV_VAR = "DEVBOX_IMAGE_BUILD_TIMEOUT"
+
+# `podman image exists` is a storage lookup once `podman info` has already
+# succeeded (the session probe), so it only needs a short bound; like the
+# build bound, it exists so a wedged runtime fails loudly instead of
+# hanging the session.
+IMAGE_EXISTS_TIMEOUT = 60.0
+
+
+def image_build_timeout() -> float:
+    """Resolve the devbox image build timeout, honoring an env override."""
+    raw_value = os.environ.get(IMAGE_BUILD_TIMEOUT_ENV_VAR)
+    if not raw_value:
+        return DEFAULT_IMAGE_BUILD_TIMEOUT
+    try:
+        value = float(raw_value)
+    except ValueError:
+        return DEFAULT_IMAGE_BUILD_TIMEOUT
+    return value if value > 0 else DEFAULT_IMAGE_BUILD_TIMEOUT
+
+
+def ensure_devbox_image(dockerfile_path: Path) -> str:
+    """Return the context-fingerprinted devbox image tag, building if needed.
+
+    Both Podman invocations run through ``run_in_process_group`` (issue
+    #211) rather than plain ``subprocess.run``: the build gets its own
+    process group and a timeout, so a wedged nested `podman build` (issue
+    #252) is terminated -- SIGTERM escalating to SIGKILL on the whole group
+    -- and reported as a loud failure instead of hanging the session and
+    leaving an orphaned CPU-spinning build behind.
+    """
+    image_tag = (
+        f"localhost/devbox:test-{devbox_context_fingerprint(dockerfile_path.parent)}"
+    )
+    try:
+        exists_res = run_in_process_group(
+            ["podman", "image", "exists", image_tag],
+            timeout=IMAGE_EXISTS_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as exc:
+        cleanup = getattr(exc, "process_group_cleanup", "")
+        pytest.fail(
+            f"'podman image exists {image_tag}' did not complete within "
+            f"{IMAGE_EXISTS_TIMEOUT:g}s even though the session probe "
+            "succeeded; the Podman runtime appears wedged, so this is an "
+            "infrastructure failure, not a product test failure "
+            f"(process-group cleanup: {cleanup or 'clean'})."
+        )
+    if exists_res.returncode == 0:
+        return image_tag
+
+    build_timeout = image_build_timeout()
+    try:
+        build_res = run_in_process_group(
+            [
+                "podman",
+                "build",
+                "--file",
+                str(dockerfile_path),
+                "--tag",
+                image_tag,
+                str(dockerfile_path.parent),
+            ],
+            timeout=build_timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        cleanup = getattr(exc, "process_group_cleanup", "")
+        pytest.fail(
+            f"Timed out after {build_timeout:g}s building the devbox image "
+            f"({image_tag}); the nested 'podman build' made no progress and "
+            "its process group was terminated (SIGTERM escalated to SIGKILL; "
+            f"cleanup: {cleanup or 'clean'}). Sustained kernel CPU with no "
+            "layer or network progress matches the fuse-overlayfs wedge seen "
+            "inside devboxes (issue #252). Raise "
+            f"{IMAGE_BUILD_TIMEOUT_ENV_VAR} if this environment legitimately "
+            "needs a longer build."
+        )
+    if build_res.returncode == 0:
+        return image_tag
+    pytest.fail(f"Failed to build devbox image: {build_res.stderr}")
+    return image_tag
+
+
 @pytest.fixture(scope="session")
 def devbox_image(podman_probe_result: PodmanProbeResult, dockerfile_path: Path) -> str:
     if not podman_probe_result.available:
         pytest.skip(
             f"Podman is not available in the environment: {podman_probe_result.reason}"
         )
-
-    image_tag = (
-        f"localhost/devbox:test-{devbox_context_fingerprint(dockerfile_path.parent)}"
-    )
-    res = subprocess.run(
-        ["podman", "image", "exists", image_tag],
-        capture_output=True,
-        check=False,
-    )
-    if res.returncode == 0:
-        return image_tag
-
-    build_res = subprocess.run(
-        [
-            "podman",
-            "build",
-            "--file",
-            str(dockerfile_path),
-            "--tag",
-            image_tag,
-            str(dockerfile_path.parent),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if build_res.returncode == 0:
-        return image_tag
-    pytest.fail(f"Failed to build devbox image: {build_res.stderr}")
-    return image_tag
+    return ensure_devbox_image(dockerfile_path)
 
 
 def unique_workspace_dir(tmp_path: Path, label: str) -> Path:
@@ -631,6 +692,37 @@ def _wait_process_group_gone(
         if time.monotonic() >= deadline:
             return False
         time.sleep(0.02)
+
+
+def _process_gone(pid: int) -> bool:
+    """True once ``pid`` no longer runs. A zombie counts as gone: the killed
+    child is reparented once its parent dies, and hosts without a reaping
+    init (e.g. pytest as container PID 1) keep zombies whose
+    ``kill(pid, 0)`` still succeeds.
+    """
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    # The state field follows the comm field's last closing paren.
+    state = stat[stat.rfind(")") + 1 :].split()[0]
+    return state == "Z"
+
+
+def _wait_pid_gone(pid: int, deadline_seconds: float = 15.0) -> bool:
+    """Poll until ``pid`` no longer runs (zombies count as gone)."""
+    deadline = time.monotonic() + deadline_seconds
+    while time.monotonic() < deadline:
+        if _process_gone(pid):
+            return True
+        time.sleep(0.05)
+    return False
 
 
 def _terminate_process_group(

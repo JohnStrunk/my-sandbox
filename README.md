@@ -595,6 +595,19 @@ diagnostic, so it is not confused with a product test failure. Proxy and
 provider variables are intentionally not inherited. Do not use this wrapper for
 `e2e_inference`, whose purpose is to read real provider credentials.
 
+The wrapped command runs in its own process group, and the wrapper forwards
+`SIGTERM`/`SIGINT`/`SIGHUP` it receives to that whole group, escalating to
+`SIGKILL` after a ten-second grace. Interrupting the wrapper therefore
+terminates the command tree instead of orphaning it, which matters when a
+nested `podman build` wedges inside a devbox and ignores `SIGTERM`
+([issue #252](https://github.com/JohnStrunk/my-sandbox/issues/252)). The
+wrapper exits with `128 + signal` (`143` for `SIGTERM`) after the tree is
+down. Relatedly, the test suite's session-scoped `devbox_image` fixture
+builds the image through the bounded process-group runner with a default
+30-minute timeout; raise `DEVBOX_IMAGE_BUILD_TIMEOUT` (seconds) in
+environments whose cold builds legitimately need longer, and a wedged build
+now fails loudly with a diagnostic instead of hanging the session.
+
 For parallel tests in a resource-constrained devbox, add
 `--resource-preflight`:
 

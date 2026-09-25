@@ -3,14 +3,16 @@
 import json
 import os
 import shlex
+import signal
 import subprocess
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 
-from tests.conftest import run_in_process_group
+from tests.conftest import _wait_pid_gone, run_in_process_group
 
 
 def _run_wrapper(
@@ -388,3 +390,68 @@ def test_wrapper_propagates_command_status(repo_root: Path) -> None:
     )
 
     assert result.returncode == 23
+
+
+@pytest.mark.unit
+def test_wrapper_sigterm_terminates_command_tree(
+    repo_root: Path, tmp_path: Path
+) -> None:
+    """Interrupting the wrapper must terminate the whole command tree (issue #252).
+
+    The command models a wedged nested `podman build`: both the command and
+    its child ignore SIGTERM, so only the wrapper's escalated group SIGKILL
+    can stop them. Before the fix, killing the wrapper orphaned exactly this
+    kind of tree, which kept burning CPU after the run was over.
+    """
+    pidfile = tmp_path / "command-pids"
+    command = (
+        "trap '' TERM INT\n"
+        "sleep 600 &\n"
+        f"printf '%s\\n%s\\n' $$ $! > {shlex.quote(str(pidfile))}\n"
+        "wait\n"
+    )
+    stdout_path = tmp_path / "wrapper.stdout"
+    stderr_path = tmp_path / "wrapper.stderr"
+    with stdout_path.open("w") as out, stderr_path.open("w") as err:
+        proc = subprocess.Popen(
+            [
+                str(repo_root / "scripts" / "sanitized-test.sh"),
+                "--",
+                "bash",
+                "-c",
+                command,
+            ],
+            stdout=out,
+            stderr=err,
+            start_new_session=True,
+            cwd=repo_root,
+            env=os.environ.copy(),
+        )
+    try:
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            if pidfile.exists():
+                break
+            assert proc.poll() is None, "wrapper exited before the command started"
+            time.sleep(0.05)
+        assert pidfile.exists(), "command never started before the signal"
+        command_pid, child_pid = (int(v) for v in pidfile.read_text().split())
+
+        proc.send_signal(signal.SIGTERM)
+        proc.wait(timeout=60)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+
+    stderr = stderr_path.read_text()
+
+    assert proc.returncode == 143, stderr  # 128 + SIGTERM
+    assert "received SIGTERM" in stderr
+    assert "terminating the command process group" in stderr
+    assert _wait_pid_gone(command_pid), (
+        f"command pid {command_pid} survived the wrapper interruption"
+    )
+    assert _wait_pid_gone(child_pid), (
+        f"SIGTERM-ignoring child {child_pid} survived the wrapper interruption"
+    )
