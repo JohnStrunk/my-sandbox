@@ -26,14 +26,6 @@ GITHUB_MCP = {
         "GITHUB_TOOLSETS": "context,repos,issues,pull_requests,users",
     },
 }
-TAVILY_MCP = {
-    "type": "remote",
-    "url": "https://mcp.tavily.com/mcp/",
-    "headers": {
-        "Authorization": "Bearer {env:TAVILY_API_KEY}",
-    },
-    "disabled": False,
-}
 
 
 @pytest.fixture
@@ -691,6 +683,11 @@ def test_devbox_github_mcp_config_from_token(
                 "resource": "/tmp/*",
                 "effect": "allow",
             },
+            {
+                "action": "websearch",
+                "resource": "*",
+                "effect": "allow",
+            },
         ],
         "mcp": {
             "servers": {
@@ -774,6 +771,11 @@ def test_devbox_context7_mcp_config_from_api_key(
                 "resource": "/tmp/*",
                 "effect": "allow",
             },
+            {
+                "action": "websearch",
+                "resource": "*",
+                "effect": "allow",
+            },
         ],
         "mcp": {
             "servers": {
@@ -786,8 +788,10 @@ def test_devbox_context7_mcp_config_from_api_key(
                     },
                     "disabled": False,
                 },
-                "tavily": TAVILY_MCP,
             },
+        },
+        "websearch": {
+            "provider": "tavily",
         },
     }
     assert "mock-context7-token" not in config_value
@@ -802,6 +806,7 @@ def test_devbox_does_not_add_github_mcp_without_credentials(
     env.pop("GH_TOKEN", None)
     env.pop("GITHUB_TOKEN", None)
     env.pop("CONTEXT7_API_KEY", None)
+    env.pop("TAVILY_API_KEY", None)
     for name in (
         "IGLOO_MCP_COMMUNITY",
         "IGLOO_MCP_COMMUNITY_KEY",
@@ -826,6 +831,10 @@ def test_devbox_does_not_add_github_mcp_without_credentials(
     calls = parse_podman_calls(log_file)
     run_call = next((c for c in calls if c and c[0] == "run" and "-d" in c), None)
     assert run_call is not None
+    # The Tavily websearch integration is gated on TAVILY_API_KEY: without
+    # it, the key must not be passed through (an empty value could still
+    # look like a configured provider to OpenCode's tavily integration).
+    assert not any(arg.startswith("TAVILY_API_KEY=") for arg in run_call)
     env_values = [
         run_call[index + 1] for index, arg in enumerate(run_call[:-1]) if arg == "--env"
     ]
@@ -868,6 +877,11 @@ def test_devbox_does_not_add_github_mcp_without_credentials(
             {
                 "action": "external_directory",
                 "resource": "/tmp/*",
+                "effect": "allow",
+            },
+            {
+                "action": "websearch",
+                "resource": "*",
                 "effect": "allow",
             },
         ],
@@ -951,6 +965,11 @@ def test_devbox_the_source_mcp_config(
             {
                 "action": "external_directory",
                 "resource": "/tmp/*",
+                "effect": "allow",
+            },
+            {
+                "action": "websearch",
+                "resource": "*",
                 "effect": "allow",
             },
         ],
