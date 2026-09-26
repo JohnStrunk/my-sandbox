@@ -325,7 +325,7 @@ devbox container is created:
 | GitHub | GitHub repository, issue, pull request, and code search capabilities through the pinned local MCP server. | At least one of `GH_TOKEN`, `GITHUB_TOKEN`, or an authenticated host `gh` CLI. |
 | The Source | Search and fetch capabilities for The Source, Red Hat's intranet. | All of `IGLOO_MCP_COMMUNITY`, `IGLOO_MCP_COMMUNITY_KEY`, `IGLOO_MCP_APP_PASS`, `IGLOO_MCP_APP_ID`, `IGLOO_MCP_USERNAME`, and `IGLOO_MCP_PASSWORD`. |
 | Context7 | Up-to-date documentation and code examples for software libraries. | `CONTEXT7_API_KEY`. |
-| Tavily | Web search, extraction, crawling, and mapping through Tavily's remote MCP server. | `TAVILY_API_KEY`. |
+| Tavily | Web search through OpenCode's built-in `websearch` tool (Tavily provider). | `TAVILY_API_KEY`. |
 | Semble | Natural-language semantic code search through the local OpenCode MCP server. | Always enabled; included in the devbox image. |
 | Anthropic | Direct Anthropic models, including Anthropic-compatible endpoints. | `ANTHROPIC_API_KEY` enables the built-in provider; optional `ANTHROPIC_BASE_URL` selects a custom endpoint. |
 | PriceTag (OpenAI gateway) | Routes the built-in `openai` provider and its model catalog through the PriceTag OpenAI-compatible gateway. | Both `PRICETAG_OPENAI_URL` and `PRICETAG_API_KEY`. |
@@ -337,8 +337,10 @@ Runtime integrations can contribute any top-level OpenCode config property, with
 multiple MCP integrations combined under one `mcp` object in
 `OPENCODE_CONFIG_CONTENT`. The user's global `~/.config/opencode`
 configuration remains unchanged. The generated config also sets baseline
-`external_directory` permissions and native OpenCode v2 `provider.use` deny
-policies for the `github-copilot` and `gitlab` providers. Since the container
+`external_directory` permissions, a `websearch` allow permission so web
+searches run without an approval prompt, and native OpenCode v2
+`provider.use` deny policies for the `github-copilot` and `gitlab`
+providers. Since the container
 is persistent, use `devbox --recreate` after adding or changing host
 credentials or integration triggers. On creation, the launcher also runs
 `opencode models` inside the container to start OpenCode v2's background service

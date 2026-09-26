@@ -512,7 +512,9 @@ create_container_locked() {
   # native provider-use deny policies, the successor to the v1
   # disabled_providers list. OpenCode v2 consolidates
   # google-vertex-anthropic into google-vertex, so carrying forward the old
-  # exclusion would also hide Vertex Gemini models.
+  # exclusion would also hide Vertex Gemini models. Web searches through the
+  # built-in websearch tool are allowed without an approval prompt so the
+  # default ask fallback cannot interrupt every search.
   opencode_config+=(
     "$(cat <<'EOF'
 {
@@ -526,7 +528,8 @@ create_container_locked() {
     {"action": "external_directory", "resource": "/home/*", "effect": "allow"},
     {"action": "external_directory", "resource": "/root/*", "effect": "deny"},
     {"action": "external_directory", "resource": "/sandbox/*", "effect": "allow"},
-    {"action": "external_directory", "resource": "/tmp/*", "effect": "allow"}
+    {"action": "external_directory", "resource": "/tmp/*", "effect": "allow"},
+    {"action": "websearch", "resource": "*", "effect": "allow"}
   ]
 }
 EOF
@@ -632,7 +635,10 @@ EOF
     )
   fi
 
-  # Tavily MCP integration
+  # Tavily websearch integration. OpenCode v2's built-in websearch tool
+  # selects its Tavily provider, which reads TAVILY_API_KEY directly from
+  # the environment, so no credential reference is needed here and the API
+  # key value never appears in OPENCODE_CONFIG_CONTENT.
   if [ -n "${TAVILY_API_KEY:-}" ]; then
     params+=(
       --env "TAVILY_API_KEY=${TAVILY_API_KEY:-}" \
@@ -640,17 +646,8 @@ EOF
     opencode_config+=(
       "$(cat <<'EOF'
 {
-  "mcp": {
-    "servers": {
-      "tavily": {
-        "type": "remote",
-        "url": "https://mcp.tavily.com/mcp/",
-        "headers": {
-          "Authorization": "Bearer {env:TAVILY_API_KEY}"
-        },
-        "disabled": false
-      }
-    }
+  "websearch": {
+    "provider": "tavily"
   }
 }
 EOF
