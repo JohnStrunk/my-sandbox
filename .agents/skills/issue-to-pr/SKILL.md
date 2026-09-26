@@ -83,9 +83,13 @@ use the labels first and reserve full-body reads for what they cannot answer.
    branch onto it if it advanced (per `AGENTS.md`). Search for a PR template and
    follow it when present. Describe what changed, the test results, and any known
    limitations. Push the branch, create the pull request, and report CI status.
-9. Land it. Monitor CI until it is green; once the pull request merges (or the
-   repository auto-merges it), update the local `main`, then remove the worktree
-   and its branch.
+9. Land it. Wait for CI with a single blocking `gh pr checks <number> --watch`
+   call, then wait for the merge with the bounded
+   `gh pr view <number> --json state,mergedAt,mergeCommit` loop from the
+   repository's wait recipe (see "How PRs land" in `AGENTS.md`) -- never with
+   blind `sleep` round-trips. Once the pull request merges (or the repository
+   auto-merges it), update the local `main`, then remove the worktree and its
+   branch.
 
 ## Guardrails
 

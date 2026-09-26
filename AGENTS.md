@@ -44,16 +44,56 @@
   authors need at least one approval and no changes-requested review.
 - A `do-not-merge` label prevents Mergify from queueing the PR.
 - Do not merge manually. Mergify may take a few minutes after CI passes to
-  queue and merge the PR, so continue polling rather than merging by hand.
-- Poll the actual merge state with:
+  queue and merge the PR, so use the one-shot wait recipe below instead of
+  blind `sleep` polling or merging by hand.
 
-  ```shell
-  gh pr view <number> --json state,mergedAt,mergeCommit \
-    -q '[.state,.mergedAt,.mergeCommit.oid]|@tsv'
-  ```
+After opening a PR, wait for CI and the merge with two one-shot tool calls
+(both can block for many minutes, so run them with a tool-call timeout of at
+least 20 minutes or with timeouts disabled):
 
-  `state=MERGED` or a non-null `mergedAt` confirms completion. `merged` is not
-  a valid `gh pr view --json` field.
+1. Watch CI to completion in a single blocking call. It returns when every
+   check has a conclusion, prints the final results, and exits zero only when
+   all checks passed (address any failures it reports before waiting further):
+
+   ```shell
+   gh pr checks <number> --watch
+   ```
+
+2. Wait for the Mergify queue to merge the PR with one bounded call. It polls
+   the merge state every 30 seconds, gives up after 15 minutes, fails fast
+   when `gh` itself errors, and prints the check table on timeout so the
+   queued-versus-blocked reason is visible:
+
+   ```shell
+   pr=<number>
+   for _ in $(seq 30); do
+     row="$(gh pr view "$pr" --json state,mergedAt,mergeCommit \
+       -q '[.state,.mergedAt,.mergeCommit.oid]|@tsv')"
+     [ -n "$row" ] || { printf 'gh pr view failed\n' >&2; exit 1; }
+     case "$row" in
+       MERGED*) printf 'merged: %s\n' "$row"; exit 0 ;;
+       CLOSED*) printf 'closed without merging: %s\n' "$row"; exit 1 ;;
+       *) printf 'waiting for merge: %s\n' "$row" ;;
+     esac
+     sleep 30
+   done
+   printf 'merge wait timed out; last state: %s\n' "$row"
+   gh pr checks "$pr"
+   exit 1
+   ```
+
+   `state=MERGED` (with `mergedAt` and `mergeCommit` set) confirms completion.
+   `merged` is not a valid `gh pr view --json` field. If the bounded wait
+   times out, the printed check table distinguishes queued from blocked:
+
+   - A pending `Mergify Merge Queue` check means the PR is in the merge
+     queue; rerun the bounded wait.
+   - A failing `CI Workflow - Success` or `Mergify Merge Protections` check
+     means the PR is blocked; fix the failure or the reported protection
+     (missing approval, `do-not-merge` label, changes-requested review).
+   - All checks green but nothing queued means eligibility is in doubt;
+     re-check it, give Mergify a few more minutes, and as a last resort
+     comment `@Mergifyio queue` to ask Mergify to queue the PR explicitly.
 
 ## Issue triage vocabulary
 
