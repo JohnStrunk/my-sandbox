@@ -449,6 +449,7 @@ for exact literal matches.
 │   ├── lint-all.sh            # Script to run pre-commit across all files
 │   ├── markdownlint-cli2.yaml # Markdown lint configuration
 │   ├── mergify.yml            # Mergify PR automation rules
+│   ├── pull_request_template.md # PR body structure for issue-driven changes
 │   └── renovate.json5         # Renovate dependency updates
 ├── container/
 │   ├── agent-skills/          # Image-owned agent capability guidance

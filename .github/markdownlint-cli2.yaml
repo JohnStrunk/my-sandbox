@@ -5,6 +5,10 @@
 ignores:
   - ".agents/**"
   - ".claude/**"
+  # Pull request templates intentionally start with second-level headings,
+  # which MD041 forbids; mirrors the markdownlint-cli2 hook's exclude in
+  # .pre-commit-config.yaml.
+  - ".github/pull_request_template.md"
   - "**/node_modules/**"
 
 config:
