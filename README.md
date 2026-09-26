@@ -45,7 +45,8 @@ This repository provides:
     (`semble`).
   - **Linters & Utilities**: `pre-commit`, `ripgrep`, `jq`, `shellcheck`,
     `hadolint`, `markdownlint-cli2`, `ffmpeg`, `file` for release artifacts,
-    and process diagnostics (`ps`, `pgrep`) via `procps-ng`.
+    classic `diff` and `patch` for plain file comparison and patch
+    application, and process diagnostics (`ps`, `pgrep`) via `procps-ng`.
   - **Agent token-hygiene utilities**: Fedora 44 packages `tokei` 14.0.0,
     `just` 1.57.0, `difftastic` 0.69.0 (command `difft`), `hyperfine` 1.20.0,
     and `fd-find` 10.4.2 (command `fd`).

@@ -156,6 +156,39 @@ END { exit !(command && fallback && recreate) }
 
 
 @pytest.mark.container
+def test_diff_guidance_is_staged_and_active(devbox_image: str):
+    res = run_in_devbox(
+        devbox_image,
+        [
+            "bash",
+            "-ceu",
+            r"""
+source=/usr/local/share/devbox/skills/devbox-tools/SKILL.md
+active=/sandbox/.agents/skills/devbox-tools/SKILL.md
+test "$(sha256sum "$source" | cut -d ' ' -f1)" = \
+  "$(sha256sum "$active" | cut -d ' ' -f1)"
+awk '
+/^### Classic diff and patch$/ { in_section=1; next }
+/^### / { in_section=0 }
+in_section && /diff -u/ { compare=1 }
+in_section && /exits/ { exit_status=1 }
+in_section && /patch target\.txt/ { apply=1 }
+in_section && /already applied/ { new_file=1 }
+in_section && /difft/ { fallback=1 }
+in_section && /devbox --recreate/ { recreate=1 }
+END { exit !(compare && exit_status && apply && new_file && fallback && recreate) }
+' "$active"
+""",
+        ],
+        user="sandbox",
+    )
+    assert res.returncode == 0, (
+        "Classic diff and patch guidance is not available to a fresh OpenCode "
+        f"session.\nStdout: {res.stdout}\nStderr: {res.stderr}"
+    )
+
+
+@pytest.mark.container
 def test_fresh_opencode_session_loads_semble_config(devbox_image: str):
     config = json.dumps(
         {

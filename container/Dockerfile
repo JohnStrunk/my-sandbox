@@ -14,6 +14,7 @@ RUN dnf install -y --setopt=install_weak_deps=False \
     ca-certificates \
     curl \
     difftastic \
+    diffutils \
     fd-find \
     file \
     ffmpeg-free \
@@ -32,6 +33,7 @@ RUN dnf install -y --setopt=install_weak_deps=False \
     npm \
     nss \
     openssl \
+    patch \
     procps-ng \
     ripgrep \
     ShellCheck \
