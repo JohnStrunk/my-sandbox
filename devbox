@@ -410,6 +410,28 @@ git_worktree_metadata_dir() {
   printf '%s' "$gitdir"
 }
 
+# Seed a freshly created per-container OpenCode state directory from the
+# host's shared one (issue #256). OpenCode v2's background service treats
+# the state directory as single-owner (it registers in service.json and
+# shuts down whenever that file stops describing itself), so each container
+# needs its own state directory; this copy carries over the shareable
+# state once, when that directory is first created. The volatile
+# single-owner files stay behind: service registrations (service*.json),
+# atomic-write temp files (*.tmp, at any depth), and the lock directories
+# (locks/ and latest/locks/). The host directory is only ever read; every
+# write targets $dst. Returns non-zero on failure, leaving any partial
+# copy in $dst for the caller to remove.
+seed_opencode_state_dir() {
+  local src="$1" dst="$2"
+  [ -d "$src" ] || return 0
+  mkdir -p "$dst" || return 1
+  echo "==> Seeding per-container OpenCode state from $src"
+  cp -a "$src/." "$dst/" || return 1
+  rm -rf -- "$dst/locks" "$dst/latest/locks" || return 1
+  find "$dst" -type f \( -name 'service*.json' -o -name '*.tmp' \) -delete \
+    || return 1
+}
+
 create_container_locked() {
   local source_fingerprint
   source_fingerprint="$(container_context_fingerprint)"
@@ -949,15 +971,31 @@ EOF
       --volume "$HOME/.config/opencode:/sandbox/.config/opencode" \
     )
   fi
-  if [ -d "$HOME/.local/state/opencode" ]; then
-    params+=(
-      --volume "$HOME/.local/state/opencode:/sandbox/.local/state/opencode" \
-    )
-  elif [ -f "$HOME/.local/state/opencode/model.json" ]; then
-    params+=(
-      --volume "$HOME/.local/state/opencode/model.json:/sandbox/.local/state/opencode/model.json" \
-    )
+  # OpenCode v2's state directory must NOT be shared across containers (or
+  # with the host): the managed background service registers itself in
+  # service.json and re-verifies every few seconds that the file still
+  # holds its own registration, shutting down when it doesn't, so
+  # concurrently running services evict each other in a restart loop
+  # (issue #256). Give each container its own host-backed state directory
+  # instead, mounted at OpenCode's default state path inside the container
+  # ($HOME=/sandbox, so no XDG_STATE_HOME override is needed). On first
+  # creation it is seeded from the host's state directory (model picks,
+  # pinned sessions, prompt history, TUI view state) minus the volatile
+  # single-owner files. Session data (~/.local/share/opencode, including
+  # everything CodeBurn reads) and configuration (~/.config/opencode)
+  # stay shared above, so sessions remain visible on the host and
+  # resumable everywhere.
+  local opencode_state_dir="$HOME/.local/state/devbox/${NAME#devbox-}"
+  if [ ! -d "$opencode_state_dir" ]; then
+    if ! seed_opencode_state_dir "$HOME/.local/state/opencode" "$opencode_state_dir"; then
+      echo "==> WARNING: failed to seed per-container OpenCode state directory $opencode_state_dir; continuing with empty state" >&2
+      rm -rf -- "$opencode_state_dir"
+    fi
   fi
+  mkdir -p "$opencode_state_dir"
+  params+=(
+    --volume "$opencode_state_dir:/sandbox/.local/state/opencode" \
+  )
   # Vertex AI configuration
   if [ -n "${GOOGLE_CLOUD_PROJECT:-}" ] && [ -n "${VERTEX_LOCATION:-}" ]; then
     params+=(
@@ -1126,7 +1164,8 @@ EOF
   fi
 
   # Podman auto-creates missing parent directories for bind-mounted
-  # files/dirs (e.g. the opencode model.json mount above) as root, ignoring
+  # files/dirs (e.g. the gcloud application_default_credentials.json mount
+  # above) as root, ignoring
   # --userns=keep-id's UID mapping for the container's "sandbox" user. Fix
   # up any such root-owned directories under /sandbox, without recursing
   # into the actual bind-mounted content (-xdev stops at the mount
