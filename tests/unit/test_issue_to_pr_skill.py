@@ -63,6 +63,12 @@ def test_issue_to_pr_skill_frontmatter(repo_root: Path):
         "known limitations",
         "ci status",
         "assign it to yourself",
+        # One-shot wait-for-CI/merge recipe instead of blind sleeps (#177).
+        "gh pr checks",
+        "--watch",
+        "bounded",
+        "state,mergedat,mergecommit",
+        "blind",
     ],
 )
 def test_issue_to_pr_skill_encodes_required_constraints(repo_root: Path, needle: str):
