@@ -62,7 +62,11 @@ def test_opencode_state_isolated_and_seeded_per_container(
 
     try:
         # 1. Creation seeds the per-container state directory and the
-        #    container sees it at OpenCode's default state path.
+        #    container sees it at OpenCode's default state path. The exact
+        #    model.json equality below relies on the creation-time
+        #    `opencode models` warm start not rewriting model.json (it
+        #    only lists the catalog; model.json changes on selection), so
+        #    this also proves the seeded state survived the warm start.
         res = run_bash_script(
             devbox_path,
             [
@@ -151,7 +155,38 @@ def test_opencode_state_isolated_and_seeded_per_container(
         assert "persisted-state-ok" in res.stdout
         assert "Seeding per-container OpenCode state" not in res.stdout
 
-        # 5. The host's state directory was never written by any container
+        # 5. The per-container state also persists across --remove: the
+        #    launcher never deletes it, and a later creation reuses it
+        #    without re-seeding.
+        res = run_bash_script(
+            devbox_path,
+            ["--remove"],
+            env=isolated_env,
+            cwd=test_dir,
+            timeout=120,
+        )
+        assert res.returncode == 0, f"{res.stdout}\n{res.stderr}"
+        assert (per_container / marker).is_file()
+        res = run_bash_script(
+            devbox_path,
+            [
+                "bash",
+                "-c",
+                "set -eu\n"
+                f"test -f /sandbox/.local/state/opencode/{marker}\n"
+                'test "$(cat /sandbox/.local/state/opencode/model.json)" = '
+                f"'{CONTAINER_MODEL_PICKS}'\n"
+                "echo remove-persistence-ok",
+            ],
+            env=isolated_env,
+            cwd=test_dir,
+            timeout=600,
+        )
+        assert res.returncode == 0, f"{res.stdout}\n{res.stderr}"
+        assert "remove-persistence-ok" in res.stdout
+        assert "Seeding per-container OpenCode state" not in res.stdout
+
+        # 6. The host's state directory was never written by any container
         #    process: every planted file is exactly as it was.
         for name in (
             "model.json",

@@ -1667,6 +1667,11 @@ def test_devbox_opencode_state_volume_is_per_container(
     assert not (per_container / "locks").exists()
     assert not (per_container / "latest" / "locks").exists()
 
+    # The state tree stays private: it holds the container's service
+    # registration (with its password) and prompt history.
+    assert (per_container.stat().st_mode & 0o777) == 0o700
+    assert (per_container.parent.stat().st_mode & 0o777) == 0o700
+
     # The host's state directory is only read, never modified.
     for original in (
         "model.json",
@@ -1708,6 +1713,7 @@ def test_devbox_opencode_state_volume_without_host_state(
     assert any(f"{per_container}:/sandbox/.local/state/opencode" in v for v in volumes)
     assert per_container.is_dir()
     assert list(per_container.iterdir()) == []
+    assert (per_container.stat().st_mode & 0o777) == 0o700
 
 
 @pytest.mark.unit
@@ -1775,6 +1781,53 @@ def test_devbox_opencode_state_seed_failure_is_non_fatal(
     assert run_call is not None
     volumes = [run_call[i + 1] for i, arg in enumerate(run_call) if arg == "--volume"]
     assert any(f"{per_container}:/sandbox/.local/state/opencode" in v for v in volumes)
+
+
+@pytest.mark.unit
+@pytest.mark.skipif(
+    os.geteuid() == 0, reason="root ignores file permissions, so cp cannot fail"
+)
+def test_devbox_opencode_state_partial_copy_removed(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    # When the seed copy fails midway (here: an unreadable directory in
+    # the host state), the partially copied state is removed and the
+    # container is created with an empty state directory instead.
+    env, log_file = mock_podman_env
+    fake_home = tmp_path / "fakehome"
+    fake_home.mkdir()
+    env["HOME"] = str(fake_home)
+    _plant_host_opencode_state(fake_home)
+    unreadable = fake_home / ".local" / "state" / "opencode" / "unreadable"
+    unreadable.mkdir()
+    (unreadable / "inner.json").write_text("{}")
+    unreadable.chmod(0o000)
+
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+    per_container = fake_home / ".local" / "state" / "devbox" / "workdir"
+
+    try:
+        res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+        assert res.returncode == 0
+        assert "failed to seed per-container OpenCode state" in res.stdout + res.stderr
+
+        # Whatever was copied before the failure is gone: an empty
+        # directory was mounted.
+        assert per_container.is_dir()
+        assert list(per_container.iterdir()) == []
+        calls = parse_podman_calls(log_file)
+        run_call = next((c for c in calls if c and c[0] == "run" and "-d" in c), None)
+        assert run_call is not None
+        volumes = [
+            run_call[i + 1] for i, arg in enumerate(run_call) if arg == "--volume"
+        ]
+        assert any(
+            f"{per_container}:/sandbox/.local/state/opencode" in v for v in volumes
+        )
+    finally:
+        # Restore readability so the tmp_path cleanup can remove the tree.
+        unreadable.chmod(0o755)
 
 
 @pytest.mark.unit
