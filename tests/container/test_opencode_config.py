@@ -207,9 +207,11 @@ def test_fresh_opencode_session_loads_provider_policies(devbox_image: str):
 
     The devbox baseline restricts providers with `experimental.policies`
     provider-use deny statements (the v2 successor of the v1
-    `disabled_providers` list) and sets `external_directory` permissions.
-    OpenCode drops policy statements that fail validation, so verify the
-    generated shape is accepted and preserved by a fresh session.
+    `disabled_providers` list), sets `external_directory` permissions, and
+    allows `websearch` so the built-in web search tool never falls back to
+    an approval prompt. OpenCode drops policy statements that fail
+    validation, so verify the generated shape is accepted and preserved by
+    a fresh session.
     """
     config = json.dumps(
         {
@@ -247,6 +249,11 @@ def test_fresh_opencode_session_loads_provider_policies(devbox_image: str):
                 {
                     "action": "external_directory",
                     "resource": "/tmp/*",
+                    "effect": "allow",
+                },
+                {
+                    "action": "websearch",
+                    "resource": "*",
                     "effect": "allow",
                 },
             ],
@@ -296,6 +303,11 @@ def test_fresh_opencode_session_loads_provider_policies(devbox_image: str):
     assert {
         "action": "external_directory",
         "resource": "/sandbox/*",
+        "effect": "allow",
+    } in permissions
+    assert {
+        "action": "websearch",
+        "resource": "*",
         "effect": "allow",
     } in permissions
 
@@ -364,3 +376,56 @@ def test_fresh_opencode_session_loads_github_mcp_config(devbox_image: str):
     assert github["environment"]["GITHUB_TOOLSETS"] == (
         "context,repos,issues,pull_requests,users"
     )
+
+
+@pytest.mark.container
+def test_fresh_opencode_session_loads_websearch_provider_config(devbox_image: str):
+    """The Tavily websearch fragment must load as native OpenCode v2 config.
+
+    The launcher selects OpenCode's built-in websearch Tavily provider via a
+    top-level `websearch.provider` key instead of registering Tavily's
+    remote MCP server. OpenCode drops config keys that fail validation, so
+    verify the shape is accepted and preserved by a fresh session: an
+    OpenCode pin bump that renames the key or the provider ID must fail
+    here rather than silently regressing to the provider selection prompt.
+    """
+    config = json.dumps(
+        {
+            "$schema": "https://opencode.ai/config.json",
+            "websearch": {
+                "provider": "tavily",
+            },
+        }
+    )
+    res = subprocess.run(
+        [
+            "podman",
+            "run",
+            "--rm",
+            "--network",
+            "none",
+            "--user",
+            "sandbox",
+            "--env",
+            f"OPENCODE_CONFIG_CONTENT={config}",
+            devbox_image,
+            "opencode",
+            "debug",
+            "config",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    output = f"{res.stdout}\n{res.stderr}"
+    assert res.returncode == 0, (
+        f"OpenCode could not load the websearch provider config.\n{output}"
+    )
+    sources = json.loads(res.stdout)
+    websearch = next(
+        source["info"]["websearch"]
+        for source in sources
+        if source.get("info", {}).get("websearch")
+    )
+    assert websearch == {"provider": "tavily"}
