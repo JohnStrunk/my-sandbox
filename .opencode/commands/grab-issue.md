@@ -22,8 +22,12 @@ agent: build
 - After making any necessary adjustments, repeat the subagent review process
   up to 3 times if needed.
 - Make a pull request.
-- Ensure that CI passed and that all tests are successful.
-- Wait for the pull request to merge.
+- Ensure that CI passed and that all tests are successful. Wait for CI in a
+  single blocking call with `gh pr checks <number> --watch` instead of
+  sleeping between status checks.
+- Wait for the pull request to merge with the bounded merge-wait loop in the
+  "How PRs land" section of `AGENTS.md` (one tool call that distinguishes
+  "in merge queue" from "blocked" on timeout).
 - Update the local main branch.
 - Remove the worktree and local branch used for the issue.
 - Provide a summary of the work completed:
