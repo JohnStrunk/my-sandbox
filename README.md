@@ -52,8 +52,12 @@ This repository provides:
 - **Automatic Host Credential & Config Passthrough**: `devbox` detects and
   bind-mounts existing host configurations (GitHub tokens, Google Cloud ADC,
   Atlassian CLI, Google Workspace, LiteMaaS API keys, and OpenCode
-  configuration, state, and session data), and passes supported API credentials
-  and endpoints such as Anthropic's directly into the container. When a GitHub
+  configuration and session data), and passes supported API credentials
+  and endpoints such as Anthropic's directly into the container. OpenCode's
+  session data and configuration stay shared with the host (so sessions
+  remain visible outside the devbox and survive `devbox --recreate`), while
+  its volatile runtime state gets an isolated per-container directory (see
+  [OpenCode State Isolation](#opencode-state-isolation)). When a GitHub
   token is available, it also enables the OpenCode GitHub MCP server without
   modifying any mounted OpenCode configuration file.
 - **Image-Owned Agent Capability Catalog**: The `devbox-tools` skill is staged
@@ -251,6 +255,7 @@ downloads or nested image builds whose inputs haven't changed:
 | `/sandbox/.cache/pre-commit` | Podman named volume `devbox-precommit-cache` | Pre-commit hook environments. |
 | `/sandbox/.cache/semble` | Podman named volume `devbox-semble-cache` | Semble's mtime-incremental code indexes. |
 | `/sandbox/.local/share/containers/storage` | Host directory `${XDG_CACHE_HOME:-~/.cache}/devbox/containers-storage` | Nested Podman/Buildah's own image and layer storage. |
+| `/sandbox/.local/state/opencode` | Host directory `~/.local/state/devbox/<dirname>` | Per-container OpenCode state (service registration, model picks, TUI state); seeded once from the host (see [OpenCode State Isolation](#opencode-state-isolation)). |
 | `/sandbox/<project>/.venv` | Podman named volume `devbox-venv-<dirname>` | Container-local shadow of a host-created `.venv` (per project; see [Python Environments](#python-environments-venv)). |
 
 The knowledge base, `uv`, and pre-commit caches use Podman-managed named
@@ -273,6 +278,10 @@ podman volume rm devbox-go-cache devbox-uv-cache devbox-precommit-cache devbox-s
 
 # Nested Podman/Buildah image and layer storage
 rm -rf "${XDG_CACHE_HOME:-$HOME/.cache}/devbox/containers-storage"
+
+# Per-container OpenCode state (all devboxes: re-seeds from the host on the
+# next container creation)
+rm -rf "$HOME/.local/state/devbox"
 ```
 
 This is local, runtime cache persistence between devbox sessions on one
@@ -381,6 +390,46 @@ OpenCode automatically discovers its built-in Anthropic provider from
 `ANTHROPIC_API_KEY` and the Anthropic SDK uses `ANTHROPIC_BASE_URL` for a custom
 compatible endpoint, so no generated provider configuration is required. Select
 an Anthropic model with `anthropic/<model-id>`.
+
+### OpenCode State Isolation
+
+OpenCode v2 runs a managed background service per environment, and that service
+treats its state directory as single-owner: it registers itself in
+`~/.local/state/opencode/service.json` and shuts down ("managed service
+registration replaced") whenever the file stops describing itself. Sharing one
+state directory across containers — or with the host — therefore makes
+concurrently running services evict each other in a mutual-restart loop, which
+shows up as constant "restarting session" interruptions in every TUI.
+
+`devbox` resolves this by splitting OpenCode's host directories by sharing
+semantics:
+
+| Host directory | Container path | Sharing |
+| --- | --- | --- |
+| `~/.local/share/opencode` | `/sandbox/.local/share/opencode` | **Shared** with the host and every devbox: the session database (`opencode*.db` with `session_v2`/`session_message` cost and token rows, plus legacy `storage/session/` files). Sessions stay visible outside the devbox (e.g. for host-side usage trackers like [CodeBurn](https://codeburn.app/)) and survive `devbox --recreate`. |
+| `~/.config/opencode` | `/sandbox/.config/opencode` | **Shared**: configuration, auth, agents, and the persisted service password, so settings sync continuously between the host and every devbox. |
+| `~/.local/state/devbox/<dirname>` | `/sandbox/.local/state/opencode` | **Per container**: OpenCode's volatile runtime state, isolated so concurrent devboxes cannot conflict. |
+
+The per-container state directory is created by the launcher (a plain host
+directory, like the nested Podman storage above), mounted at OpenCode's default
+state path inside the container, and seeded once — when first created — from
+the host's `~/.local/state/opencode`, excluding the volatile single-owner
+files (`service*.json`, `*.tmp`, `locks/`, `latest/locks/`). The seed carries
+over model picks (`model.json`), pinned sessions, prompt history/stash, and
+TUI view state; real settings live in the shared config directory
+(`cli.json`), so no configuration sharing is lost. If seeding fails, `devbox`
+warns and continues with empty state. The host's own state directory is only
+ever read (by that one-time seed), never written by container processes.
+
+The directory survives `devbox --recreate` and `devbox --remove` and is never
+re-seeded while it exists. The trade-off: model picks and prompt history made
+_inside_ a container stay in that container (the host remains the source of
+truth at seed time) instead of racing last-writer-wins across environments.
+Clear a project's per-container state with:
+
+```shell
+rm -rf ~/.local/state/devbox/<dirname>
+```
 
 ### Agent Capability Registration
 

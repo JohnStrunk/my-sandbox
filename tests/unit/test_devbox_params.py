@@ -609,11 +609,19 @@ def test_devbox_launcher_uses_isolated_home(
     volumes = [run_call[i + 1] for i, arg in enumerate(run_call) if arg == "--volume"]
     volume_destinations = {volume.rsplit(":", 1)[-1] for volume in volumes}
     # Project data and cache volumes are expected; no host config/credential
-    # directories should be mounted.
+    # directories should be mounted. The one intentional exception is the
+    # per-container OpenCode state directory (issue #256): the launcher
+    # creates it itself under $HOME (the isolated home was empty before the
+    # run), so it is not discovered host state.
     assert any(f"{run_dir}:/sandbox/" in v for v in volumes)
     assert {"/sandbox/.uv_cache", "/sandbox/.cache/pre-commit"} <= (volume_destinations)
     assert "/sandbox/.local/share/containers/storage" in volume_destinations
-    assert not any(str(isolated_home) in volume for volume in volumes)
+    isolated_home_volumes = [
+        volume for volume in volumes if str(isolated_home) in volume
+    ]
+    assert isolated_home_volumes == [
+        f"{isolated_home}/.local/state/devbox/workdir:/sandbox/.local/state/opencode"
+    ]
 
 
 @pytest.mark.unit
@@ -1559,6 +1567,270 @@ def test_devbox_opencode_data_volume_ignores_xdg_data_home(
     assert any(
         f"{expected_data_dir}:/sandbox/.local/share/opencode" in v for v in run_call
     )
+
+
+def _plant_host_opencode_state(fake_home: Path) -> Path:
+    """Populate a host OpenCode state directory for seeding assertions.
+
+    The shareable files (model picks, pinned sessions, prompt history, TUI
+    view state) must be seeded into a new per-container state directory;
+    the volatile single-owner files (service registrations, atomic-write
+    temp files, lock directories) must never be (issue #256).
+    """
+    host_state = fake_home / ".local" / "state" / "opencode"
+    (host_state / "latest" / "tui").mkdir(parents=True)
+    (host_state / "latest" / "locks").mkdir()
+    (host_state / "locks").mkdir()
+    (host_state / "model.json").write_text('{"recent":["anthropic/claude"]}')
+    (host_state / "session.json").write_text('{"pinned":["ses_host"]}')
+    (host_state / "prompt-history.jsonl").write_text('{"text":"host prompt"}\n')
+    (host_state / "kv.json").write_text('{"theme":"dark"}')
+    (host_state / "latest" / "tui" / "tabs.json").write_text('{"tabs":[]}')
+    (host_state / "service.json").write_text('{"id":"host-service"}')
+    (host_state / "service-beta.json").write_text('{"id":"host-beta-service"}')
+    (host_state / "atomic-write.tmp").write_text("")
+    (host_state / "latest" / "tui" / "plugin.view.json.tmp").write_text("")
+    (host_state / "locks" / "cli.json.lock").write_text("host-lock")
+    (host_state / "latest" / "locks" / "tui.lock").write_text("host-lock")
+    return host_state
+
+
+@pytest.mark.unit
+def test_devbox_opencode_state_volume_is_per_container(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    # Issue #256: OpenCode v2's state directory is single-owner (its
+    # background service shuts down whenever service.json stops describing
+    # itself), so sharing it across containers makes concurrently running
+    # services mutually restart in a loop. The launcher must mount a
+    # per-container host directory at the container's default state path,
+    # seeded once from the host's state directory, and must never mount
+    # the host's shared state directory itself.
+    env, log_file = mock_podman_env
+    fake_home = tmp_path / "fakehome"
+    fake_home.mkdir()
+    env["HOME"] = str(fake_home)
+    host_state = _plant_host_opencode_state(fake_home)
+    # Data and config directories must stay shared while state is isolated.
+    (fake_home / ".local" / "share" / "opencode").mkdir(parents=True)
+    (fake_home / ".config" / "opencode").mkdir(parents=True)
+    # isolated_env points XDG_STATE_HOME elsewhere; the state directories
+    # must resolve from $HOME, ignoring the override.
+    xdg_state_home = Path(env["XDG_STATE_HOME"])
+
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0
+    assert "Seeding per-container OpenCode state" in res.stdout
+
+    calls = parse_podman_calls(log_file)
+    run_call = next((c for c in calls if c and c[0] == "run" and "-d" in c), None)
+    assert run_call is not None
+    volumes = [run_call[i + 1] for i, arg in enumerate(run_call) if arg == "--volume"]
+    per_container = fake_home / ".local" / "state" / "devbox" / "workdir"
+    assert any(f"{per_container}:/sandbox/.local/state/opencode" in v for v in volumes)
+    assert not any(v.startswith(f"{host_state}:") for v in volumes)
+    assert not any(v.startswith(f"{host_state}/") for v in volumes)
+    assert any(
+        f"{fake_home / '.local' / 'share' / 'opencode'}"
+        ":/sandbox/.local/share/opencode" in v
+        for v in volumes
+    )
+    assert any(
+        f"{fake_home / '.config' / 'opencode'}:/sandbox/.config/opencode" in v
+        for v in volumes
+    )
+    assert not (xdg_state_home / "devbox").exists()
+
+    # The per-container directory was seeded from the host state: the
+    # shareable files came over ...
+    assert (
+        per_container / "model.json"
+    ).read_text() == '{"recent":["anthropic/claude"]}'
+    for seedable in (
+        "session.json",
+        "prompt-history.jsonl",
+        "kv.json",
+        "latest/tui/tabs.json",
+    ):
+        assert (per_container / seedable).is_file(), seedable
+    # ... and the volatile single-owner files did not.
+    for volatile in (
+        "service.json",
+        "service-beta.json",
+        "atomic-write.tmp",
+        "latest/tui/plugin.view.json.tmp",
+    ):
+        assert not (per_container / volatile).exists(), volatile
+    assert not (per_container / "locks").exists()
+    assert not (per_container / "latest" / "locks").exists()
+
+    # The state tree stays private: it holds the container's service
+    # registration (with its password) and prompt history.
+    assert (per_container.stat().st_mode & 0o777) == 0o700
+    assert (per_container.parent.stat().st_mode & 0o777) == 0o700
+
+    # The host's state directory is only read, never modified.
+    for original in (
+        "model.json",
+        "session.json",
+        "kv.json",
+        "service.json",
+        "service-beta.json",
+        "atomic-write.tmp",
+        "locks/cli.json.lock",
+        "latest/locks/tui.lock",
+    ):
+        assert (host_state / original).is_file(), original
+
+
+@pytest.mark.unit
+def test_devbox_opencode_state_volume_without_host_state(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    # A host without any OpenCode state still gets an isolated (empty)
+    # per-container state directory, mounted like any other, so future
+    # OpenCode state can never conflict across containers.
+    env, log_file = mock_podman_env
+    fake_home = tmp_path / "fakehome"
+    fake_home.mkdir()
+    env["HOME"] = str(fake_home)
+
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0
+    assert "Seeding per-container OpenCode state" not in res.stdout
+
+    calls = parse_podman_calls(log_file)
+    run_call = next((c for c in calls if c and c[0] == "run" and "-d" in c), None)
+    assert run_call is not None
+    volumes = [run_call[i + 1] for i, arg in enumerate(run_call) if arg == "--volume"]
+    per_container = fake_home / ".local" / "state" / "devbox" / "workdir"
+    assert any(f"{per_container}:/sandbox/.local/state/opencode" in v for v in volumes)
+    assert per_container.is_dir()
+    assert list(per_container.iterdir()) == []
+    assert (per_container.stat().st_mode & 0o777) == 0o700
+
+
+@pytest.mark.unit
+def test_devbox_opencode_state_existing_dir_not_reseeded(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    # The per-container state directory is seeded only when first created;
+    # an existing directory (persisted across --recreate) keeps its
+    # contents and is never overwritten from the host.
+    env, log_file = mock_podman_env
+    fake_home = tmp_path / "fakehome"
+    fake_home.mkdir()
+    env["HOME"] = str(fake_home)
+    _plant_host_opencode_state(fake_home)
+
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+    per_container = fake_home / ".local" / "state" / "devbox" / "workdir"
+    per_container.mkdir(parents=True)
+    (per_container / "model.json").write_text('{"recent":["container-pick"]}')
+    (per_container / "container-only.json").write_text("{}")
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0
+    assert "Seeding per-container OpenCode state" not in res.stdout
+
+    # Existing container state won: no host files were copied over it and
+    # nothing from the host's volatile files appeared.
+    assert (per_container / "model.json").read_text() == '{"recent":["container-pick"]}'
+    assert (per_container / "container-only.json").is_file()
+    assert not (per_container / "session.json").exists()
+    assert not (per_container / "service.json").exists()
+    # A pre-existing directory has its mode re-asserted to the private
+    # 0700 the launcher guarantees, even if it was created differently.
+    assert (per_container.stat().st_mode & 0o777) == 0o700
+
+
+@pytest.mark.unit
+def test_devbox_opencode_state_seed_failure_is_non_fatal(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    # Seeding failure must not fail container creation: warn, remove the
+    # partial state, and continue with an empty directory (issue #256
+    # acceptance criteria).
+    env, log_file = mock_podman_env
+    fake_home = tmp_path / "fakehome"
+    fake_home.mkdir()
+    env["HOME"] = str(fake_home)
+    _plant_host_opencode_state(fake_home)
+
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+    per_container = fake_home / ".local" / "state" / "devbox" / "workdir"
+    per_container.parent.mkdir(parents=True)
+    # A non-directory at the per-container state path makes seeding fail
+    # (the seed copy cannot create its destination directory).
+    per_container.write_text("partial state")
+
+    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    assert res.returncode == 0
+    assert "failed to seed per-container OpenCode state" in res.stdout + res.stderr
+
+    # The partial state is gone and an empty directory was mounted.
+    assert per_container.is_dir()
+    assert list(per_container.iterdir()) == []
+    calls = parse_podman_calls(log_file)
+    run_call = next((c for c in calls if c and c[0] == "run" and "-d" in c), None)
+    assert run_call is not None
+    volumes = [run_call[i + 1] for i, arg in enumerate(run_call) if arg == "--volume"]
+    assert any(f"{per_container}:/sandbox/.local/state/opencode" in v for v in volumes)
+
+
+@pytest.mark.unit
+@pytest.mark.skipif(
+    os.geteuid() == 0, reason="root ignores file permissions, so cp cannot fail"
+)
+def test_devbox_opencode_state_partial_copy_removed(
+    devbox_path: Path, mock_podman_env, tmp_path: Path
+):
+    # When the seed copy fails midway (here: an unreadable directory in
+    # the host state), the partially copied state is removed and the
+    # container is created with an empty state directory instead.
+    env, log_file = mock_podman_env
+    fake_home = tmp_path / "fakehome"
+    fake_home.mkdir()
+    env["HOME"] = str(fake_home)
+    _plant_host_opencode_state(fake_home)
+    unreadable = fake_home / ".local" / "state" / "opencode" / "unreadable"
+    unreadable.mkdir()
+    (unreadable / "inner.json").write_text("{}")
+    unreadable.chmod(0o000)
+
+    run_dir = tmp_path / "workdir"
+    run_dir.mkdir()
+    per_container = fake_home / ".local" / "state" / "devbox" / "workdir"
+
+    try:
+        res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+        assert res.returncode == 0
+        assert "failed to seed per-container OpenCode state" in res.stdout + res.stderr
+
+        # Whatever was copied before the failure is gone: an empty
+        # directory was mounted.
+        assert per_container.is_dir()
+        assert list(per_container.iterdir()) == []
+        calls = parse_podman_calls(log_file)
+        run_call = next((c for c in calls if c and c[0] == "run" and "-d" in c), None)
+        assert run_call is not None
+        volumes = [
+            run_call[i + 1] for i, arg in enumerate(run_call) if arg == "--volume"
+        ]
+        assert any(
+            f"{per_container}:/sandbox/.local/state/opencode" in v for v in volumes
+        )
+    finally:
+        # Restore readability so the tmp_path cleanup can remove the tree.
+        unreadable.chmod(0o755)
 
 
 @pytest.mark.unit
