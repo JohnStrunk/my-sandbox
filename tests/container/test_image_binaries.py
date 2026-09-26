@@ -36,6 +36,8 @@ BINARIES = [
     ("tokei", ["tokei", "--version"]),
     ("just", ["just", "--version"]),
     ("difft", ["difft", "--version"]),
+    ("diff", ["diff", "--version"]),
+    ("patch", ["patch", "--version"]),
     ("hyperfine", ["hyperfine", "--version"]),
     ("fd", ["fd", "--version"]),
     ("rg", ["rg", "--version"]),
@@ -163,6 +165,39 @@ def test_file_identifies_elf_executable(devbox_image: str):
     )
     assert "ELF" in res.stdout, (
         f"file did not identify /usr/bin/bash as ELF.\nOutput: {res.stdout}"
+    )
+
+
+@pytest.mark.container
+def test_diff_and_patch_round_trip(devbox_image: str):
+    command = r"""
+set -euo pipefail
+fixture="$(mktemp -d)"
+trap 'rm -rf -- "$fixture"' EXIT
+cd "$fixture"
+printf '%s\n' 'alpha' 'bravo' > original.txt
+printf '%s\n' 'alpha' 'charlie' > updated.txt
+set +e
+diff -u original.txt updated.txt > changes.diff
+differ_status=$?
+diff -q original.txt original.txt > /dev/null
+same_status=$?
+set -e
+test "$differ_status" -eq 1
+test "$same_status" -eq 0
+cp original.txt target.txt
+patch -s target.txt < changes.diff
+diff -q target.txt updated.txt
+"""
+    res = run_in_devbox(
+        devbox_image,
+        ["bash", "-ceu", command],
+        user="sandbox",
+    )
+    assert res.returncode == 0, (
+        "diff did not report differences with exit status 1 (and identical "
+        "inputs with 0), or patch did not apply the unified diff.\n"
+        f"Stdout: {res.stdout}\nStderr: {res.stderr}"
     )
 
 

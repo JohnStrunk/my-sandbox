@@ -129,6 +129,28 @@ repository `AGENTS.md` or README.
 - Runtime coverage is in `tests/container/test_image_binaries.py`; staged
   guidance is checked in `tests/container/test_opencode_config.py`.
 
+### Classic diff and patch
+
+- Runtime commands: `diff` (Fedora package `diffutils`) and `patch` (Fedora
+  package `patch`).
+- Use `diff -u old new` for plain line-based file or output comparison, or
+  `diff -q old new` when only the result matters, for example verifying a
+  formatting round-trip is byte-identical.
+- `diff` exits `0` when inputs match, `1` when they differ, and `2` on
+  trouble; `1` is a normal "differences found" result, not a failure.
+- Use `patch target.txt < changes.diff` to apply a `diff -u` patch outside a
+  git repository, and `patch -p1 < changes.diff` for git-style `a/`/`b/`
+  header prefixes. When the patch headers name two different existing
+  files, `patch` without an explicit target prefers the `+++` (new) file
+  and reports the change as already applied; name the target explicitly.
+- Prefer `difft` for syntax-aware comparison of moved or refactored code;
+  use `diff` when plain textual equality or exit-status semantics matter.
+  Inside a git repository, prefer `git diff` and `git apply` over `diff` and
+  `patch`.
+- Persistent devbox containers need `devbox --recreate` after image changes.
+- Runtime coverage is in `tests/container/test_image_binaries.py`; staged
+  guidance is checked in `tests/container/test_opencode_config.py`.
+
 ### Token-hygiene utilities
 
 The Fedora package names are `tokei`, `just`, `difftastic`, `hyperfine`, and
