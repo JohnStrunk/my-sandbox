@@ -1004,7 +1004,14 @@ EOF
   if [ ! -d "$opencode_state_dir" ]; then
     if ! seed_opencode_state_dir "$HOME/.local/state/opencode" "$opencode_state_dir"; then
       echo "==> WARNING: failed to seed per-container OpenCode state directory $opencode_state_dir; removed partial state and continuing with empty state" >&2
-      rm -rf -- "$opencode_state_dir"
+      # cp -a preserves directory modes, so a partially copied tree can
+      # contain directories without the user-write bit; make them
+      # removable again before the cleanup. The cleanup itself stays
+      # best-effort so a seeding failure is never a creation failure; a
+      # stale registration that survives it self-heals (clients spawn a
+      # fresh service when they cannot probe the recorded one).
+      chmod -R u+w -- "$opencode_state_dir" 2>/dev/null || true
+      rm -rf -- "$opencode_state_dir" 2>/dev/null || true
     fi
   fi
   mkdir -p "$opencode_state_dir"

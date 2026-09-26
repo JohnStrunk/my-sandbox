@@ -1746,6 +1746,9 @@ def test_devbox_opencode_state_existing_dir_not_reseeded(
     assert (per_container / "container-only.json").is_file()
     assert not (per_container / "session.json").exists()
     assert not (per_container / "service.json").exists()
+    # A pre-existing directory has its mode re-asserted to the private
+    # 0700 the launcher guarantees, even if it was created differently.
+    assert (per_container.stat().st_mode & 0o777) == 0o700
 
 
 @pytest.mark.unit

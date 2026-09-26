@@ -1,3 +1,5 @@
+import json
+import time
 from pathlib import Path
 
 import pytest
@@ -207,4 +209,70 @@ def test_opencode_state_isolated_and_seeded_per_container(
     finally:
         run_podman_isolated(
             isolated_env, ["rm", "-f", container_name], allow_absent=True
+        )
+
+
+@pytest.mark.integration
+def test_two_devboxes_keep_separate_opencode_service_registrations(
+    devbox_path: Path,
+    devbox_image: str,
+    tmp_path: Path,
+    isolated_env: dict[str, str],
+):
+    # The headline acceptance criterion of issue #256: two devboxes each
+    # running an OpenCode v2 service must keep their own service
+    # registrations instead of mutually restarting each other every few
+    # seconds. Each container's creation-time `opencode models` warm start
+    # starts its service; with per-container state directories the two
+    # registrations land in different files, so neither service ever sees
+    # a foreign registration in its own state directory. The shared data
+    # directory mirrors the real-world layout where both containers (and
+    # the host) share session storage.
+    home = Path(isolated_env["HOME"])
+    (home / ".local" / "share" / "opencode").mkdir(parents=True)
+    first_dir = unique_workspace_dir(tmp_path, "opencode_two_a")
+    second_dir = unique_workspace_dir(tmp_path, "opencode_two_b")
+    first_container = f"devbox-{first_dir.name}"
+    second_container = f"devbox-{second_dir.name}"
+    first_state = home / ".local" / "state" / "devbox" / first_dir.name
+    second_state = home / ".local" / "state" / "devbox" / second_dir.name
+
+    try:
+        for work_dir in (first_dir, second_dir):
+            res = run_bash_script(
+                devbox_path,
+                ["cat", "/sandbox/.local/state/opencode/service.json"],
+                env=isolated_env,
+                cwd=work_dir,
+                timeout=600,
+            )
+            assert res.returncode == 0, f"{res.stdout}\n{res.stderr}"
+
+        # Each container's warm start registered its own service in its
+        # own state directory.
+        first_service = first_state / "service.json"
+        second_service = second_state / "service.json"
+        assert first_service.is_file(), "first devbox has no service registration"
+        assert second_service.is_file(), "second devbox has no service registration"
+        first_id = json.loads(first_service.read_text())["id"]
+        second_id = json.loads(second_service.read_text())["id"]
+        assert first_id != second_id
+
+        # Sustained observation window: the service re-checks its
+        # registration about every 5 seconds, so after 15 seconds both
+        # registrations must still be their own — the mutual-restart loop
+        # from the issue would have replaced them (and logged a forced
+        # shutdown) within one or two cycles.
+        time.sleep(15)
+        assert json.loads(first_service.read_text())["id"] == first_id
+        assert json.loads(second_service.read_text())["id"] == second_id
+        log = home / ".local" / "share" / "opencode" / "log" / "opencode.log"
+        if log.is_file():
+            assert "managed service registration replaced" not in log.read_text()
+    finally:
+        run_podman_isolated(
+            isolated_env, ["rm", "-f", first_container], allow_absent=True
+        )
+        run_podman_isolated(
+            isolated_env, ["rm", "-f", second_container], allow_absent=True
         )
