@@ -363,9 +363,9 @@ def _check_lockfile_consumers(
             )
 
 
-_LIMA_PIN_PATTERN = re.compile(r'^([A-Z0-9_]+)_VERSION="([^"]*)"$')
+_LIMA_PIN_PATTERN = re.compile(r'^\s*([A-Z0-9_]+)_VERSION=["\']([^"\']*)["\']\s*$')
 _LIMA_RENOVATE_PATTERN = re.compile(
-    r"^# renovate: datasource=([a-z-.]+) depName=([a-zA-Z0-9/@_.:-]+)"
+    r"^\s*#\s*renovate:\s*datasource=([a-z-.]+) depName=([a-zA-Z0-9/@_.:-]+)"
 )
 
 
@@ -420,12 +420,21 @@ def _check_lima_consumers(
     repo_root: Path,
     errors: list[str],
 ) -> None:
-    """Require lima/*.sh version pins to match the manifest exactly."""
+    """Require lima/*.sh version pins to match the manifest exactly.
+
+    The VM's provisioning scripts cannot read the manifest at runtime (it
+    lives in the repository, not the guest), so—like pre-commit revisions—
+    they embed the pinned values directly. Unlike the docker/ci consumers,
+    ``_check_no_hardcoded_versions`` is intentionally not applied here: the
+    embedded ``*_VERSION`` pins *are* the consumer mechanism, and this check
+    is what keeps them synchronized with the manifest.
+    """
 
     scripts = _lima_scripts(repo_root, errors)
     if not scripts:
         return
     pins = _lima_pins(scripts)
+    combined_text = "\n".join(scripts.values())
 
     declared = {
         name
@@ -458,6 +467,17 @@ def _check_lima_consumers(
                 "'# renovate: datasource=... depName=...' comment matching "
                 "the manifest"
             )
+        # Release checksums declared in the manifest must be embedded (and
+        # verified) by the provisioning scripts, not just the manifest.
+        checksums = spec.get("checksums")
+        if isinstance(checksums, dict):
+            for arch, digest in sorted(checksums.items()):
+                if digest not in combined_text:
+                    errors.append(
+                        f"lima/*.sh must embed the '{name}' {arch} release "
+                        f"checksum ({digest}) from the manifest and verify "
+                        "the download against it"
+                    )
 
     for key in sorted(set(pins) - declared):
         if key not in tools:
@@ -639,6 +659,15 @@ def _check_provenance_dockerfile_coherence(
                 "manifest does not declare it"
             )
     for (tool, kind), declared_fields in sorted(declared.items()):
+        # Only tools the Dockerfile itself installs must be read there.
+        # Other consumers verify the same metadata on their side -- the
+        # lima VM's provisioning scripts embed the digests, and
+        # _check_lima_consumers keeps them in sync -- so requiring a
+        # Dockerfile read for them would be a false positive.
+        spec = tools.get(tool, {})
+        consumers = spec.get("consumers")
+        if not isinstance(consumers, dict) or consumers.get("docker") is not True:
+            continue
         read_fields = reads.get((tool, kind), set())
         for unused in sorted(declared_fields - read_fields):
             errors.append(

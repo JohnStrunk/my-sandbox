@@ -97,6 +97,78 @@ def test_filter_keeps_checksum_for_another_detector():
 
 
 @pytest.mark.unit
+def test_filter_ignores_manifest_checksum_embedded_in_lima_script(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+):
+    # lima/*.sh embeds manifest checksums verbatim to verify downloads;
+    # the embedded form is assignment syntax, not JSON.
+    manifest_line = f'    "amd64": "{_DIGEST}",'
+    manifest = tmp_path / "tool-versions.json"
+    manifest.write_text('{\n  "checksums": {\n' + manifest_line + "\n  }\n}\n")
+    monkeypatch.setattr(filters, "_MANIFEST_PATH", manifest)
+    filters._manifest_checksum_lines.cache_clear()
+
+    try:
+        assert filters.is_manifest_release_checksum(
+            "lima/provision-system.sh",
+            f'  limactl_sha256="{_DIGEST}" ;;',
+            _DIGEST,
+            HexHighEntropyString(),
+        )
+    finally:
+        filters._manifest_checksum_lines.cache_clear()
+
+
+@pytest.mark.unit
+def test_filter_keeps_unknown_hex_in_lima_script(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+):
+    # Only digests the manifest actually declares are allowed in lima
+    # scripts; a secret hex string there must stay a finding.
+    manifest_line = f'    "amd64": "{"cd" * 32}",'
+    manifest = tmp_path / "tool-versions.json"
+    manifest.write_text('{\n  "checksums": {\n' + manifest_line + "\n  }\n}\n")
+    monkeypatch.setattr(filters, "_MANIFEST_PATH", manifest)
+    filters._manifest_checksum_lines.cache_clear()
+
+    try:
+        assert not filters.is_manifest_release_checksum(
+            "lima/provision-system.sh",
+            f'  api_token="{_DIGEST}"',
+            _DIGEST,
+            HexHighEntropyString(),
+        )
+    finally:
+        filters._manifest_checksum_lines.cache_clear()
+
+
+@pytest.mark.unit
+def test_filter_keeps_checksum_outside_lima_scripts(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+):
+    # The lima allowance is directory-scoped: a manifest digest embedded
+    # in any other shell script still fails the hook.
+    manifest_line = f'    "amd64": "{_DIGEST}",'
+    manifest = tmp_path / "tool-versions.json"
+    manifest.write_text('{\n  "checksums": {\n' + manifest_line + "\n  }\n}\n")
+    monkeypatch.setattr(filters, "_MANIFEST_PATH", manifest)
+    filters._manifest_checksum_lines.cache_clear()
+
+    try:
+        assert not filters.is_manifest_release_checksum(
+            "scripts/provision-system.sh",
+            f'  limactl_sha256="{_DIGEST}"',
+            _DIGEST,
+            HexHighEntropyString(),
+        )
+    finally:
+        filters._manifest_checksum_lines.cache_clear()
+
+
+@pytest.mark.unit
 def test_checksum_parser_handles_long_and_numeric_architecture_blocks(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,

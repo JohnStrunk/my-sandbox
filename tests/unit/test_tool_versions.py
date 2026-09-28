@@ -269,3 +269,116 @@ def test_tool_version_validator_checks_lima_renovate_metadata(
     errors = validate_tool_versions(copy_root)
 
     assert any("renovate" in error and "limactl" in error for error in errors)
+
+
+@pytest.mark.unit
+def test_tool_version_validator_flags_duplicate_lima_pin(
+    repo_root: Path, tmp_path: Path
+):
+    copy_root = tmp_path / "repo"
+    _copy_validator_inputs(repo_root, copy_root)
+
+    # A second LIMACTL_VERSION anywhere in lima/*.sh is ambiguous, even
+    # when it matches the manifest.
+    script = copy_root / "lima" / "provision-user.sh"
+    script.write_text(script.read_text() + 'LIMACTL_VERSION="2.2.0"\n')
+
+    errors = validate_tool_versions(copy_root)
+
+    assert any("pins 'limactl' more than once" in error for error in errors)
+
+
+@pytest.mark.unit
+def test_tool_version_validator_rejects_pin_of_non_lima_tool(
+    repo_root: Path, tmp_path: Path
+):
+    copy_root = tmp_path / "repo"
+    _copy_validator_inputs(repo_root, copy_root)
+
+    # hadolint is in the manifest, but only as a docker/ci/pre-commit
+    # consumer; the VM scripts must not pin it.
+    script = copy_root / "lima" / "provision-user.sh"
+    script.write_text(script.read_text() + 'HADOLINT_VERSION="2.15.1"\n')
+
+    errors = validate_tool_versions(copy_root)
+
+    assert any(
+        "pins 'hadolint'" in error and "'lima' consumer" in error for error in errors
+    )
+
+
+@pytest.mark.unit
+def test_tool_version_validator_ignores_commented_lima_pin(
+    repo_root: Path, tmp_path: Path
+):
+    copy_root = tmp_path / "repo"
+    _copy_validator_inputs(repo_root, copy_root)
+
+    # A commented-out pin must not count (it must not mask a missing or
+    # duplicate live pin either).
+    script = copy_root / "lima" / "provision-system.sh"
+    script.write_text(script.read_text() + '# OPENCODE_VERSION="9.9.9"\n')
+
+    assert validate_tool_versions(copy_root) == []
+
+
+@pytest.mark.unit
+def test_tool_version_validator_accepts_v_prefixed_lima_pin(
+    repo_root: Path, tmp_path: Path
+):
+    copy_root = tmp_path / "repo"
+    _copy_validator_inputs(repo_root, copy_root)
+
+    script = copy_root / "lima" / "provision-system.sh"
+    script.write_text(
+        script.read_text().replace(
+            'OPENCODE_VERSION="2.0.16"', 'OPENCODE_VERSION="v2.0.16"', 1
+        )
+    )
+
+    assert validate_tool_versions(copy_root) == []
+
+
+@pytest.mark.unit
+def test_tool_version_validator_flags_missing_lima_checksum(
+    repo_root: Path, tmp_path: Path
+):
+    copy_root = tmp_path / "repo"
+    _copy_validator_inputs(repo_root, copy_root)
+
+    # Corrupt the script's embedded copy of the manifest-declared amd64
+    # digest: the download would no longer be verified against the
+    # manifest.
+    manifest = json.loads((copy_root / "container" / "tool-versions.json").read_text())
+    digest = manifest["tools"]["limactl"]["checksums"]["amd64"]
+    script = copy_root / "lima" / "provision-system.sh"
+    script.write_text(script.read_text().replace(digest, "00" * 32, 1))
+
+    errors = validate_tool_versions(copy_root)
+
+    assert any(
+        "must embed the 'limactl' amd64 release checksum" in error for error in errors
+    )
+
+
+@pytest.mark.unit
+def test_validator_allows_checksums_for_non_docker_consumers(
+    repo_root: Path, tmp_path: Path
+):
+    copy_root = tmp_path / "repo"
+    _copy_validator_inputs(repo_root, copy_root)
+
+    # Checksums only need to be read by an installing consumer. yamllint
+    # is consumed by pre-commit alone, so a Dockerfile read is not
+    # required for its metadata (the lima scripts play that role for
+    # lima-only tools such as limactl).
+    def mutate(data):
+        data["tools"]["yamllint"]["checksums"] = {"amd64": "ab" * 32}
+
+    _edit_manifest(copy_root, mutate)
+
+    errors = validate_tool_versions(copy_root)
+
+    assert not any(
+        "yamllint" in error and "never reads it" in error for error in errors
+    )

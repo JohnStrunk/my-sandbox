@@ -92,8 +92,8 @@ fi
 # manifest, and Renovate keeps both current.
 # renovate: datasource=github-releases depName=astral-sh/uv
 UV_VERSION="0.12.16"
-if ! "$HOME/.local/bin/uv" --version 2>/dev/null \
-  | grep -qF "uv ${UV_VERSION}"; then
+installed_uv="$("$HOME/.local/bin/uv" --version 2>/dev/null | awk '{print $2}' || true)"
+if [ "$installed_uv" != "$UV_VERSION" ]; then
   curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | sh
 fi
 
@@ -115,6 +115,8 @@ fi
 # OpenCode's model catalog lives behind its background service. Load it
 # here so the first interactive session starts immediately. The service's
 # state is VM-local (~/.local/state/opencode); the host keeps its own.
-if ! timeout 30 opencode models >/dev/null 2>&1; then
+# Absolute path, like probe-readiness.sh: this script also runs through a
+# non-login shell.
+if ! timeout 30 /usr/local/bin/opencode models >/dev/null 2>&1; then
   echo "devbox: OpenCode model catalog warm-up failed; continuing" >&2
 fi

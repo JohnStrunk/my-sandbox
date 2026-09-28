@@ -25,10 +25,13 @@
 # (GHSA-2j9v-p4xj-cjw2). Everything this template uses exists in 2.1.3.
 minimumLimaVersion: "2.1.3"
 
-# QEMU with KVM acceleration. nestedVirtualization is always on by
-# decision (issue #267): the guest CPU stays at Lima's default "host"
-# model, which exposes VMX/SVM to the guest for L2 VMs. Do not override
-# cpuType.
+# QEMU with KVM acceleration. Nested virtualization comes from Lima's
+# default "host" CPU model on Linux/KVM, which exposes VMX/SVM to the
+# guest; do not override cpuType. The explicit nestedVirtualization flag
+# is currently inert under the qemu driver in Lima <= 2.2 (it is honored
+# from Lima 2.3 on, where it also fails fast when the host KVM module has
+# nesting disabled); probe-readiness.sh verifies VMX/SVM exposure in the
+# guest either way.
 vmType: "qemu"
 nestedVirtualization: true
 

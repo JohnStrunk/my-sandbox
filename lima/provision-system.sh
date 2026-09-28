@@ -44,8 +44,11 @@ fi
 
 # --- Nested virtualization access -------------------------------------------
 # /dev/kvm is root:kvm 0660 on Fedora; give the devbox user access. The
-# host-side requirement (nested=1 in kvm_intel/kvm_amd) is enforced by
-# Lima itself: nestedVirtualization: true fails fast when it is off.
+# host-side requirement (nested=1 in kvm_intel/kvm_amd) is NOT enforced
+# by Lima <= 2.2 (nestedVirtualization is inert under the qemu driver
+# there); the README's host-prep check and probe-readiness.sh's VMX/SVM
+# check are the guards. Guest CPU nesting comes from Lima's default
+# host-CPU passthrough, which needs host nesting to expose VMX/SVM.
 usermod --append --groups kvm "$DEVBOX_USER"
 # Load the KVM module now so /dev/kvm exists before anything needs it.
 modprobe kvm || true
@@ -74,10 +77,21 @@ if [ "$installed_opencode" != "$OPENCODE_VERSION" ]; then
 fi
 
 # --- limactl (for nested L2 VMs) ------------------------------------------------
-# Pinned from container/tool-versions.json (.tools.limactl.version).
-# The stamp file makes re-runs a no-op until the pin changes.
+# Pinned from container/tool-versions.json (.tools.limactl.version); the
+# release checksums below must match the manifest's checksums (validated
+# by scripts/validate_tool_versions.py). The stamp file makes re-runs a
+# no-op until the pin changes.
 # renovate: datasource=github-releases depName=lima-vm/lima
 LIMACTL_VERSION="2.2.0"
+case "$(uname -m)" in
+  x86_64)
+    limactl_sha256="a0ea1ccf6b7335a900adb5f8d2b8384457965fecb1ba72f09b4e3e46d12f424a" ;;
+  aarch64)
+    limactl_sha256="7c6a09c6844f55f811e9b7b2b60a6070a512c696c8ec752dfdb3c8ed50ed0364" ;;
+  *)
+    echo "devbox: unsupported architecture for limactl: $(uname -m)" >&2
+    exit 1 ;;
+esac
 stamp="/usr/local/share/devbox-vm/limactl.version"
 installed_limactl=""
 if [ -f "$stamp" ]; then
@@ -88,6 +102,7 @@ if [ "$installed_limactl" != "$LIMACTL_VERSION" ]; then
   curl -fsSL \
     "https://github.com/lima-vm/lima/releases/download/v${LIMACTL_VERSION}/lima-${LIMACTL_VERSION}-Linux-${arch}.tar.gz" \
     -o /tmp/devbox-limactl.tgz
+  printf '%s  %s\n' "$limactl_sha256" /tmp/devbox-limactl.tgz | sha256sum -c -
   tar -C /usr/local -xzf /tmp/devbox-limactl.tgz
   rm -f /tmp/devbox-limactl.tgz
   mkdir -p /usr/local/share/devbox-vm

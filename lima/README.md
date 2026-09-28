@@ -42,9 +42,13 @@ sessions can run _inside_ the target environment.
 3. **`/dev/kvm` access**: add yourself to the `kvm` group
    (`sudo usermod -aG kvm "$USER"`, then log out/in).
 
-4. **Nested virtualization check** (required: the template sets
-   `nestedVirtualization: true`, and Lima fails fast when the host KVM
-   module has nesting disabled):
+4. **Nested virtualization check** (required: L2 test VMs, minikube, and
+   kind inside the devbox need it). Lima ≤ 2.2 does **not** fail fast
+   when the host KVM module has nesting disabled — under the qemu driver
+   the template's `nestedVirtualization: true` is inert there (qemu
+   support for the flag lands after v2.2.0). Guest CPU nesting comes
+   from Lima's default host-CPU passthrough, so this manual check and
+   the readiness probe's VMX/SVM check are the actual guards:
 
    ```shell
    cat /sys/module/kvm_intel/parameters/nested   # Intel: expect Y or 1
@@ -112,8 +116,10 @@ cd ~/src/my-sandbox && opencode   # start an agent session
 The existing worktree workflow carries over unchanged: `.worktrees/`
 under the repo works inside the VM because the same-path mounts make the
 worktree `.git` pointers (which reference host-absolute paths) resolve
-identically. `uv sync --extra test` inside a worktree creates a VM-local
-`.venv`.
+identically. One caveat: `uv sync` in a checkout or worktree puts
+`.venv` on the shared `~/src` mount — see
+[`.venv` lives on the shared mount](#venv-lives-on-the-shared-mount)
+below.
 
 Files created through the mounts are owned by your host uid (guest user
 mirrors the host user), so edits made in the VM appear on the host and
@@ -158,6 +164,7 @@ limactl start ~/src/my-sandbox/lima/devbox.yaml \
 | Path                        | Shared?  | Notes                            |
 | --------------------------- | -------- | -------------------------------- |
 | `~/src`                     | 9p, RW   | Projects root, worktrees         |
+| `<repo>/.venv`              | 9p, RW   | Under `~/src`; venv caveat below |
 | `~/kb`                      | 9p, RW   | Knowledge base (`kbase.py sync`) |
 | `~/.agents`                 | 9p, RW   | Agent skills (devbox-tools)      |
 | `~/.config/opencode`        | 9p, RW   | OpenCode config                  |
@@ -173,6 +180,22 @@ limactl start ~/src/my-sandbox/lima/devbox.yaml \
 The guest home directory itself is VM-local (Lima's default
 `/home/<user>.guest`); `provision-user.sh` symlinks the shared paths into
 it. `$HOME` is never mounted wholesale.
+
+### `.venv` lives on the shared mount
+
+`uv sync` creates `<repo>/.venv` inside the checkout, and checkouts
+(including `.worktrees/`) live under the shared `~/src` mount — so a
+`.venv` is shared state, not VM-local storage. A virtual environment is
+bound to the interpreter and uv cache that built it, and the host and
+the guest are different systems, so one `.venv` must not be used from
+both sides (the host-side `uv` and the VM-side `uv` will fight over it
+and can corrupt it). Pick one side per checkout:
+
+- Use a given checkout from the host **or** from the VM, not both.
+- Or keep the environment off the shared tree with
+  `UV_PROJECT_ENVIRONMENT` (for example
+  `export UV_PROJECT_ENVIRONMENT="$HOME/.venvs/my-sandbox"`, which is
+  VM-local since the guest home is not mounted).
 
 ## What is inside
 
@@ -226,7 +249,10 @@ passes, verify from inside the VM (`limactl shell devbox`):
 
 - [ ] `cd ~/src/my-sandbox && git status` sees the host checkout.
 - [ ] Create a worktree, `uv sync --extra test`, run
-      `uv run --extra test pytest -m unit` — tests pass.
+      `uv run --extra test pytest -m unit` — tests pass. If the host
+      side already has a `.venv` in that worktree, delete it or point
+      `UV_PROJECT_ENVIRONMENT` at a VM-local path first (see the venv
+      caveat above).
 - [ ] Commit and push via `gh`/git from inside the VM.
 - [ ] Edits made in the VM are visible on the host, owned by your uid.
 - [ ] `~/kb/kbase.py sync` round-trips (knowledge base usable).
