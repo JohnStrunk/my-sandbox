@@ -134,4 +134,4 @@ repos:
         entry: python3 scripts/validate_tool_versions.py
         language: system
         pass_filenames: false
-        files: '^(container/Dockerfile|container/tool-versions\.json|\.github/workflows/ci-workflow\.yaml|\.pre-commit-config\.yaml|pyproject\.toml|uv\.lock|scripts/validate_tool_versions\.py)$'
+        files: '^(container/Dockerfile|container/tool-versions\.json|\.github/workflows/ci-workflow\.yaml|\.pre-commit-config\.yaml|pyproject\.toml|uv\.lock|scripts/validate_tool_versions\.py|lima/[^/]+\.sh)$'

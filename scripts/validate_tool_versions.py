@@ -90,6 +90,7 @@ def _load_manifest(path: Path, errors: list[str]) -> dict[str, dict[str, object]
             "pre-commit",
             "pyproject",
             "lockfile",
+            "lima",
         }
         if unknown_consumers:
             errors.append(
@@ -97,7 +98,7 @@ def _load_manifest(path: Path, errors: list[str]) -> dict[str, dict[str, object]
                 + ", ".join(sorted(unknown_consumers))
             )
 
-        for consumer in ("docker", "ci"):
+        for consumer in ("docker", "ci", "lima"):
             if consumer in consumers and not isinstance(consumers[consumer], bool):
                 errors.append(
                     f"{path}: tool '{name}' consumer '{consumer}' must be boolean"
@@ -362,6 +363,138 @@ def _check_lockfile_consumers(
             )
 
 
+_LIMA_PIN_PATTERN = re.compile(r'^\s*([A-Z0-9_]+)_VERSION=["\']([^"\']*)["\']\s*$')
+_LIMA_RENOVATE_PATTERN = re.compile(
+    r"^\s*#\s*renovate:\s*datasource=([a-z-.]+) depName=([a-zA-Z0-9/@_.:-]+)"
+)
+
+
+def _lima_scripts(repo_root: Path, errors: list[str]) -> dict[str, str]:
+    """Return the contents of lima/*.sh, keyed by file name."""
+
+    lima_dir = repo_root / "lima"
+    if not lima_dir.is_dir():
+        errors.append("lima/ directory with provisioning scripts is missing")
+        return {}
+    scripts = {
+        path.name: _read_text(path, errors) for path in sorted(lima_dir.glob("*.sh"))
+    }
+    if not scripts:
+        errors.append("lima/ contains no provisioning scripts")
+    return scripts
+
+
+def _lima_pins(
+    scripts: dict[str, str],
+) -> dict[str, list[tuple[str, str, str | None, str | None]]]:
+    """Map lowercase tool key -> [(file, version, datasource, depName)].
+
+    A pin is a ``TOOL_VERSION="x.y.z"`` assignment whose preceding line
+    may carry the ``# renovate:`` comment that lets Renovate update it.
+    """
+
+    pins: dict[str, list[tuple[str, str, str | None, str | None]]] = {}
+    for name, text in scripts.items():
+        lines = text.splitlines()
+        for index, line in enumerate(lines):
+            match = _LIMA_PIN_PATTERN.match(line)
+            if not match:
+                continue
+            var, version = match.groups()
+            comment = lines[index - 1] if index > 0 else ""
+            renovate = _LIMA_RENOVATE_PATTERN.match(comment)
+            key = var.removesuffix("_VERSION").lower()
+            pins.setdefault(key, []).append(
+                (
+                    name,
+                    version,
+                    renovate.group(1) if renovate else None,
+                    renovate.group(2) if renovate else None,
+                )
+            )
+    return pins
+
+
+def _check_lima_consumers(
+    tools: dict[str, dict[str, object]],
+    repo_root: Path,
+    errors: list[str],
+) -> None:
+    """Require lima/*.sh version pins to match the manifest exactly.
+
+    The VM's provisioning scripts cannot read the manifest at runtime (it
+    lives in the repository, not the guest), so—like pre-commit revisions—
+    they embed the pinned values directly. Unlike the docker/ci consumers,
+    ``_check_no_hardcoded_versions`` is intentionally not applied here: the
+    embedded ``*_VERSION`` pins *are* the consumer mechanism, and this check
+    is what keeps them synchronized with the manifest.
+    """
+
+    scripts = _lima_scripts(repo_root, errors)
+    if not scripts:
+        return
+    pins = _lima_pins(scripts)
+    # Active (non-comment) lines only, so a digest buried in a comment
+    # cannot satisfy the checksum containment check below.
+    combined_text = "\n".join(_active_lines(text) for text in scripts.values())
+
+    declared = {
+        name
+        for name, spec in tools.items()
+        if isinstance(spec.get("consumers"), dict)
+        and spec["consumers"].get("lima") is True
+    }
+    for name in sorted(declared):
+        spec = tools[name]
+        entries = pins.get(name, [])
+        if not entries:
+            errors.append(
+                f"lima/*.sh does not pin '{name}' (expected a "
+                f"{name.upper()}_VERSION assignment)"
+            )
+            continue
+        if len(entries) > 1:
+            errors.append(f"lima/*.sh pins '{name}' more than once")
+            continue
+        file_name, version, datasource, dep_name = entries[0]
+        if _normalized_version(version) != _normalized_version(str(spec["version"])):
+            errors.append(
+                f"lima/{file_name} pin for '{name}' is '{version}' "
+                f"({name.upper()}_VERSION), expected '{spec['version']}' "
+                "from the manifest"
+            )
+        if datasource != spec.get("datasource") or dep_name != spec.get("depName"):
+            errors.append(
+                f"lima/{file_name} pin for '{name}' must be preceded by a "
+                "'# renovate: datasource=... depName=...' comment matching "
+                "the manifest"
+            )
+        # Release checksums declared in the manifest must be embedded in
+        # active script code (a comment-only digest verifies nothing);
+        # provision-system.sh checks its download against the embedded
+        # digests with sha256sum -c.
+        checksums = spec.get("checksums")
+        if isinstance(checksums, dict):
+            for arch, digest in sorted(checksums.items()):
+                if digest not in combined_text:
+                    errors.append(
+                        f"lima/*.sh must embed the '{name}' {arch} release "
+                        f"checksum ({digest}) from the manifest and verify "
+                        "the download against it"
+                    )
+
+    for key in sorted(set(pins) - declared):
+        if key not in tools:
+            errors.append(
+                f"lima/*.sh pins '{key}', but the version manifest has no entry for it"
+            )
+        else:
+            errors.append(
+                f"lima/*.sh pins '{key}', but the manifest does not declare "
+                "it as a 'lima' consumer"
+            )
+
+
 def _provenance_references(text: str) -> dict[tuple[str, str], set[str]]:
     """Group ``.tools.<tool>.<kind>.<field>`` reads by (tool, kind)."""
 
@@ -530,6 +663,15 @@ def _check_provenance_dockerfile_coherence(
                 "manifest does not declare it"
             )
     for (tool, kind), declared_fields in sorted(declared.items()):
+        # Only tools the Dockerfile itself installs must be read there.
+        # Other consumers verify the same metadata on their side -- the
+        # lima VM's provisioning scripts embed the digests, and
+        # _check_lima_consumers keeps them in sync -- so requiring a
+        # Dockerfile read for them would be a false positive.
+        spec = tools.get(tool, {})
+        consumers = spec.get("consumers")
+        if not isinstance(consumers, dict) or consumers.get("docker") is not True:
+            continue
         read_fields = reads.get((tool, kind), set())
         for unused in sorted(declared_fields - read_fields):
             errors.append(
@@ -601,6 +743,7 @@ def validate_tool_versions(repo_root: Path) -> list[str]:
     _check_pre_commit_consumers(tools, pre_commit, errors)
     _check_pyproject_consumers(tools, pyproject, errors)
     _check_lockfile_consumers(tools, lockfile, errors)
+    _check_lima_consumers(tools, repo_root, errors)
 
     return errors
 

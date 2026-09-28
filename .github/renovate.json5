@@ -45,6 +45,19 @@
       "commitMessageSuffix": "(refresh release checksums + agent-skill pin via scripts/verify_provenance.py --update)",
     },
     {
+      // The limactl manifest entry pins release checksums, and the VM's
+      // provision script embeds the same digests; Renovate cannot recompute
+      // either, so a version-only bump is caught by the "Verify release
+      // provenance checksums" CI step and the tool-version validator. Run the
+      // refresh command below and copy the new digests into
+      // lima/provision-system.sh.
+      "description": "limactl version bumps must refresh release checksums",
+      "matchPackageNames": [
+        "lima-vm/lima",
+      ],
+      "commitMessageSuffix": "(refresh release checksums via scripts/verify_provenance.py --update and lima/provision-system.sh)",
+    },
+    {
       "description": "GitHub MCP server version bumps must refresh release checksums",
       "matchPackageNames": [
         "github/github-mcp-server",
@@ -57,6 +70,9 @@
         "hadolint/hadolint",
         "ast-grep/ast-grep",
         "github/github-mcp-server",
+        "lima-vm/lima",
+        "@opencode/cli",
+        "astral-sh/uv",
         "markdownlint-cli2",
         "DavidAnson/markdownlint-cli2",
         "ruff",
