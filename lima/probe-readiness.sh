@@ -5,7 +5,7 @@
 set -euo pipefail
 
 fail() {
-  echo "devbox readiness: $1" >&2
+  echo "devbox readiness: $*" >&2
   exit 1
 }
 
@@ -22,11 +22,14 @@ test -x "${HOME}/.local/bin/uv" || fail "uv is not installed"
 # guard for L2 VM support on x86_64. (Lima <= 2.2 does not itself fail
 # when host nesting is disabled.) aarch64 has no equivalent flag; the L2
 # boot test in lima/README.md's checklist covers it.
-test -e /dev/kvm || fail "/dev/kvm is missing (host nested virtualization?)"
+test -e /dev/kvm \
+  || fail "/dev/kvm is missing (host nested virtualization?)"
 case "$(uname -m)" in
   x86_64)
     grep -qm1 -w vmx /proc/cpuinfo \
-      || fail "no vmx CPU flag: host nested virtualization is off (kvm_intel nested=0?)"
+      || fail \
+        "no vmx CPU flag: host nested virtualization is off" \
+        "(kvm_intel nested=0?)"
     ;;
 esac
 getent group kvm | grep -qw "$(id -un)" \
@@ -60,5 +63,7 @@ done
 
 # OpenCode's volatile state must stay VM-local, never host-shared.
 if [ -L "${HOME}/.local/state/opencode" ]; then
-  fail "the OpenCode state dir (.local/state/opencode) must not be a symlink; it must stay VM-local"
+  fail \
+    "OpenCode state dir (.local/state/opencode) must stay VM-local:" \
+    "it must not be a symlink"
 fi

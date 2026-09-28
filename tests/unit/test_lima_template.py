@@ -135,7 +135,8 @@ def test_provision_and_probe_scripts_are_referenced_and_valid(
     probes = config["probes"]
     assert len(probes) == 1
     assert probes[0]["mode"] == "readiness"
-    assert probes[0]["file"] == "probe-readiness.sh"
+    assert "file" not in probes[0]
+    assert probes[0]["script"] == _script(repo_root, "probe-readiness.sh")
 
     for name in _SCRIPTS:
         path = repo_root / LIMA_DIR / name
