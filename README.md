@@ -11,6 +11,9 @@ This repository provides:
 - **`container/`**: A container image definition bundling modern language
   toolchains, cloud CLIs, code linters, and AI coding assistants like
   [OpenCode](https://opencode.ai).
+- **`lima/`**: A minimal Fedora Lima VM template for a VM-native devbox
+  with nested virtualization and host-shared project directories (see
+  [`lima/README.md`](lima/README.md)).
 
 ---
 
@@ -489,6 +492,20 @@ for exact literal matches.
 
 ---
 
+## VM-Native Devbox (Lima)
+
+For work that needs real virtualization (nested VMs, `/dev/kvm`, minikube
+or kind clusters), `lima/` holds a minimal Fedora Lima VM template that
+boots a VM-native devbox: OpenCode runs inside the VM, Podman is available
+as a project tool, and `~/src`, `~/kb`, and the shared config directories
+are mounted at the same paths as on the host, so the existing worktree
+workflow carries over unchanged.
+
+See [`lima/README.md`](lima/README.md) for host prerequisites and the
+single create command.
+
+---
+
 ## Repository Structure
 
 ```text
@@ -507,6 +524,12 @@ for exact literal matches.
 │   ├── devbox-entry.sh        # Devbox container entrypoint
 │   └── tool-versions.json     # Canonical image and CI tool versions
 ├── devbox                     # Main launcher script
+├── lima/
+│   ├── devbox.yaml            # Lima VM template (VM-native devbox)
+│   ├── provision-system.sh    # Root VM provisioning (idempotent)
+│   ├── provision-user.sh      # User VM provisioning (idempotent)
+│   ├── probe-readiness.sh     # VM readiness probe
+│   └── README.md              # VM host setup and usage docs
 ├── scripts/
 │   ├── fast-check.sh          # Fast lint + unit test validation
 │   ├── validate_tool_versions.py # Version consumer consistency check

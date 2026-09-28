@@ -13,6 +13,9 @@ _VALIDATOR_INPUTS = [
     ".pre-commit-config.yaml",
     "pyproject.toml",
     "uv.lock",
+    "lima/provision-system.sh",
+    "lima/provision-user.sh",
+    "lima/probe-readiness.sh",
 ]
 
 
@@ -182,3 +185,87 @@ def test_validator_flags_unknown_manifest_field(repo_root: Path, tmp_path: Path)
     errors = validate_tool_versions(copy_root)
 
     assert any("ast_grep" in error and "unknown field" in error for error in errors)
+
+
+@pytest.mark.unit
+def test_manifest_declares_lima_consumers(repo_root: Path):
+    manifest = json.loads((repo_root / "container" / "tool-versions.json").read_text())
+
+    for tool in ("opencode", "uv", "limactl"):
+        consumers = manifest["tools"][tool]["consumers"]
+        assert consumers.get("lima") is True, tool
+
+
+@pytest.mark.unit
+def test_tool_version_validator_reports_lima_pin_drift(repo_root: Path, tmp_path: Path):
+    copy_root = tmp_path / "repo"
+    _copy_validator_inputs(repo_root, copy_root)
+
+    script = copy_root / "lima" / "provision-system.sh"
+    script.write_text(
+        script.read_text().replace(
+            'OPENCODE_VERSION="2.0.16"', 'OPENCODE_VERSION="2.0.15"', 1
+        )
+    )
+
+    errors = validate_tool_versions(copy_root)
+
+    assert any("pin for 'opencode'" in error and "2.0.15" in error for error in errors)
+
+
+@pytest.mark.unit
+def test_tool_version_validator_reports_missing_lima_pin(
+    repo_root: Path, tmp_path: Path
+):
+    copy_root = tmp_path / "repo"
+    _copy_validator_inputs(repo_root, copy_root)
+
+    script = copy_root / "lima" / "provision-system.sh"
+    script.write_text(
+        "\n".join(
+            line
+            for line in script.read_text().splitlines()
+            if not line.startswith("LIMACTL_VERSION=")
+        )
+        + "\n"
+    )
+
+    errors = validate_tool_versions(copy_root)
+
+    assert any("does not pin 'limactl'" in error for error in errors)
+
+
+@pytest.mark.unit
+def test_tool_version_validator_rejects_undeclared_lima_pin(
+    repo_root: Path, tmp_path: Path
+):
+    copy_root = tmp_path / "repo"
+    _copy_validator_inputs(repo_root, copy_root)
+
+    script = copy_root / "lima" / "provision-user.sh"
+    script.write_text(script.read_text() + 'TOTALLY_NEW_TOOL_VERSION="1.2.3"\n')
+
+    errors = validate_tool_versions(copy_root)
+
+    assert any("totally_new_tool" in error for error in errors)
+
+
+@pytest.mark.unit
+def test_tool_version_validator_checks_lima_renovate_metadata(
+    repo_root: Path, tmp_path: Path
+):
+    copy_root = tmp_path / "repo"
+    _copy_validator_inputs(repo_root, copy_root)
+
+    script = copy_root / "lima" / "provision-system.sh"
+    script.write_text(
+        script.read_text().replace(
+            "# renovate: datasource=github-releases depName=lima-vm/lima",
+            "# renovate: datasource=github-releases depName=wrong/tool",
+            1,
+        )
+    )
+
+    errors = validate_tool_versions(copy_root)
+
+    assert any("renovate" in error and "limactl" in error for error in errors)

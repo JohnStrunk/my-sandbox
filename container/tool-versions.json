@@ -23,7 +23,8 @@
       "datasource": "github-releases",
       "depName": "astral-sh/uv",
       "consumers": {
-        "docker": true
+        "docker": true,
+        "lima": true
       }
     },
     "markdownlint_cli2": {
@@ -57,7 +58,16 @@
       "datasource": "npm",
       "depName": "@opencode/cli",
       "consumers": {
-        "docker": true
+        "docker": true,
+        "lima": true
+      }
+    },
+    "limactl": {
+      "version": "2.2.0",
+      "datasource": "github-releases",
+      "depName": "lima-vm/lima",
+      "consumers": {
+        "lima": true
       }
     },
     "github_mcp_server": {
