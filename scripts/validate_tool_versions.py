@@ -434,7 +434,9 @@ def _check_lima_consumers(
     if not scripts:
         return
     pins = _lima_pins(scripts)
-    combined_text = "\n".join(scripts.values())
+    # Active (non-comment) lines only, so a digest buried in a comment
+    # cannot satisfy the checksum containment check below.
+    combined_text = "\n".join(_active_lines(text) for text in scripts.values())
 
     declared = {
         name
@@ -467,8 +469,10 @@ def _check_lima_consumers(
                 "'# renovate: datasource=... depName=...' comment matching "
                 "the manifest"
             )
-        # Release checksums declared in the manifest must be embedded (and
-        # verified) by the provisioning scripts, not just the manifest.
+        # Release checksums declared in the manifest must be embedded in
+        # active script code (a comment-only digest verifies nothing);
+        # provision-system.sh checks its download against the embedded
+        # digests with sha256sum -c.
         checksums = spec.get("checksums")
         if isinstance(checksums, dict):
             for arch, digest in sorted(checksums.items()):

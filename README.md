@@ -806,10 +806,13 @@ consumer updates so a version change remains synchronized.
 
 Some entries also pin release-provenance metadata that Renovate cannot
 recompute: `ast_grep` carries per-platform release checksums and the official
-agent-skill archive hash, while `github_mcp_server` carries per-platform
-release checksums. Every such entry declares a
+agent-skill archive hash, while `github_mcp_server` and `limactl` carry
+per-platform release checksums. Every such entry declares a
 `provenance.url_templates` block mapping each checksummed field to the asset
-that must hash to it, and the Dockerfile must read exactly those fields.
+that must hash to it. Each installing consumer verifies exactly those fields:
+the Dockerfile reads them for `docker` consumers, and the Lima provisioning
+scripts embed them for `lima` consumers (`scripts/validate_tool_versions.py`
+keeps both in sync).
 
 Verify the pinned digests against upstream (this runs in CI, so a version-only
 bump fails fast rather than at image-build time), or refresh the whole unit in
@@ -821,11 +824,12 @@ python3 scripts/verify_provenance.py --update  # recompute and rewrite digests
 ```
 
 The detect-secrets hook uses `scripts/detect_secrets_filters.py` to ignore only
-the intentional SHA-256 values inside the manifest's `checksums` objects. The
-manifest is still scanned for every other detector and every other field, so a
-real secret must not be added to the checksum metadata. After changing a
-version or checksum, run the supported refresh and validation workflow without
-editing `.secrets.baseline`:
+the intentional SHA-256 values inside the manifest's `checksums` objects and
+the copies of those digests embedded in `lima/*.sh`. The manifest is still
+scanned for every other detector and every other field, so a real secret must
+not be added to the checksum metadata. After changing a version or checksum,
+run the supported refresh and validation workflow without editing
+`.secrets.baseline`:
 
 ```shell
 python3 scripts/verify_provenance.py --update

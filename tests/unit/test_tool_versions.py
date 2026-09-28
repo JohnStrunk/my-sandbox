@@ -371,14 +371,16 @@ def test_validator_allows_checksums_for_non_docker_consumers(
     # Checksums only need to be read by an installing consumer. yamllint
     # is consumed by pre-commit alone, so a Dockerfile read is not
     # required for its metadata (the lima scripts play that role for
-    # lima-only tools such as limactl).
+    # lima-only tools such as limactl). A fully valid non-docker entry
+    # with checksums + provenance passes validation end to end.
     def mutate(data):
         data["tools"]["yamllint"]["checksums"] = {"amd64": "ab" * 32}
+        data["tools"]["yamllint"]["provenance"] = {
+            "url_templates": {
+                "checksums.amd64": "https://example.test/yamllint-{version}"
+            }
+        }
 
     _edit_manifest(copy_root, mutate)
 
-    errors = validate_tool_versions(copy_root)
-
-    assert not any(
-        "yamllint" in error and "never reads it" in error for error in errors
-    )
+    assert validate_tool_versions(copy_root) == []
