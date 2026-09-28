@@ -95,10 +95,14 @@ The first boot downloads the Fedora 44 cloud image, installs packages,
 and runs the readiness probe; expect several minutes. Subsequent starts
 are much faster (provisioning is idempotent and re-runs on every start).
 
-**Note:** Lima embeds the template and its `provision`/`probes` scripts
-into the instance at create time. Later changes to `lima/*.sh` or
-`lima/devbox.yaml` do **not** propagate to an existing instance; recreate
-it to pick them up (see [Recreating the VM](#recreating-the-vm)).
+**Note:** Lima embeds the template and its provisioning scripts into the
+instance at create time. Readiness probes must be inline
+`probes[].script` entries with a `#!` line; unlike provisioning, a local
+`probes[].file` path is treated as a URL locator. The inline script is
+kept in sync with `probe-readiness.sh`, and a unit test checks the copy.
+Later changes to `lima/*.sh` or `lima/devbox.yaml` do **not** propagate to
+an existing instance; recreate it to pick them up (see
+[Recreating the VM](#recreating-the-vm)).
 
 ## Using the VM
 
