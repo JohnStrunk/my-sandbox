@@ -91,7 +91,7 @@ fi
 # scripts/validate_tool_versions.py keeps this pin in sync with the
 # manifest, and Renovate keeps both current.
 # renovate: datasource=github-releases depName=astral-sh/uv
-UV_VERSION="0.12.16"
+UV_VERSION="0.12.17"
 installed_uv="$("$HOME/.local/bin/uv" --version 2>/dev/null | awk '{print $2}' || true)"
 if [ "$installed_uv" != "$UV_VERSION" ]; then
   curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | sh
