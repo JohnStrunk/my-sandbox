@@ -190,3 +190,16 @@ def test_system_script_adds_user_to_kvm_group(repo_root: Path):
 
     assert 'DEVBOX_USER="{{.User}}"' in system_script
     assert 'usermod --append --groups kvm "$DEVBOX_USER"' in system_script
+
+
+@pytest.mark.unit
+def test_system_script_installs_qemu_img_for_nested_lima(repo_root: Path):
+    system_script = _script(repo_root, "provision-system.sh")
+    match = re.search(
+        r"^packages=\(\n(.*?)^\)",
+        system_script,
+        re.DOTALL | re.MULTILINE,
+    )
+
+    assert match
+    assert re.search(r"^\s*qemu-img\s+#", match.group(1), re.MULTILINE)

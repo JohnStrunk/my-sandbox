@@ -50,8 +50,9 @@ images:
     arch: "aarch64"
     digest: "sha256:55c60a3b80d3616a08705afd0459e75fe9f03c54aba7a46e4002a41a72fa0d5b"
 
-# 9p is Lima's Linux-host default and needs no extra guest packages.
-# virtiofs is evaluated separately (issue #268).
+# Keep the minimal bootstrap on Lima's Linux-host 9p default. Issue #268 found
+# stacked 9p unsuitable for large L2 trees and a conditional virtiofs
+# recommendation for the full template; see lima/directory-sharing-benchmark.md.
 mountType: "9p"
 
 # Static same-path mounts. Never mount all of $HOME: only the paths the
