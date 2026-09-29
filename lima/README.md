@@ -36,7 +36,7 @@ sessions can run _inside_ the target environment.
 2. **QEMU and UEFI firmware** (Lima's qemu driver does not bundle them):
 
    ```shell
-   sudo dnf install -y qemu-kvm edk2-ovmf
+   sudo dnf install -y qemu-kvm qemu-img edk2-ovmf
    ```
 
 3. **`/dev/kvm` access**: add yourself to the `kvm` group
@@ -258,8 +258,8 @@ load-once behavior were not validated.
   provisioning installs Podman and its networking/storage stack.
 - **OpenCode** (pinned from `container/tool-versions.json`), **git**,
   **gh**, **uv** (pinned), **jq**, **Node.js/npm**.
-- **limactl** (pinned) plus `qemu-kvm`/`edk2-ovmf` inside the guest, for
-  nested L2 VMs.
+- **limactl** (pinned) plus `qemu-kvm`, `qemu-img`, and `edk2-ovmf` inside
+  the guest, for nested L2 VMs.
 - Git configured for GitHub over HTTPS (SSH remotes rewritten, `gh` as
   the credential helper), identity seeded once from the host.
 
@@ -284,10 +284,14 @@ sync with `container/tool-versions.json` by
   (skeleton + ownership). Same-path semantics are preserved with
   symlinks instead.
 
+The completed directory-sharing evaluation and conditional virtiofs
+recommendation from
+[issue #268](https://github.com/JohnStrunk/my-sandbox/issues/268)
+are recorded in
+[directory-sharing-benchmark.md](directory-sharing-benchmark.md).
+
 ## Deferred
 
-- 9p vs virtiofs mount performance:
-  [issue #268](https://github.com/JohnStrunk/my-sandbox/issues/268)
 - OpenCode single-instance validation (host + VM sharing config/data):
   [issue #269](https://github.com/JohnStrunk/my-sandbox/issues/269)
 - Full toolchain parity with the container devbox:

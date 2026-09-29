@@ -12,7 +12,7 @@ DEVBOX_USER="{{.User}}"
 
 # --- Fedora packages -------------------------------------------------------
 # Mirrors the container devbox (container/Dockerfile) plus the nested-
-# virtualization pieces (qemu-kvm, edk2-ovmf for L2 UEFI firmware).
+# virtualization pieces (qemu-kvm, qemu-img, and edk2-ovmf for L2 UEFI).
 # The rpm -q guards make re-runs skip dnf entirely when nothing changed.
 packages=(
   aardvark-dns        # nested Podman container-name DNS
@@ -29,6 +29,7 @@ packages=(
   passt               # nested Podman default rootless network mode (pasta)
   podman
   qemu-kvm            # nested (L2) VMs
+  qemu-img            # Lima needs this to create and inspect L2 disks
   shadow-utils-subid  # newuidmap/newgidmap for rootless Podman
   slirp4netns
 )
