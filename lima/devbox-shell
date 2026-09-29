@@ -1,0 +1,147 @@
+#!/usr/bin/env bash
+# Host-side entry point for a shell in the devbox Lima VM. Lima does not pass
+# host environment variables into a guest shell by default. This wrapper
+# forwards only the provider/integration variables used by ../devbox.
+set -euo pipefail
+
+instance="${DEVBOX_LIMA_INSTANCE:-devbox}"
+
+if ! command -v limactl >/dev/null 2>&1; then
+  echo "devbox: limactl is not installed or not on PATH" >&2
+  exit 127
+fi
+
+# Keep this set aligned with the environment values that the container devbox
+# passes to `podman run`. The unit test compares this list with ../devbox, so
+# adding a provider there requires updating the Lima passthrough too.
+DEVBOX_ENV_VARS=(
+  GEMINI_API_KEY
+  GOOGLE_GENERATIVE_AI_API_KEY
+  GH_TOKEN
+  GITHUB_TOKEN
+  CONTEXT7_API_KEY
+  TAVILY_API_KEY
+  IGLOO_MCP_COMMUNITY
+  IGLOO_MCP_COMMUNITY_KEY
+  IGLOO_MCP_APP_PASS
+  IGLOO_MCP_APP_ID
+  IGLOO_MCP_USERNAME
+  IGLOO_MCP_PASSWORD
+  GITLAB_HOST
+  GITLAB_TOKEN
+  LITEMAAS_API_KEY
+  OPENAI_API_KEY
+  OCTO_OPEN_URL
+  OCTO_OPEN_KEY
+  ANTHROPIC_API_KEY
+  ANTHROPIC_BASE_URL
+  PRICETAG_ANTHROPIC_URL
+  PRICETAG_HOSTED_URL
+  PRICETAG_OPENAI_URL
+  PRICETAG_API_KEY
+  GOOGLE_CLOUD_PROJECT
+  VERTEX_LOCATION
+)
+
+unset_if_empty() {
+  local name
+  for name in "$@"; do
+    if [[ -z "${!name:-}" ]]; then
+      unset "$name"
+    fi
+  done
+}
+
+# Mirror the container devbox's provider aliases and conditional forwarding.
+# This keeps values in the Lima guest consistent even when the host exports
+# only one side of an alias or an incomplete credential group.
+if [[ -n "${GEMINI_API_KEY:-}" ]]; then
+  export GOOGLE_GENERATIVE_AI_API_KEY="$GEMINI_API_KEY"
+else
+  unset GOOGLE_GENERATIVE_AI_API_KEY
+fi
+
+github_token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+if [[ -z "$github_token" ]] && command -v gh >/dev/null 2>&1; then
+  github_token="$(gh auth token 2>/dev/null || true)"
+fi
+if [[ -n "$github_token" ]]; then
+  export GH_TOKEN="$github_token"
+  export GITHUB_TOKEN="$github_token"
+else
+  unset GH_TOKEN GITHUB_TOKEN
+fi
+
+unset_if_empty \
+  CONTEXT7_API_KEY \
+  TAVILY_API_KEY \
+  LITEMAAS_API_KEY \
+  OPENAI_API_KEY \
+  ANTHROPIC_API_KEY \
+  ANTHROPIC_BASE_URL
+
+if [[ -n "${GITLAB_TOKEN:-}" ]]; then
+  export GITLAB_HOST="${GITLAB_HOST:-gitlab.com}"
+else
+  unset GITLAB_HOST GITLAB_TOKEN
+fi
+
+octo_open_complete=true
+if [[ -z "${OCTO_OPEN_URL:-}" || -z "${OCTO_OPEN_KEY:-}" ]]; then
+  octo_open_complete=false
+fi
+if [[ "$octo_open_complete" != true ]]; then
+  unset OCTO_OPEN_URL OCTO_OPEN_KEY
+fi
+
+igloo_env_vars=(
+  IGLOO_MCP_COMMUNITY
+  IGLOO_MCP_COMMUNITY_KEY
+  IGLOO_MCP_APP_PASS
+  IGLOO_MCP_APP_ID
+  IGLOO_MCP_USERNAME
+  IGLOO_MCP_PASSWORD
+)
+igloo_complete=true
+for name in "${igloo_env_vars[@]}"; do
+  if [[ -z "${!name:-}" ]]; then
+    igloo_complete=false
+  fi
+done
+if [[ "$igloo_complete" != true ]]; then
+  unset "${igloo_env_vars[@]}"
+fi
+
+pricetag_has_endpoint=false
+for name in \
+  PRICETAG_ANTHROPIC_URL \
+  PRICETAG_HOSTED_URL \
+  PRICETAG_OPENAI_URL; do
+  if [[ -n "${!name:-}" ]]; then
+    pricetag_has_endpoint=true
+  else
+    unset "$name"
+  fi
+done
+if [[ -z "${PRICETAG_API_KEY:-}" || "$pricetag_has_endpoint" != true ]]; then
+  unset \
+    PRICETAG_API_KEY \
+    PRICETAG_ANTHROPIC_URL \
+    PRICETAG_HOSTED_URL \
+    PRICETAG_OPENAI_URL
+fi
+
+if [[ -n "${GOOGLE_CLOUD_PROJECT:-}" && -n "${VERTEX_LOCATION:-}" ]]; then
+  :
+else
+  unset GOOGLE_CLOUD_PROJECT VERTEX_LOCATION
+fi
+
+# A strict block-all plus allowlist avoids leaking unrelated host variables
+# into the VM while explicitly permitting provider variables that Lima's
+# default shell environment filter normally blocks (for example *_API_KEY).
+allowlist="$(IFS=,; printf '%s' "${DEVBOX_ENV_VARS[*]}")"
+export LIMA_SHELLENV_BLOCK='*'
+export LIMA_SHELLENV_ALLOW="$allowlist"
+
+exec limactl shell --start --preserve-env "$instance" "$@"

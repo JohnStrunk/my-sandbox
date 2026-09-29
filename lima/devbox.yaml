@@ -189,6 +189,6 @@ probes:
 
 message: |
   # The devbox VM is ready.
-  # Log in:         limactl shell devbox
+  # Log in with provider env: ~/src/my-sandbox/lima/devbox-shell (on the host)
   # Agent session:  cd ~/src/my-sandbox && opencode   (inside the VM)
   # Full docs:      lima/README.md in the my-sandbox repository.
