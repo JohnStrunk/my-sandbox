@@ -210,10 +210,43 @@ both sides (the host-side `uv` and the VM-side `uv` will fight over it
 and can corrupt it). Pick one side per checkout:
 
 - Use a given checkout from the host **or** from the VM, not both.
-- Or keep the environment off the shared tree with
-  `UV_PROJECT_ENVIRONMENT` (for example
-  `export UV_PROJECT_ENVIRONMENT="$HOME/.venvs/my-sandbox"`, which is
-  VM-local since the guest home is not mounted).
+- **VM default:** keep the environment off the shared tree with
+  `UV_PROJECT_ENVIRONMENT`. Use a unique VM-local path per checkout or
+  worktree (the guest home is not mounted):
+
+  ```shell
+  export UV_PROJECT_ENVIRONMENT="$HOME/.venvs/my-sandbox-issue269"
+  uv sync --extra test
+  uv run --extra test pytest -m unit
+  ```
+
+  Issue #269 validation on 2026-09-29 passed all 317 unit tests with both
+  placements. The shared 9p run took 165.73s; its cache/resource conditions
+  were not controlled. The VM-local warm-cache run took 99.49s. The initial
+  shared install also fell back from hardlinks to copies. These timings are
+  indicative rather than a controlled benchmark, but support the VM-local
+  default. The test checkout itself remains on the shared mount.
+
+### OpenCode data-sharing checkpoint (#269)
+
+On 2026-09-29, one isolated OpenCode 2.0.16 service demonstrated CLI/API
+visibility of sessions from two project directories under `~/src`;
+`opencode session list` in each project showed its session, and the session
+metadata API returned the corresponding project location. Conversation
+resume was not tested. A separate 10-minute soak used two test services with
+VM-local state directories and one disposable shared 9p data directory: they
+created 465 and 518 sessions, saw each other's project sessions, and the
+database passed `PRAGMA integrity_check` with no SQLite lock/corruption or
+service-registration replacement errors. No production session data was used.
+
+This is guest-to-guest evidence only; it does **not** prove host-to-VM 9p
+coherency. The host OpenCode process and CodeBurn could not be exercised from
+the guest, so keep host-shared session data provisional until a host writer
+and host CodeBurn read are verified. The minimal guest also has no MCP servers
+configured and no Semble/GitHub MCP binaries: GitHub MCP is superseded by the
+`gh` decision in #275, while Semble/runtime validation remains for #270/#272.
+The TUI session-switching UX, model-backed conversation resume, and MCP
+load-once behavior were not validated.
 
 ## What is inside
 
@@ -267,11 +300,10 @@ passes, verify from inside the VM (opened with
 `~/src/my-sandbox/lima/devbox-shell`):
 
 - [ ] `cd ~/src/my-sandbox && git status` sees the host checkout.
-- [ ] Create a worktree, `uv sync --extra test`, run
-      `uv run --extra test pytest -m unit` — tests pass. If the host
-      side already has a `.venv` in that worktree, delete it or point
-      `UV_PROJECT_ENVIRONMENT` at a VM-local path first (see the venv
-      caveat above).
+- [ ] Create a worktree and set `UV_PROJECT_ENVIRONMENT` to a unique
+      VM-local path before `uv sync --extra test`; run
+      `uv run --extra test pytest -m unit` — tests pass. Do not reuse that
+      checkout's venv from the host (see the venv caveat above).
 - [ ] Commit and push via `gh`/git from inside the VM.
 - [ ] Edits made in the VM are visible on the host, owned by your uid.
 - [ ] `~/kb/kbase.py sync` round-trips (knowledge base usable).
