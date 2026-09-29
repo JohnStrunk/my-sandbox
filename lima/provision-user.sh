@@ -111,12 +111,7 @@ else
   echo "devbox: ${skill_src} not found; skipping devbox-tools skill" >&2
 fi
 
-# --- Warm the OpenCode background service --------------------------------------------
-# OpenCode's model catalog lives behind its background service. Load it
-# here so the first interactive session starts immediately. The service's
-# state is VM-local (~/.local/state/opencode); the host keeps its own.
-# Absolute path, like probe-readiness.sh: this script also runs through a
-# non-login shell.
-if ! timeout 30 /usr/local/bin/opencode models >/dev/null 2>&1; then
-  echo "devbox: OpenCode model catalog warm-up failed; continuing" >&2
-fi
+# Do not start OpenCode during provisioning. Lima provisioning does not have
+# the host's provider environment; starting the managed OpenCode service here
+# would leave it without those credentials. The first OpenCode command from a
+# shell opened with lima/devbox-shell inherits the forwarded environment.

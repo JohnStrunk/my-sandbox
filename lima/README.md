@@ -107,8 +107,22 @@ an existing instance; recreate it to pick them up (see
 ## Using the VM
 
 ```shell
-limactl shell devbox              # log in (login shell, ~ = guest home)
+~/src/my-sandbox/lima/devbox-shell # log in with devbox provider env
 ```
+
+Use this host-side helper instead of plain `limactl shell` when OpenCode
+needs provider credentials. It uses Lima's `--preserve-env` with a strict
+allowlist matching the environment variables passed by the container
+[`devbox`](../devbox); unrelated host environment variables are not forwarded.
+It also mirrors the container launcher's Gemini/GitHub aliases and the
+conditional credential groups. The helper starts a stopped VM if needed.
+
+OpenCode's managed background service inherits these variables when it
+starts. Provisioning intentionally does not pre-start the service without
+credentials; the first OpenCode command in the forwarded shell starts it.
+If you previously started OpenCode from a plain `limactl shell`, stop that
+service once (`opencode service stop` from the VM) before retrying with the
+helper.
 
 Inside the VM the guest home (`/home/<user>.guest`) is VM-local, with
 symlinks for the shared paths, so everything works from `~`:
@@ -249,7 +263,8 @@ sync with `container/tool-versions.json` by
 ## Acceptance checklist
 
 After the one-time `limactl start` succeeds and the readiness probe
-passes, verify from inside the VM (`limactl shell devbox`):
+passes, verify from inside the VM (opened with
+`~/src/my-sandbox/lima/devbox-shell`):
 
 - [ ] `cd ~/src/my-sandbox && git status` sees the host checkout.
 - [ ] Create a worktree, `uv sync --extra test`, run
