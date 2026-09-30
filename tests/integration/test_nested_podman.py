@@ -4,7 +4,7 @@ import pytest
 
 from tests.conftest import (
     devbox_container_name,
-    run_bash_script,
+    run_container_devbox,
     run_podman_isolated,
     unique_workspace_dir,
 )
@@ -16,7 +16,7 @@ def _check_nested_podman_supported(
     test_dir = unique_workspace_dir(tmp_path, "check_nested")
     container_name = devbox_container_name(test_dir)
     try:
-        res = run_bash_script(
+        res = run_container_devbox(
             devbox_path,
             ["podman", "run", "--rm", "docker.io/library/alpine:latest", "true"],
             env=env,
@@ -57,7 +57,7 @@ def test_nested_podman_run(
 
     try:
         # Run nested podman command inside devbox
-        res = run_bash_script(
+        res = run_container_devbox(
             devbox_path,
             [
                 "podman",
@@ -103,7 +103,7 @@ CMD ["cat", "/msg.txt"]
 
     try:
         # Build nested image
-        build_res = run_bash_script(
+        build_res = run_container_devbox(
             devbox_path,
             ["podman", "build", "-t", "nested-test:v1", "."],
             env=isolated_env,
@@ -116,7 +116,7 @@ CMD ["cat", "/msg.txt"]
         )
 
         # Run the built nested image
-        run_res = run_bash_script(
+        run_res = run_container_devbox(
             devbox_path,
             ["podman", "run", "--rm", "nested-test:v1"],
             env=isolated_env,

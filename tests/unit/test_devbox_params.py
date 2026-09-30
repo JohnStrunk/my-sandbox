@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.conftest import CREDENTIAL_ENV_VARS, run_bash_script
+from tests.conftest import CREDENTIAL_ENV_VARS, run_container_devbox
 
 SEMBLE_MCP = {
     "type": "local",
@@ -353,7 +353,7 @@ def test_devbox_gemini_env(devbox_path: Path, mock_podman_env, tmp_path: Path):
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0
 
     calls = parse_podman_calls(log_file)
@@ -375,7 +375,7 @@ def test_devbox_records_context_fingerprint_on_container(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0
 
     calls = parse_podman_calls(log_file)
@@ -411,7 +411,7 @@ def test_devbox_consumer_uses_shared_latest_tag(
     project = tmp_path / "consumer-project"
     project.mkdir()
 
-    result = run_bash_script(devbox_path, ["true"], env=env, cwd=project)
+    result = run_container_devbox(devbox_path, ["true"], env=env, cwd=project)
 
     assert result.returncode == 0, result.stderr
     calls = parse_podman_calls(log_file)
@@ -435,7 +435,7 @@ def test_devbox_reuses_context_image(
     project = tmp_path / "consumer-project"
     project.mkdir()
 
-    result = run_bash_script(devbox_path, ["true"], env=env, cwd=project)
+    result = run_container_devbox(devbox_path, ["true"], env=env, cwd=project)
 
     assert result.returncode == 0, result.stderr
     calls = parse_podman_calls(log_file)
@@ -478,7 +478,7 @@ def test_devbox_worktrees_use_distinct_images_and_share_the_build_lock(
     with ThreadPoolExecutor(max_workers=2) as executor:
         futures = [
             executor.submit(
-                run_bash_script,
+                run_container_devbox,
                 launcher,
                 ["true"],
                 env=env,
@@ -524,7 +524,7 @@ def test_devbox_lifecycle_lock_order_allows_test_child_to_remove_container(
         fcntl.flock(parent_lock, fcntl.LOCK_EX)
         with ThreadPoolExecutor(max_workers=1) as executor:
             regular_launcher = executor.submit(
-                run_bash_script,
+                run_container_devbox,
                 devbox_path,
                 ["--remove"],
                 env=env,
@@ -538,7 +538,7 @@ def test_devbox_lifecycle_lock_order_allows_test_child_to_remove_container(
 
             test_child_env = env.copy()
             test_child_env["MY_SANDBOX_PODMAN_RUNTIME_LOCK_HELD"] = "1"
-            test_child = run_bash_script(
+            test_child = run_container_devbox(
                 devbox_path,
                 ["--remove"],
                 env=test_child_env,
@@ -561,7 +561,7 @@ def test_devbox_litemaas_env(devbox_path: Path, mock_podman_env, tmp_path: Path)
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0
 
     calls = parse_podman_calls(log_file)
@@ -578,7 +578,7 @@ def test_devbox_does_not_forward_host_credentials(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0
 
     logged = log_file.read_text()
@@ -600,7 +600,7 @@ def test_devbox_launcher_uses_isolated_home(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0
 
     calls = parse_podman_calls(log_file)
@@ -638,7 +638,7 @@ def test_devbox_github_mcp_config_from_token(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0
 
     calls = parse_podman_calls(log_file)
@@ -721,7 +721,7 @@ def test_devbox_context7_mcp_config_from_api_key(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0
 
     calls = parse_podman_calls(log_file)
@@ -833,7 +833,7 @@ def test_devbox_does_not_add_github_mcp_without_credentials(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0
 
     calls = parse_podman_calls(log_file)
@@ -922,7 +922,7 @@ def test_devbox_the_source_mcp_config(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0
 
     calls = parse_podman_calls(log_file)
@@ -1038,7 +1038,7 @@ def test_devbox_merges_mcp_configurations(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0
 
     calls = parse_podman_calls(log_file)
@@ -1072,7 +1072,7 @@ def test_devbox_gitlab_env(devbox_path: Path, mock_podman_env, tmp_path: Path):
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0
 
     calls = parse_podman_calls(log_file)
@@ -1108,7 +1108,7 @@ def test_devbox_anthropic_env(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0
 
     calls = parse_podman_calls(log_file)
@@ -1134,7 +1134,7 @@ def test_devbox_pricetag_env_and_provider_config(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0
 
     calls = parse_podman_calls(log_file)
@@ -1227,7 +1227,7 @@ def test_devbox_octo_open_env_and_provider_config(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0
 
     calls = parse_podman_calls(log_file)
@@ -1299,7 +1299,7 @@ def test_devbox_does_not_add_octo_open_without_both_credentials(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0
 
     calls = parse_podman_calls(log_file)
@@ -1328,7 +1328,7 @@ def test_devbox_pricetag_builtin_provider_override_does_not_discover_models(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0
     assert "could not discover PriceTag" not in res.stderr
 
@@ -1386,7 +1386,7 @@ def test_devbox_pricetag_override_ignores_direct_provider_credential(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0
 
     calls = parse_podman_calls(log_file)
@@ -1434,7 +1434,7 @@ def test_devbox_does_not_add_pricetag_without_both_credentials(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0
 
     calls = parse_podman_calls(log_file)
@@ -1461,7 +1461,7 @@ def test_devbox_vertex_env(devbox_path: Path, mock_podman_env, tmp_path: Path):
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0
 
     calls = parse_podman_calls(log_file)
@@ -1493,7 +1493,7 @@ def test_devbox_config_volume_mounts(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0
 
     calls = parse_podman_calls(log_file)
@@ -1530,7 +1530,7 @@ def test_devbox_does_not_mount_missing_global_agents_directory(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0
 
     calls = parse_podman_calls(log_file)
@@ -1557,7 +1557,7 @@ def test_devbox_opencode_data_volume_ignores_xdg_data_home(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0
 
     calls = parse_podman_calls(log_file)
@@ -1621,7 +1621,7 @@ def test_devbox_opencode_state_volume_is_per_container(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0
     assert "Seeding per-container OpenCode state" in res.stdout
 
@@ -1701,7 +1701,7 @@ def test_devbox_opencode_state_volume_without_host_state(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0
     assert "Seeding per-container OpenCode state" not in res.stdout
 
@@ -1736,7 +1736,7 @@ def test_devbox_opencode_state_existing_dir_not_reseeded(
     (per_container / "model.json").write_text('{"recent":["container-pick"]}')
     (per_container / "container-only.json").write_text("{}")
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0
     assert "Seeding per-container OpenCode state" not in res.stdout
 
@@ -1772,7 +1772,7 @@ def test_devbox_opencode_state_seed_failure_is_non_fatal(
     # (the seed copy cannot create its destination directory).
     per_container.write_text("partial state")
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0
     assert "failed to seed per-container OpenCode state" in res.stdout + res.stderr
 
@@ -1811,7 +1811,7 @@ def test_devbox_opencode_state_partial_copy_removed(
     per_container = fake_home / ".local" / "state" / "devbox" / "workdir"
 
     try:
-        res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+        res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
         assert res.returncode == 0
         assert "failed to seed per-container OpenCode state" in res.stdout + res.stderr
 
@@ -1846,7 +1846,7 @@ def test_devbox_persistent_cache_volumes(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0
 
     calls = parse_podman_calls(log_file)
@@ -1886,7 +1886,7 @@ def test_devbox_persistent_cache_volume_respects_xdg_cache_home(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0
 
     calls = parse_podman_calls(log_file)
@@ -1944,7 +1944,7 @@ def test_devbox_rewrites_github_ssh_remotes_to_https(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0
     assert host_gitconfig.read_bytes() == host_config_before
 
@@ -2052,7 +2052,7 @@ def test_devbox_configures_git_identity_from_host_config(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0
     assert "not configured" not in res.stderr
 
@@ -2075,7 +2075,7 @@ def test_devbox_warns_when_no_git_identity_available(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0
     assert "not configured" in res.stderr
     assert 'git config --global user.name "Your Name"' in res.stderr
@@ -2108,7 +2108,7 @@ def test_devbox_preserves_existing_container_git_identity(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0
     assert "not configured" not in res.stderr
 
@@ -2129,7 +2129,7 @@ def test_devbox_runs_gh_auth_setup_git_when_token_available(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0
 
     calls = parse_podman_calls(log_file)
@@ -2151,7 +2151,7 @@ def test_devbox_warns_when_no_github_token_for_setup_git(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0
     assert "authenticated Git operations against github.com" in res.stderr
     assert "gh auth login && gh auth setup-git" in res.stderr
@@ -2174,7 +2174,7 @@ def test_devbox_warns_when_github_https_rewrite_fails(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0
     assert res.stderr.count("Failed to configure GitHub HTTPS URL rewrite") == 2
 
@@ -2190,7 +2190,7 @@ def test_devbox_warns_when_gh_auth_setup_git_fails(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0
     assert "'gh auth setup-git' failed" in res.stderr
 
@@ -2224,7 +2224,7 @@ def test_devbox_survives_git_config_set_failure(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0, res.stderr
     assert "Failed to set Git user.name" in res.stderr
     assert "Failed to set Git user.email" in res.stderr
@@ -2240,7 +2240,7 @@ def test_devbox_requests_nested_bridge_sysctls(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0
 
     calls = parse_podman_calls(log_file)
@@ -2290,7 +2290,7 @@ def test_devbox_retries_without_nested_bridge_sysctls_on_rejection(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0, res.stderr
     assert "retrying without them" in res.stderr
     assert "user-defined bridge networks" in res.stderr
@@ -2318,7 +2318,7 @@ def test_devbox_does_not_mask_unrelated_container_create_failure(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode != 0
     assert "image create failed" in res.stderr
 
@@ -2337,7 +2337,7 @@ def test_devbox_does_not_treat_unrelated_sysctl_error_as_fallback(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode != 0
     assert "storage setup failed" in res.stderr
     assert "retrying without them" not in res.stderr
@@ -2357,7 +2357,7 @@ def test_devbox_retries_without_sysctls_on_ipv6_sysctl_rejection(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0
     assert "retrying without them" in res.stderr
 
@@ -2377,7 +2377,7 @@ def test_devbox_retries_without_sysctls_on_ipv6_forwarding_rejection(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0
     assert "retrying without them" in res.stderr
 
@@ -2397,7 +2397,7 @@ def test_devbox_removes_container_when_subid_setup_fails(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode != 0
 
     calls = parse_podman_calls(log_file)
@@ -2414,7 +2414,9 @@ def test_devbox_reports_container_removal_failure(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["--recreate", "true"], env=env, cwd=run_dir)
+    res = run_container_devbox(
+        devbox_path, ["--recreate", "true"], env=env, cwd=run_dir
+    )
     assert res.returncode != 0
     assert "failed to remove container" in res.stderr
 
@@ -2428,7 +2430,7 @@ def test_devbox_reports_container_exists_probe_failure(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["--remove"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["--remove"], env=env, cwd=run_dir)
     assert res.returncode != 0
     assert "could not determine whether container" in res.stderr
 
@@ -2441,7 +2443,7 @@ def test_devbox_sets_docker_host_ready_marker_env(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0
 
     calls = parse_podman_calls(log_file)
@@ -2464,7 +2466,7 @@ def test_devbox_warns_when_docker_api_never_ready(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir, timeout=60)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir, timeout=60)
     assert res.returncode == 0, res.stderr
     assert "Docker API did not become ready" in res.stderr
 
@@ -2483,7 +2485,7 @@ def test_devbox_mounts_git_directory_for_linked_worktree(
     worktree = tmp_path / "linked-worktree"
     _run_git(["worktree", "add", "-b", "feature", str(worktree)], repo)
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=worktree)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=worktree)
     assert res.returncode == 0, res.stderr
     assert "Linked git worktree detected" in res.stdout
 
@@ -2504,7 +2506,7 @@ def test_devbox_mounts_separate_git_dir_without_commondir(
     (gitdir / "HEAD").write_text("ref: refs/heads/main\n")
     project = _write_dot_git_pointer(tmp_path, gitdir)
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=project)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=project)
     assert res.returncode == 0, res.stderr
     assert "Linked git worktree detected" in res.stdout
 
@@ -2521,7 +2523,7 @@ def test_devbox_no_extra_mount_for_normal_checkout(
     repo.mkdir()
     _init_repository(repo)
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=repo)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=repo)
     assert res.returncode == 0, res.stderr
     assert "Linked git worktree detected" not in res.stdout
 
@@ -2543,7 +2545,7 @@ def test_devbox_no_extra_mount_for_git_pointer_inside_worktree(
     project = inner.parent
     (project / ".git").write_text("gitdir: inner/.git\n")
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=project)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=project)
     assert res.returncode == 0, res.stderr
     assert "Linked git worktree detected" not in res.stdout
 
@@ -2560,7 +2562,7 @@ def test_devbox_ignores_malformed_dot_git_pointer(
     project.mkdir()
     (project / ".git").write_text("not a gitdir pointer\n")
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=project)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=project)
     assert res.returncode == 0, res.stderr
     assert "Linked git worktree detected" not in res.stdout
 
@@ -2581,7 +2583,7 @@ def test_devbox_refuses_to_mount_non_git_dir_from_dot_git_pointer(
     (outside / "id_ed25519").write_text("secret key material")
     project = _write_dot_git_pointer(tmp_path, outside)
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=project)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=project)
     assert res.returncode == 0, res.stderr
     assert "Linked git worktree detected" not in res.stdout
 
@@ -2603,7 +2605,7 @@ def test_devbox_shadows_host_venv_with_container_volume(
         "#!/nonexistent/host/python\nraise SystemExit\n"
     )
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0, res.stderr
     assert "Shadowing host .venv" in res.stdout
 
@@ -2624,7 +2626,7 @@ def test_devbox_no_venv_volume_when_host_venv_absent(
     run_dir = tmp_path / "workdir"
     run_dir.mkdir()
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0, res.stderr
     assert not (run_dir / ".venv").exists()
 
@@ -2648,7 +2650,7 @@ def test_devbox_warns_on_symlinked_host_venv(
     outside.mkdir()
     run_dir.joinpath(".venv").symlink_to(outside)
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0, res.stderr
     assert "cannot be shadowed" in res.stderr
 
@@ -2668,7 +2670,7 @@ def test_devbox_warns_on_non_directory_host_venv(
     run_dir.mkdir()
     (run_dir / ".venv").write_text("not a virtualenv\n")
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0, res.stderr
     assert "not a directory" in res.stderr
 
@@ -2691,7 +2693,7 @@ def test_devbox_warns_when_existing_container_lacks_venv_shadow(
     run_dir = tmp_path / "workdir"
     (run_dir / ".venv").mkdir(parents=True)
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0, res.stderr
     assert "does not shadow the host .venv" in res.stderr
 
@@ -2706,6 +2708,6 @@ def test_devbox_no_shadow_warning_when_container_has_venv_mount(
     run_dir = tmp_path / "workdir"
     (run_dir / ".venv").mkdir(parents=True)
 
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=run_dir)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=run_dir)
     assert res.returncode == 0, res.stderr
     assert "does not shadow the host .venv" not in res.stderr

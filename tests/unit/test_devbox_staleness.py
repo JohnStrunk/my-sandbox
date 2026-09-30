@@ -5,7 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from tests.conftest import devbox_context_fingerprint, run_bash_script
+from tests.conftest import (
+    devbox_context_fingerprint,
+    run_container_devbox,
+)
 
 
 def _expected_fingerprint(launcher: Path, context_dir: Path) -> str:
@@ -116,7 +119,7 @@ def test_devbox_warns_before_entering_stale_container(
         container_image="current-image",
         current_image="current-image",
     )
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=tmp_path)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=tmp_path)
 
     assert res.returncode == 0
     assert "is stale" in res.stderr
@@ -138,7 +141,7 @@ def test_devbox_warns_for_rebuilt_image(
         container_image="old-image",
         current_image="current-image",
     )
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=tmp_path)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=tmp_path)
 
     assert res.returncode == 0
     assert "is stale" in res.stderr
@@ -159,7 +162,7 @@ def test_devbox_does_not_warn_for_current_container(
         container_image="current-image",
         current_image="current-image",
     )
-    res = run_bash_script(devbox_path, ["true"], env=env, cwd=tmp_path)
+    res = run_container_devbox(devbox_path, ["true"], env=env, cwd=tmp_path)
 
     assert res.returncode == 0
     assert res.stderr == ""
@@ -181,13 +184,13 @@ def test_devbox_warns_when_launcher_script_changes(
         container_image="current-image",
         current_image="current-image",
     )
-    baseline = run_bash_script(launcher, ["true"], env=env, cwd=project)
+    baseline = run_container_devbox(launcher, ["true"], env=env, cwd=project)
     assert baseline.returncode == 0
     assert baseline.stderr == ""
 
     launcher.write_text(f"{launcher.read_text()}\n# mount contract changed\n")
 
-    res = run_bash_script(launcher, ["true"], env=env, cwd=project)
+    res = run_container_devbox(launcher, ["true"], env=env, cwd=project)
     assert res.returncode == 0
     assert "is stale" in res.stderr
     assert "devbox --recreate" in res.stderr
@@ -213,7 +216,7 @@ def test_devbox_warns_when_container_context_changes(
         "FROM fedora:latest\nRUN true\n"
     )
 
-    res = run_bash_script(launcher, ["true"], env=env, cwd=project)
+    res = run_container_devbox(launcher, ["true"], env=env, cwd=project)
 
     assert res.returncode == 0
     assert "is stale" in res.stderr
@@ -237,7 +240,7 @@ def test_devbox_not_stale_after_unrelated_file_edit(
     )
     (launcher.parent / "README.md").write_text("unrelated documentation edit\n")
 
-    res = run_bash_script(launcher, ["true"], env=env, cwd=project)
+    res = run_container_devbox(launcher, ["true"], env=env, cwd=project)
 
     assert res.returncode == 0
     assert res.stderr == ""
@@ -307,7 +310,7 @@ def test_devbox_warns_when_file_mode_changes_in_build_context(
     )
     dockerfile.chmod(dockerfile.stat().st_mode | stat.S_IXUSR)
 
-    result = run_bash_script(launcher, ["true"], env=env, cwd=project)
+    result = run_container_devbox(launcher, ["true"], env=env, cwd=project)
 
     assert result.returncode == 0
     assert "is stale" in result.stderr
@@ -337,7 +340,7 @@ def test_devbox_warns_when_symlink_target_changes_in_build_context(
     link.unlink()
     link.symlink_to(second_target.name)
 
-    result = run_bash_script(launcher, ["true"], env=env, cwd=project)
+    result = run_container_devbox(launcher, ["true"], env=env, cwd=project)
 
     assert result.returncode == 0
     assert "is stale" in result.stderr

@@ -5,10 +5,77 @@
 set -euo pipefail
 
 instance="${DEVBOX_LIMA_INSTANCE:-devbox}"
+workdir=""
+start_vm=true
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --workdir)
+      if [[ $# -lt 2 ]]; then
+        echo "devbox: --workdir requires a guest path" >&2
+        exit 2
+      fi
+      workdir="$2"
+      shift 2
+      ;;
+    --no-start)
+      start_vm=false
+      shift
+      ;;
+    --)
+      shift
+      break
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
 
 if ! command -v limactl >/dev/null 2>&1; then
   echo "devbox: limactl is not installed or not on PATH" >&2
   exit 127
+fi
+
+# The main launcher starts the VM under this same lock and passes --no-start.
+# Direct helper use starts while locked, then connects without --start so a
+# concurrent --stop cannot be undone after unlocking.
+if [[ "$start_vm" == true ]]; then
+  lock_root="${XDG_CACHE_HOME:-$HOME/.cache}/devbox/locks"
+  lock_file="$lock_root/lima-runtime.lock"
+  lock_fd=""
+  if ! mkdir -p "$lock_root" || ! chmod 700 "$lock_root" \
+    || ! exec {lock_fd}>"$lock_file" || ! chmod 600 "$lock_file"; then
+    echo "devbox: could not create or secure Lima lifecycle lock '$lock_file'" >&2
+    exit 1
+  fi
+  if ! flock "$lock_fd"; then
+    echo "devbox: could not acquire Lima lifecycle lock '$lock_file'" >&2
+    exit 1
+  fi
+  if ! status="$(limactl list --format '{{.Status}}' "$instance" 2>/dev/null)"; then
+    echo "devbox: could not inspect Lima instance '$instance'" >&2
+    exit 1
+  fi
+  case "$status" in
+    Running)
+      ;;
+    Stopped)
+      echo "==> Starting Lima VM '$instance'"
+      limactl start "$instance"
+      ;;
+    "")
+      echo "devbox: Lima instance '$instance' does not exist; create it before retrying" >&2
+      exit 1
+      ;;
+    *)
+      echo "devbox: cannot start Lima instance '$instance' while it is '$status'" >&2
+      exit 1
+      ;;
+  esac
+  flock -u "$lock_fd" || true
+  exec {lock_fd}>&-
+  start_vm=false
 fi
 
 # Keep this set aligned with the environment values that the container devbox
@@ -144,4 +211,8 @@ allowlist="$(IFS=,; printf '%s' "${DEVBOX_ENV_VARS[*]}")"
 export LIMA_SHELLENV_BLOCK='*'
 export LIMA_SHELLENV_ALLOW="$allowlist"
 
-exec limactl shell --start --preserve-env "$instance" "$@"
+shell_args=(shell --preserve-env)
+if [[ -n "$workdir" ]]; then
+  shell_args+=(--workdir "$workdir")
+fi
+exec limactl "${shell_args[@]}" "$instance" "$@"

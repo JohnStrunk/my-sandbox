@@ -133,15 +133,25 @@ stop/start without recreating the VM.
 ## Using the VM
 
 ```shell
-~/src/my-sandbox/lima/devbox-shell # log in with devbox provider env
+cd ~/src/my-project
+devbox                     # shell at the same project path in the VM
+devbox opencode            # start OpenCode in the current project
 ```
 
-Use this host-side helper instead of plain `limactl shell` when OpenCode
-needs provider credentials. It uses Lima's `--preserve-env` with a strict
-allowlist matching the environment variables passed by the container
-[`devbox`](../devbox); unrelated host environment variables are not forwarded.
-It also mirrors the container launcher's Gemini/GitHub aliases and the
-conditional credential groups. The helper starts a stopped VM if needed.
+The top-level [`devbox`](../devbox) launcher is VM-native by default. It
+validates that the current directory is in a mounted host path, ensures the VM
+is running, and uses Lima's `--preserve-env` with a strict credential/provider
+allowlist. Unrelated host environment variables are not forwarded. The
+allowlist mirrors the transitional container launcher's provider names and
+credential-group rules. For a low-level host-side shell, `lima/devbox-shell`
+uses the same filtered environment and starts the VM if needed.
+
+After creating and validating the VM, enable optional host-login autostart to
+avoid starting it manually after reboot:
+
+```shell
+limactl autostart enable devbox
+```
 
 OpenCode's managed background service inherits these variables when it
 starts. Provisioning intentionally does not pre-start the service without
@@ -174,8 +184,10 @@ vice versa.
 ## Stop/start
 
 ```shell
-limactl stop devbox
-limactl start devbox
+devbox --stop          # graceful stop
+devbox                 # start on demand, then enter the current directory
+devbox --reprovision   # stop/start and re-run the embedded provisioners
+devbox --reset         # factory-reset, then start and provision again
 ```
 
 Everything persists: VM-local state (the guest home, VM-local caches,
@@ -186,6 +198,14 @@ idempotent. Package installs and automatic version checks use the isolated
 parent or the protected parent of `~/src`. The KB alias points into the
 protected mount tree. Provisioning verifies these boundaries directly and
 refuses to protect a `SrcPath` parent inside the guest home.
+
+`devbox` compares a running VM's provisioning fingerprint with the current
+checkout and warns when they differ; use `devbox --reprovision` to apply the
+current manifest and update the stamp. A stopped VM re-runs provisioning as it
+starts. `--reset` is destructive to VM-local state but preserves host-mounted
+projects and configuration. Edits to `lima/devbox.yaml` or embedded
+provisioning scripts still require the recreation procedure below; reset and
+reprovision operate on the existing instance's embedded template.
 
 ### Tool-version updates and drift
 

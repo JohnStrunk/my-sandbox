@@ -602,7 +602,7 @@ def remove_devbox(
 ) -> None:
     """Remove a test devbox, falling back to host-side cleanup on failure."""
     try:
-        result = run_bash_script(
+        result = run_container_devbox(
             devbox_path, ["--remove"], env=env, cwd=test_dir, timeout=timeout
         )
     except subprocess.TimeoutExpired as exc:
@@ -937,6 +937,23 @@ def run_bash_script(
 ) -> subprocess.CompletedProcess[str]:
     cmd = [str(script_path)] + (args or [])
     return run_in_process_group(cmd, timeout=timeout, env=env, cwd=cwd)
+
+
+def run_container_devbox(
+    script_path: Path,
+    args: list[str] | None = None,
+    env: dict[str, str] | None = None,
+    cwd: Path | None = None,
+    timeout: int = 30,
+) -> subprocess.CompletedProcess[str]:
+    """Run the legacy container launcher explicitly during the Lima migration."""
+    return run_bash_script(
+        script_path,
+        ["--container", *(args or [])],
+        env=env,
+        cwd=cwd,
+        timeout=timeout,
+    )
 
 
 def run_in_devbox(

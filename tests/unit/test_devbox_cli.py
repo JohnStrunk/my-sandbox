@@ -3,12 +3,12 @@ from pathlib import Path
 
 import pytest
 
-from tests.conftest import run_bash_script
+from tests.conftest import run_container_devbox
 
 
 @pytest.mark.unit
 def test_devbox_help(devbox_path: Path):
-    res = run_bash_script(devbox_path, ["--help"])
+    res = run_container_devbox(devbox_path, ["--help"])
     assert res.returncode == 0
     assert "Usage: devbox" in res.stdout
     assert "-r, --remove" in res.stdout
@@ -18,7 +18,7 @@ def test_devbox_help(devbox_path: Path):
 
 @pytest.mark.unit
 def test_devbox_short_help(devbox_path: Path):
-    res = run_bash_script(devbox_path, ["-h"])
+    res = run_container_devbox(devbox_path, ["-h"])
     assert res.returncode == 0
     assert "Usage: devbox" in res.stdout
 
@@ -26,7 +26,7 @@ def test_devbox_short_help(devbox_path: Path):
 @pytest.mark.unit
 def test_devbox_invalid_option(devbox_path: Path):
     for option in ("--invalid-flag-xyz", "--kind"):
-        res = run_bash_script(devbox_path, [option])
+        res = run_container_devbox(devbox_path, [option])
         assert res.returncode == 1
         assert f"Unknown option: {option}" in res.stderr
         assert "Usage: devbox" in res.stderr
@@ -54,7 +54,7 @@ exit 0
     env = isolated_env
     env["PATH"] = f"{bin_dir}:{env.get('PATH', '')}"
 
-    res = run_bash_script(devbox_path, ["--remove"], env=env, cwd=tmp_path)
+    res = run_container_devbox(devbox_path, ["--remove"], env=env, cwd=tmp_path)
     assert res.returncode == 0
     assert "Removing container" in res.stdout
 

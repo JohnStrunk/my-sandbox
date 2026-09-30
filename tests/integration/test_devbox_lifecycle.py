@@ -5,7 +5,7 @@ import pytest
 
 from tests.conftest import (
     devbox_container_name,
-    run_bash_script,
+    run_container_devbox,
     run_podman_isolated,
     unique_workspace_dir,
 )
@@ -29,7 +29,7 @@ def test_devbox_lifecycle_create_exec_recreate_remove(
     try:
         # 1. First run: should create container and execute command
         test_file = test_dir / "test_output.txt"
-        res_create = run_bash_script(
+        res_create = run_container_devbox(
             devbox_path,
             ["bash", "-c", "echo 'hello from container' > test_output.txt"],
             env=isolated_env,
@@ -53,7 +53,7 @@ def test_devbox_lifecycle_create_exec_recreate_remove(
         assert test_file.stat().st_uid == os.getuid()
 
         # 2. Second run: container exists, should just exec
-        res_exec = run_bash_script(
+        res_exec = run_container_devbox(
             devbox_path,
             ["cat", "test_output.txt"],
             env=isolated_env,
@@ -66,7 +66,7 @@ def test_devbox_lifecycle_create_exec_recreate_remove(
         assert res_exec.stdout.strip().endswith("hello from container")
 
         # 3. Recreate: removes and re-creates container
-        res_recreate = run_bash_script(
+        res_recreate = run_container_devbox(
             devbox_path,
             ["--recreate", "echo", "recreated"],
             env=isolated_env,
@@ -80,7 +80,7 @@ def test_devbox_lifecycle_create_exec_recreate_remove(
         assert test_file.read_text().strip() == "hello from container"
 
         # 4. Remove: stops and removes container
-        res_remove = run_bash_script(
+        res_remove = run_container_devbox(
             devbox_path,
             ["--remove"],
             env=isolated_env,
