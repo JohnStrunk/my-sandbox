@@ -213,6 +213,83 @@ def test_running_vm_is_fast_and_opencode_uses_allowlisted_environment(
 
 
 @pytest.mark.unit
+def test_opencode_launch_builds_runtime_config_inside_the_vm(
+    devbox_path: Path,
+    repo_root: Path,
+    isolated_env: dict[str, str],
+    project_dir: Path,
+    tmp_path: Path,
+):
+    calls, capture = _install_lima_shim(
+        tmp_path, isolated_env, fingerprint=_fingerprint(repo_root)
+    )
+
+    result = run_bash_script(
+        devbox_path,
+        ["opencode", "run", "--agent", "build", "--model", "octo-open/test"],
+        cwd=project_dir,
+        env=isolated_env,
+        timeout=15,
+    )
+
+    assert result.returncode == 0, result.stderr
+    shell_call = next(
+        call
+        for call in calls.read_text().splitlines()
+        if call.startswith("shell ") and "--workdir" in call
+    )
+    assert "bash -c" in shell_call
+    assert f"{repo_root}/lima/opencode_config.py" in shell_call
+    assert "OPENCODE_CONFIG_CONTENT" in shell_call
+    assert 'exec opencode "$@"' in shell_call
+    assert "run --agent build --model octo-open/test" in shell_call
+    payload = json.loads(capture.read_text())
+    assert payload["block"] == "*"
+    assert "OPENCODE_CONFIG_CONTENT" not in payload["allow"]
+
+
+@pytest.mark.unit
+def test_do_one_issue_runs_git_and_headless_opencode_through_vm_launcher(
+    repo_root: Path, isolated_env: dict[str, str], tmp_path: Path
+):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    calls_file = tmp_path / "devbox-calls.jsonl"
+    devbox = bin_dir / "devbox"
+    devbox.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, sys\n"
+        "with open(os.environ['MOCK_DEVBOX_CALLS'], 'a') as calls:\n"
+        "    calls.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+    )
+    devbox.chmod(devbox.stat().st_mode | stat.S_IEXEC)
+    env = isolated_env | {
+        "PATH": f"{bin_dir}:{isolated_env['PATH']}",
+        "MOCK_DEVBOX_CALLS": str(calls_file),
+    }
+
+    result = run_bash_script(repo_root / "do-one-issue", cwd=repo_root, env=env)
+
+    assert result.returncode == 0, result.stderr
+    calls = [json.loads(line) for line in calls_file.read_text().splitlines()]
+    assert calls == [
+        ["bash", "-c", "git switch main && git pull --ff-only"],
+        [
+            "opencode",
+            "run",
+            "--agent",
+            "build",
+            "--model",
+            "pricetag-hosted/Inferact/Qwen3.8-Flash-Next-NVFP4#xhigh",
+            "--file",
+            ".opencode/commands/grab-issue.md",
+            "Execute the task list in the attached file.",
+        ],
+        ["bash", "-c", "git switch main && git pull --ff-only"],
+    ]
+
+
+@pytest.mark.unit
 def test_running_vm_warns_when_provisioning_fingerprint_is_stale(
     devbox_path: Path,
     isolated_env: dict[str, str],

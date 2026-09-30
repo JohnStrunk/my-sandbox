@@ -1,0 +1,12 @@
+[project]
+name = "devbox-the-source-mcp"
+version = "0.1.0"
+description = "Locked runtime environment for the devbox The Source MCP server"
+requires-python = ">=3.12"
+dependencies = ["igloo-mcp"]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+igloo-mcp = { git = "https://github.com/JohnStrunk/igloo-mcp", rev = "69a24ab7c7a037e5faabda16f3a2da93c1fd4bcd" }

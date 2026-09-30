@@ -5,6 +5,7 @@
 set -euo pipefail
 
 instance="${DEVBOX_LIMA_INSTANCE:-devbox}"
+repo_root="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 workdir=""
 start_vm=true
 
@@ -215,4 +216,19 @@ shell_args=(shell --preserve-env)
 if [[ -n "$workdir" ]]; then
   shell_args+=(--workdir "$workdir")
 fi
+
+# Generate the runtime overlay inside the VM immediately before OpenCode starts.
+# The generator serializes only {env:...} references, never credential values;
+# keeping it guest-side also avoids requiring host jq/Python or modifying the
+# mounted global OpenCode config. Every OpenCode CLI form (including `run`)
+# enters through this path, so the first command starts the shared service with
+# the same config that subsequent project sessions receive.
+if [[ "${1:-}" == opencode ]]; then
+  shift
+  # shellcheck disable=SC2016 # This command string is evaluated inside the VM.
+  remote_command='set -euo pipefail; config_script="$1"; shift; OPENCODE_CONFIG_CONTENT="$(python3 "$config_script")"; export OPENCODE_CONFIG_CONTENT; exec opencode "$@"'
+  exec limactl "${shell_args[@]}" "$instance" bash -c "$remote_command" \
+    bash "$repo_root/lima/opencode_config.py" "$@"
+fi
+
 exec limactl "${shell_args[@]}" "$instance" "$@"

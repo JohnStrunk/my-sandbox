@@ -72,8 +72,10 @@ Lima VM workflow and its host requirements are described in
   `devbox --container --recreate`), while
   its volatile runtime state gets an isolated per-container directory (see
   [OpenCode State Isolation](#opencode-state-isolation)). When a GitHub
-  token is available, it also enables the OpenCode GitHub MCP server without
-  modifying any mounted OpenCode configuration file.
+  token is available, the transitional container enables its OpenCode GitHub
+  MCP server without modifying any mounted OpenCode configuration file. The
+  VM-native launcher instead uses the authenticated `gh` CLI as the canonical
+  GitHub integration.
 - **Image-Owned Agent Capability Catalog**: The `devbox-tools` skill is staged
   into every container's active `.agents/skills` directory after host skills
   are mounted. It is the image-wide place for instructions that cannot live in

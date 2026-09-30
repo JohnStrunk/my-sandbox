@@ -140,18 +140,67 @@ limactl autostart enable devbox
 
 OpenCode's managed background service inherits these variables when it
 starts. Provisioning intentionally does not pre-start the service without
-credentials; the first OpenCode command in the forwarded shell starts it.
-If you previously started OpenCode from a plain `limactl shell`, stop that
-service once (`opencode service stop` from the VM) before retrying with the
-helper.
+credentials; the first `devbox opencode` command starts it with the generated
+runtime config. A bare `opencode` command from an arbitrary VM shell bypasses
+the config generator, so do not use it to start the managed service. If you did,
+stop that service once from the VM (`opencode service stop`) before retrying
+with host-side `devbox opencode`.
+
+When the command is `opencode` (including `opencode run`), the helper builds
+`OPENCODE_CONFIG_CONTENT` inside the VM immediately before starting the CLI.
+The generated overlay keeps the baseline provider-use policies and permission
+rules, always enables the local Semble MCP, and gates Context7, The Source,
+Tavily websearch, OCTO Open, and PriceTag on their complete credential groups.
+Provider credentials appear only as `{env:NAME}` references in the JSON; the
+secret values stay in the allowlisted process environment. PriceTag's built-in
+OpenAI and Anthropic overrides keep `"env": []` so direct-provider keys cannot
+take precedence over the gateway key. The overlay is in-memory only and does
+not edit the host-shared `~/.config/opencode` configuration.
+
+The Source MCP uses the committed `lima/the-source/uv.lock` dependency graph
+and an immutable source commit. Its wrapper installs that locked environment
+without credentials, then starts the child with only its own credentials,
+`HOME`, and a minimal `PATH`; OpenCode's unrelated provider tokens are not
+inherited by that process.
+
+GitHub operations use the forwarded `gh` CLI and host `gh` authentication; the
+VM intentionally does not configure the legacy GitHub MCP proxy (see issue
+[#275](https://github.com/JohnStrunk/my-sandbox/issues/275)). OpenCode's one
+VM-local service loads the runtime config at startup and serves project
+sessions across the same-path `~/src` mount. If credentials change while the
+service is running, stop and restart the service from a `devbox` shell so it
+inherits the updated environment.
+
+The schema-drift test runs against the manifest-pinned VM binary and an isolated
+home/config directory, leaving the mounted global config untouched:
+
+```shell
+cd ~/src/my-sandbox
+uv run --extra test pytest -q tests/unit/test_lima_opencode_config.py
+```
+
+The test is skipped outside the provisioned VM; there it asserts that
+`opencode --version` matches the tool manifest and that `opencode debug config`
+accepts and preserves the generated overlay.
+
+`do-one-issue` keeps its Git and GitHub work in the VM: the host-side script
+uses `devbox` only to run `git switch/pull` and the headless `devbox opencode
+run --agent build ... --file .opencode/commands/grab-issue.md` command at the
+mounted checkout path. The task instructions handle issue assignment, worktree
+implementation, PR creation, and the documented CI/merge wait using the VM's
+forwarded `gh` authentication.
 
 Inside the VM the guest home (`/home/<user>.guest`) is VM-local, with
-symlinks for the shared paths, so everything works from `~`:
+symlinks for the shared paths, so ordinary commands work from `~`:
 
 ```shell
 repo="$(dirname "$(dirname "$(readlink -f /etc/devbox/tool-versions.json)")")"
-cd "$repo" && opencode   # start an agent session
+cd "$repo" && git status
 ```
+
+Launch OpenCode from the host with `devbox opencode` so the allowlisted
+credentials and generated runtime configuration are applied to the shared
+service.
 
 The existing worktree workflow carries over unchanged: `.worktrees/`
 under the repo works inside the VM because the same-path `~/src` mount makes
@@ -421,9 +470,10 @@ passes, verify from inside the VM (opened with
 - [ ] Commit and push via `gh`/git from inside the VM.
 - [ ] Edits made in the VM are visible on the host, owned by your uid.
 - [ ] `~/kb/kbase.py sync` round-trips (knowledge base usable).
-- [ ] `cd ~/src/my-sandbox && opencode` starts a session using the
-      host-shared config; the background service persists across TUI
-      sessions.
+- [ ] From the host, `cd ~/src/my-sandbox && devbox opencode` starts a
+      session using the generated runtime overlay; the background service
+      persists across project sessions. Do not start it with bare `opencode`
+      from a VM shell.
 - [ ] Nested virtualization: start a small throwaway L2 VM
       (for example `limactl start template://alpine`), confirm it boots,
       then `limactl delete` it.
