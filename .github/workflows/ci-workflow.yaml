@@ -43,11 +43,10 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
-          # Paths that can change how pre-commit hooks bootstrap or behave
-          # inside the devbox image. Everything else keeps the fast cached
-          # validation.
-          relevant='^(\.pre-commit-config\.yaml|\.secrets\.baseline|\.github/workflows/|container/|pyproject\.toml|uv\.lock|scripts/sanitized-test\.sh|scripts/validate_tool_versions\.py|scripts/detect_secrets_filters\.py|tests/container/test_image_binaries\.py)'
-          recursive_relevant='^(\.github/workflows/|container/|devbox$|lima/|scripts/(sanitized-test\.sh|vm_preflight\.py|install-lima-ci\.sh|run-vm-ci\.sh|validate_tool_versions\.py)|tests/(conftest\.py|vm/|unit/(test_vm_preflight|test_vm_fixtures|test_devbox_lima|test_lima_template)\.py)|pyproject\.toml|uv\.lock)'
+          # Paths that can change hook bootstrap or the manifest-driven VM
+          # toolchain. Everything else keeps the fast cached validation.
+          relevant='^(\.pre-commit-config\.yaml|\.secrets\.baseline|\.github/workflows/|lima/|pyproject\.toml|uv\.lock|scripts/(sanitized-test\.sh|validate_tool_versions\.py|verify_provenance\.py|detect_secrets_filters\.py)|tests/unit/(test_cold_bootstrap|test_tool_versions|test_lima_toolchain|test_lima_template)\.py)'
+          recursive_relevant='^(\.github/workflows/|devbox$|lima/|scripts/(sanitized-test\.sh|vm_preflight\.py|install-lima-ci\.sh|run-vm-ci\.sh|validate_tool_versions\.py)|tests/(conftest\.py|vm/|unit/(test_vm_preflight|test_vm_fixtures|test_devbox_lima|test_lima_template|test_tool_versions)\.py)|pyproject\.toml|uv\.lock)'
           cold_bootstrap=true
           recursive=true
           if [[ "$EVENT_NAME" == "pull_request" ]]; then
@@ -74,6 +73,8 @@ jobs:
 
   pre-commit:
     name: "Pre-commit checks"
+    needs:
+      - changes
     runs-on: ubuntu-latest
 
     steps:
@@ -96,46 +97,23 @@ jobs:
         run: python3 scripts/validate_tool_versions.py
 
       - name: Verify release provenance checksums
-        # Recomputes the SHA-256 of every manifest-declared release asset
-        # (ast-grep binaries, the official agent-skill archive, GitHub MCP
-        # server binaries, and the Lima release tarballs) against the pinned
-        # version so a version-only Renovate bump fails here instead of at
-        # image-build time. See scripts/verify_provenance.py.
+        # Recomputes the SHA-256 of every manifest-declared release asset and
+        # skill archive, so version-only Renovate bumps fail here instead of
+        # during VM provisioning.
         run: python3 scripts/verify_provenance.py
 
       - name: Install pre-commit
         run: |
           pre_commit_version="$(jq -er '.tools.pre_commit.version' \
-            container/tool-versions.json)"
+            lima/tool-versions.json)"
           pre_commit_version="${pre_commit_version#v}"
           uv tool install "pre-commit==${pre_commit_version}"
-
-      - name: Install hadolint
-        run: |
-          set -euo pipefail
-          hadolint_version="$(jq -er '.tools.hadolint.version' \
-            container/tool-versions.json)"
-          hadolint_version="${hadolint_version#v}"
-          hadolint_version="v${hadolint_version}"
-          asset="hadolint-linux-x86_64"
-          base_url="https://github.com/hadolint/hadolint/releases/download/${hadolint_version}"
-          curl -sSfL -o "$asset" "${base_url}/${asset}"
-          curl -sSfL -o checksums.sha256 "${base_url}/checksums.sha256"
-          checksum_line="$(awk -v asset="$asset" '$2 == "*" asset { print; exit }' checksums.sha256)"
-          if [ -z "$checksum_line" ]; then
-            echo "No checksum found for $asset" >&2
-            exit 1
-          fi
-          printf '%s\n' "$checksum_line" | sha256sum -c -
-          rm -f checksums.sha256
-          chmod +x "$asset"
-          sudo mv "$asset" /usr/local/bin/hadolint
 
       - name: Install markdownlint-cli2
         # zizmor: ignore[adhoc-packages]
         run: |
           markdownlint_version="$(jq -er '.tools.markdownlint_cli2.version' \
-            container/tool-versions.json)"
+            lima/tool-versions.json)"
           markdownlint_version="${markdownlint_version#v}"
           npm install -g "markdownlint-cli2@${markdownlint_version}"
 
@@ -154,6 +132,16 @@ jobs:
         run: >-
           ./scripts/sanitized-test.sh -- env
           PRE_COMMIT_HOME="${HOME}/.cache/pre-commit" pre-commit run -a
+
+      - name: Install test dependencies for cold hook bootstrap
+        if: needs.changes.outputs.cold_bootstrap == 'true'
+        run: uv sync --extra test
+
+      - name: Run cold pre-commit bootstrap check
+        if: needs.changes.outputs.cold_bootstrap == 'true'
+        run: >-
+          ./scripts/sanitized-test.sh --
+          uv run --extra test pytest -m cold_bootstrap
 
       - name: Run pre-commit gc
         run: pre-commit gc
@@ -179,104 +167,11 @@ jobs:
         with:
           save-cache: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Install Podman
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -y --no-install-recommends podman zstd
-
-      - name: Determine Podman version
-        id: podman-version
-        run: printf 'version=%s\n' "$(podman version --format '{{.Version}}')" >> "$GITHUB_OUTPUT"
-
-      # Rootless layers can be owned by subordinate UIDs. Archive the graph
-      # root inside Podman's user namespace instead of caching it directly.
-      - name: Restore Podman layer cache
-        id: podman-cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/podman-storage.tar.zst
-          key: podman-storage-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.podman-version.outputs.version }}-${{ hashFiles('container/**') }}
-
-      - name: Restore cached Podman layers
-        if: steps.podman-cache.outputs.cache-matched-key != ''
-        run: |
-          set -euo pipefail
-          storage="$HOME/.local/share/containers/storage"
-          rm -rf "$storage"
-          mkdir -p "$storage"
-          podman unshare tar \
-            --extract \
-            --zstd \
-            --numeric-owner \
-            --same-owner \
-            --same-permissions \
-            --xattrs \
-            --xattrs-include='*' \
-            --acls \
-            --file "$RUNNER_TEMP/podman-storage.tar.zst" \
-            --directory "$storage"
-          podman info --format '{{.Store.GraphRoot}}' >/dev/null
-
-      - name: Build devbox image
-        env:
-          CACHE_HIT: ${{ steps.podman-cache.outputs.cache-hit }}
-          CACHE_MATCHED_KEY: ${{ steps.podman-cache.outputs.cache-matched-key }}
-        run: |
-          set -euo pipefail
-          start_time="$(date +%s)"
-          podman build --layers --file container/Dockerfile --tag devbox:latest container/
-          duration="$(( $(date +%s) - start_time ))"
-          cache_hit="${CACHE_HIT:-false}"
-          matched_key="${CACHE_MATCHED_KEY:-none}"
-          printf 'Devbox image build duration: %ss (exact cache hit: %s)\n' \
-            "$duration" "$cache_hit"
-          printf 'Devbox image cache restored: %s\n' "$matched_key"
-          {
-            printf '%s\n' '### Devbox image build'
-            printf '%s\n' "- Duration: ${duration}s"
-            printf '%s\n' "- Exact cache hit: ${cache_hit}"
-            printf '%s\n' "- Restored cache key: ${matched_key}"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      # Cache entries are immutable. Only update the shared cache from main;
-      # pull requests can read it but cannot modify it with untrusted changes.
-      - name: Archive Podman layers
-        if: success() && github.ref == 'refs/heads/main' && steps.podman-cache.outputs.cache-hit != 'true'
-        run: |
-          set -euo pipefail
-          podman unshare tar \
-            --create \
-            --zstd \
-            --numeric-owner \
-            --xattrs \
-            --xattrs-include='*' \
-            --acls \
-            --file "$RUNNER_TEMP/podman-storage.tar.zst" \
-            --directory "$HOME/.local/share/containers/storage" .
-
-      - name: Run test suite
-        # The cold_bootstrap check needs an empty hook cache to be meaningful;
-        # it runs as its own gated step instead of slowing down every PR.
+      - name: Run unit tests
         run: >-
-          ./scripts/sanitized-test.sh --require-podman --
+          ./scripts/sanitized-test.sh --
           env UV_CACHE_DIR="${HOME}/.cache/uv"
-          uv run --extra test pytest -m "not e2e_inference and not cold_bootstrap and not vm and not recursive and not e2e_kind"
-
-      # Reuses the image and Podman storage the test suite already built, so
-      # only the network-dependent hook-environment download is repeated.
-      - name: Run cold pre-commit bootstrap check
-        if: needs.changes.outputs.cold_bootstrap == 'true'
-        run: >-
-          ./scripts/sanitized-test.sh --require-podman --
-          env UV_CACHE_DIR="${HOME}/.cache/uv"
-          uv run --extra test pytest -m cold_bootstrap
-
-      - name: Save Podman layer cache
-        if: success() && github.ref == 'refs/heads/main' && steps.podman-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/podman-storage.tar.zst
-          key: podman-storage-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.podman-version.outputs.version }}-${{ hashFiles('container/**') }}
+          uv run --extra test pytest -m unit
 
   vm:
     name: "VM Tests"

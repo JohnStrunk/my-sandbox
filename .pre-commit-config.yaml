@@ -22,10 +22,6 @@ repos:
     hooks:
       - id: check-added-large-files  # Prevents giant files from being committed
       - id: check-json               # Check that JSON files are valid
-        exclude: |
-          (?x)^(
-                .devcontainer/devcontainer.json
-          )$
       - id: check-merge-conflict     # Check merge conflict strings
       - id: check-symlinks           # Ensure symlinks have a valid target
       - id: check-toml               # Ensure toml files are valid
@@ -72,8 +68,8 @@ repos:
         # `allow-git` config only permits git dependencies declared in an
         # existing package.json, not an ad-hoc git spec passed directly to
         # `npm install -g`. That makes npm reject the install with
-        # `EALLOWGIT`. The binary is installed globally in
-        # sandbox/Dockerfile and .github/workflows/ci-workflow.yaml instead.
+        # `EALLOWGIT`. The binary is installed globally by
+        # lima/provision-tools.sh and the CI workflow instead.
         language: system
         args: ["--config", ".github/markdownlint-cli2.yaml"]
         exclude: |
@@ -81,12 +77,6 @@ repos:
                 .github/pull_request_template.md |
                 .agents/skills/
             )$
-
-  - repo: https://github.com/hadolint/hadolint
-    rev: v2.15.1
-    hooks:
-      # Lint Dockerfiles
-      - id: hadolint
 
   - repo: https://github.com/Mergifyio/mergify-pre-commit
     rev: "1.1.0"
@@ -134,4 +124,4 @@ repos:
         entry: python3 scripts/validate_tool_versions.py
         language: system
         pass_filenames: false
-        files: '^(container/Dockerfile|container/tool-versions\.json|\.github/workflows/ci-workflow\.yaml|\.pre-commit-config\.yaml|pyproject\.toml|uv\.lock|scripts/validate_tool_versions\.py|lima/[^/]+\.sh)$'
+        files: '^(lima/tool-versions\.json|lima/certs/[^/]+\.crt|\.github/workflows/ci-workflow\.yaml|\.pre-commit-config\.yaml|pyproject\.toml|uv\.lock|scripts/validate_tool_versions\.py|lima/[^/]+\.sh)$'

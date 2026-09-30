@@ -31,7 +31,7 @@ from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_MANIFEST = REPO_ROOT / "container" / "tool-versions.json"
+DEFAULT_MANIFEST = REPO_ROOT / "lima" / "tool-versions.json"
 
 _PLACEHOLDER_PATTERN = re.compile(r"\{([a-z][a-z0-9_.]*)\}")
 _HEX_DIGIT_PATTERN = re.compile(r"[0-9a-f]{64}")
@@ -55,8 +55,8 @@ class ProvenanceError(RuntimeError):
 def _render_url(template: str, spec: dict[str, Any]) -> str:
     version = spec.get("version")
     if isinstance(version, str):
-        # The Dockerfile strips a leading 'v' before building the asset URL
-        # (see container/Dockerfile); mirror that so a 'v'-prefixed version
+        # Lima provisioning strips a leading 'v' before building the asset URL;
+        # mirror that so a 'v'-prefixed version
         # does not 404 a perfectly good release.
         version = version.removeprefix("v")
     values: dict[str, Any] = {"version": version}
@@ -76,9 +76,9 @@ def _render_url(template: str, spec: dict[str, Any]) -> str:
 
 def _stored_digest(spec: dict[str, Any], field: str) -> str | None:
     kind, _, sub = field.partition(".")
-    container = spec.get(kind)
-    if isinstance(container, dict):
-        value = container.get(sub)
+    metadata = spec.get(kind)
+    if isinstance(metadata, dict):
+        value = metadata.get(sub)
         if isinstance(value, str):
             return value
     return None

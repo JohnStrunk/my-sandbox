@@ -266,12 +266,12 @@ def test_params_are_consumed_by_the_user_script(repo_root: Path):
 def test_scripts_contain_no_unexpected_go_template_expressions(
     repo_root: Path,
 ):
-    # Lima renders provision/probe scripts as Go templates. Only the
-    # system script may use a template variable, and only {{.User}}.
+    # Only the system script uses the single user variable rendered by Lima;
+    # the host launcher normalizes it when computing the same fingerprint.
     for name in _SCRIPTS:
         found = re.findall(r"{{.*?}}", _script(repo_root, name))
         if name == "provision-system.sh":
-            assert set(found) == {"{{.User}}"}
+            assert found == ["{{.User}}"]
         else:
             assert found == []
 
@@ -338,7 +338,7 @@ def test_root_manifest_path_is_canonical_and_snapshotted(repo_root: Path):
     assert 'DEVBOX_SRC_ROOT="$(realpath -e -- "$DEVBOX_SRC_ROOT")"' in system_script
     assert 'DEVBOX_REPO="$(realpath -e -- "$DEVBOX_REPO")"' in system_script
     assert '[[ -L "$MANIFEST_SOURCE" || ! -f "$MANIFEST_SOURCE" ]]' in system_script
-    assert 'copy_repo_file container/tool-versions.json "$MANIFEST"' in system_script
+    assert 'copy_repo_file lima/tool-versions.json "$MANIFEST"' in system_script
     assert "os.O_NOFOLLOW" in system_script
     assert "copy_repo_file lima/provision-tools.sh" in system_script
 
@@ -351,9 +351,9 @@ def test_root_snapshot_copy_rejects_symlinks(repo_root: Path, tmp_path: Path):
     copier = match.group(1)
 
     repo = tmp_path / "repo"
-    container = repo / "container"
-    container.mkdir(parents=True)
-    source = container / "tool-versions.json"
+    lima = repo / "lima"
+    lima.mkdir(parents=True)
+    source = lima / "tool-versions.json"
     source.write_text('{"tools": {}}\n')
     output = tmp_path / "snapshot.json"
 
@@ -367,7 +367,7 @@ def test_root_snapshot_copy_rejects_symlinks(repo_root: Path, tmp_path: Path):
             timeout=3,
         )
 
-    copied = copy("container/tool-versions.json")
+    copied = copy("lima/tool-versions.json")
     assert copied.returncode == 0, copied.stderr
     assert output.read_text() == source.read_text()
 
@@ -375,16 +375,16 @@ def test_root_snapshot_copy_rejects_symlinks(repo_root: Path, tmp_path: Path):
     symlink_target.write_text('{"secret": true}\n')
     source.unlink()
     source.symlink_to(symlink_target)
-    rejected_file_link = copy("container/tool-versions.json")
+    rejected_file_link = copy("lima/tool-versions.json")
     assert rejected_file_link.returncode != 0
 
     source.unlink()
     os.mkfifo(source)
-    rejected_fifo = copy("container/tool-versions.json")
+    rejected_fifo = copy("lima/tool-versions.json")
     assert rejected_fifo.returncode != 0
 
     source.unlink()
-    source.write_text("regular file\n")
+    lima.rmdir()
     real_lima = tmp_path / "real-lima"
     real_lima.mkdir()
     (real_lima / "provision-tools.sh").write_text("safe\n")
@@ -426,3 +426,25 @@ def test_rootless_bridge_setup_keeps_loopback_routing_disabled(repo_root: Path):
 
     assert "net.ipv4.conf.default.route_localnet = 1" not in system_script
     assert "check_sysctl net.ipv4.conf.default.route_localnet 0" in probe
+
+
+@pytest.mark.unit
+def test_red_hat_internal_ca_trust_is_provisioned_for_guest_tools(repo_root: Path):
+    system_script = _script(repo_root, "provision-system.sh")
+    source_wrapper = (repo_root / "lima" / "run-the-source-mcp.sh").read_text()
+
+    assert 'copy_repo_file "lima/certs/$cert" "$ca_snapshot"' in system_script
+    assert "'.trust_anchors[$cert]'" in system_script
+    assert "sha256sum -c -" in system_script
+    assert "update-ca-trust" in system_script
+    assert "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt" in system_script
+    assert "REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt" in system_script
+    assert "SSL_CERT_FILE" in source_wrapper
+    assert "REQUESTS_CA_BUNDLE" in source_wrapper
+    for name in (
+        "redhat-ipa-ca.crt",
+        "redhat-rhcsv2-ca.crt",
+        "redhat-root-ca.crt",
+    ):
+        certificate = repo_root / "lima" / "certs" / name
+        assert "-----BEGIN CERTIFICATE-----" in certificate.read_text()

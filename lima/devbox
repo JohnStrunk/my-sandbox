@@ -139,12 +139,12 @@ require_existing_instance() {
 }
 
 provisioning_fingerprint() {
-  local manifest_sha system_sha user_sha tool_sha assets_sha
+  local manifest_sha system_sha user_sha tool_sha assets_sha guest_user
   local asset_hashes
   local -a sources=(
-    "$HERE/../container/devbox-go"
+    "$HERE/devbox-go"
     "$HERE/check_toolchain.py"
-    "$HERE/../container/semble"
+    "$HERE/semble"
   )
   local -a guest_assets=(
     /var/lib/devbox-vm/tool-assets/devbox-go
@@ -156,8 +156,13 @@ provisioning_fingerprint() {
     sha256sum "$1" | awk '{print $1}'
   }
 
-  manifest_sha="$(sha256_file "$HERE/../container/tool-versions.json")"
-  system_sha="$(sha256_file "$HERE/provision-system.sh")"
+  manifest_sha="$(sha256_file "$HERE/tool-versions.json")"
+  guest_user="$(id -un)"
+  escaped_guest_user="${guest_user//\\/\\\\}"
+  escaped_guest_user="${escaped_guest_user//&/\\&}"
+  escaped_guest_user="${escaped_guest_user//|/\\|}"
+  system_sha="$(sed "s|{{\\.User}}|$escaped_guest_user|g" "$HERE/provision-system.sh" \
+    | sha256sum | awk '{print $1}')"
   user_sha="$(sha256_file "$HERE/provision-user.sh")"
   tool_sha="$(sha256_file "$HERE/provision-tools.sh")"
   asset_hashes=""

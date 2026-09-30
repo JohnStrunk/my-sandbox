@@ -1,5 +1,20 @@
 # AGENTS
 
+- The Lima VM is the only supported devbox runtime. Author and validate
+  repository changes from inside the VM; use the host-side `devbox` launcher
+  to enter it. `devbox --stop`, `devbox --reset`, and `devbox --reprovision`
+  manage the shared VM. See `lima/README.md` for host setup and lifecycle
+  details.
+
+  ```shell
+  cd ~/src/<project>
+  devbox                 # shell in the VM at this project path
+  devbox opencode        # OpenCode in the VM
+  devbox --stop
+  devbox --reprovision
+  devbox --reset
+  ```
+
 - When working on this repo, you should use worktrees to isolate your work
 - Before starting work on a new feature, fetch `origin/main` and create the
   worktree from `origin/main`.
@@ -11,12 +26,15 @@
 
   ```shell
   cd .worktrees/<worktree>
+  export UV_PROJECT_ENVIRONMENT="$HOME/.venvs/my-sandbox-<worktree>"
   uv sync --extra test
   ```
 
-  This creates the worktree's `.venv` and installs `pytest` and the other test
-  dependencies. The project Pyright config points the language server at this
-  local environment so test imports resolve before the first test run.
+  This creates a VM-local test environment and installs `pytest` and the other
+  test dependencies. Give each checkout/worktree a unique path; the project
+  itself is on a host-shared mount, and a virtual environment must not be used
+  from both host and VM. The project Pyright config points the language server
+  at this local environment so test imports resolve before the first test run.
 - Start or reopen OpenCode with the active worktree as its project root (for
   example, run `opencode .worktrees/<worktree>` from the repository root). Do
   not edit files from multiple worktrees in one session rooted at the main
@@ -34,11 +52,19 @@
   dependencies are installed before invoking test tools.
 - Run tests with a sanitized environment. Never print the complete environment;
   report only allowlisted variable names and set/unset status.
+- For VM tests, run `scripts/sanitized-test.sh --guest-vm` from inside the
+  provisioned guest. Use `--require-vm` or `--require-recursive-vm` when the
+  task requires those host capabilities; missing capabilities are infrastructure
+  limits, not product-test failures. `--guest-vm` scrubs process environment
+  and gives tests a private `HOME`, but same-UID processes can still read
+  host-mounted files under `~/.host-config`; run only trusted source this way.
+  CI uses a fresh guest with empty config and credential mounts.
 
 ## How PRs land
 
 - `CI Workflow - Success` is the authoritative CI prerequisite for merging. It
-  summarizes the `Automated Tests` and `Pre-commit checks` jobs.
+  summarizes `Automated Tests`, `Pre-commit checks`, `VM Tests`, and
+  `Recursive VM Tests`.
 - Mergify queues and merges eligible PRs automatically after that check passes.
   PRs authored by `JohnStrunk` or `renovate-bot` need no approval; other
   authors need at least one approval and no changes-requested review.

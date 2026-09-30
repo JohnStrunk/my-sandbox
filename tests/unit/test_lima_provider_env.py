@@ -9,15 +9,37 @@ import pytest
 
 from tests.conftest import run_bash_script
 
-
-def _container_provider_env_names(repo_root: Path) -> set[str]:
-    devbox = (repo_root / "devbox").read_text()
-    names = set(re.findall(r'--env\s+"([A-Z][A-Z0-9_]*)=', devbox))
-
-    # These are created specifically for the container, not provider inputs
-    # supplied to the guest process.
-    names.difference_update({"DEVBOX_SUBID_READY_FILE", "OPENCODE_CONFIG_CONTENT"})
-    return names
+_EXPECTED_GUEST_ENV_NAMES = {
+    "SSL_CERT_FILE",
+    "REQUESTS_CA_BUNDLE",
+    "NODE_EXTRA_CA_CERTS",
+    "GEMINI_API_KEY",
+    "GOOGLE_GENERATIVE_AI_API_KEY",
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+    "CONTEXT7_API_KEY",
+    "TAVILY_API_KEY",
+    "IGLOO_MCP_COMMUNITY",
+    "IGLOO_MCP_COMMUNITY_KEY",
+    "IGLOO_MCP_APP_PASS",
+    "IGLOO_MCP_APP_ID",
+    "IGLOO_MCP_USERNAME",
+    "IGLOO_MCP_PASSWORD",
+    "GITLAB_HOST",
+    "GITLAB_TOKEN",
+    "LITEMAAS_API_KEY",
+    "OPENAI_API_KEY",
+    "OCTO_OPEN_URL",
+    "OCTO_OPEN_KEY",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_BASE_URL",
+    "PRICETAG_ANTHROPIC_URL",
+    "PRICETAG_HOSTED_URL",
+    "PRICETAG_OPENAI_URL",
+    "PRICETAG_API_KEY",
+    "GOOGLE_CLOUD_PROJECT",
+    "VERTEX_LOCATION",
+}
 
 
 def _lima_provider_env_names(repo_root: Path) -> set[str]:
@@ -93,14 +115,12 @@ def _run_lima_shell(repo_root: Path, env: dict[str, str]) -> dict:
 
 
 @pytest.mark.unit
-def test_lima_shell_allowlist_matches_container_provider_env(repo_root: Path):
-    assert _lima_provider_env_names(repo_root) == _container_provider_env_names(
-        repo_root
-    )
+def test_lima_shell_has_the_expected_guest_environment_allowlist(repo_root: Path):
+    assert _lima_provider_env_names(repo_root) == _EXPECTED_GUEST_ENV_NAMES
 
 
 @pytest.mark.unit
-def test_lima_shell_forwards_container_env_with_matching_aliases_and_gates(
+def test_lima_shell_forwards_provider_env_with_matching_aliases_and_gates(
     repo_root: Path,
     isolated_env: dict[str, str],
     tmp_path: Path,
@@ -117,7 +137,7 @@ def test_lima_shell_forwards_container_env_with_matching_aliases_and_gates(
             "GITHUB_TOKEN": "mock-github-token",  # pragma: allowlist secret
             "GITLAB_TOKEN": "mock-gitlab-token",  # pragma: allowlist secret
             "ANTHROPIC_BASE_URL": "https://anthropic.example/v1",
-            # Incomplete groups are not forwarded by the container devbox.
+            # Incomplete groups are not forwarded to the VM.
             "IGLOO_MCP_COMMUNITY": "partial-community",
             "PRICETAG_API_KEY": "mock-pricetag-token",  # pragma: allowlist secret
             "GOOGLE_CLOUD_PROJECT": "project-without-location",
@@ -130,8 +150,11 @@ def test_lima_shell_forwards_container_env_with_matching_aliases_and_gates(
 
     assert payload["args"] == ["shell", "--preserve-env", "devbox"]
     assert payload["block"] == "*"
-    assert set(payload["allow"]) == _container_provider_env_names(repo_root)
+    assert set(payload["allow"]) == _EXPECTED_GUEST_ENV_NAMES
     assert payload["provider_env"] == {
+        "SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt",
+        "REQUESTS_CA_BUNDLE": "/etc/ssl/certs/ca-certificates.crt",
+        "NODE_EXTRA_CA_CERTS": "/etc/ssl/certs/ca-certificates.crt",
         "GEMINI_API_KEY": "mock-gemini-token",  # pragma: allowlist secret
         "GOOGLE_GENERATIVE_AI_API_KEY": "mock-gemini-token",  # pragma: allowlist secret
         "GH_TOKEN": "mock-github-token",  # pragma: allowlist secret
@@ -158,13 +181,16 @@ def test_lima_shell_uses_gh_auth_token_fallback(
     payload = _run_lima_shell(repo_root, env)
 
     assert payload["provider_env"] == {
+        "SSL_CERT_FILE": "/etc/ssl/certs/ca-certificates.crt",
+        "REQUESTS_CA_BUNDLE": "/etc/ssl/certs/ca-certificates.crt",
+        "NODE_EXTRA_CA_CERTS": "/etc/ssl/certs/ca-certificates.crt",
         "GH_TOKEN": "mock-gh-auth-token",
         "GITHUB_TOKEN": "mock-gh-auth-token",
     }
 
 
 @pytest.mark.unit
-def test_lima_shell_forwards_complete_runtime_credential_groups(
+def test_lima_shell_forwards_complete_provider_credential_groups(
     repo_root: Path,
     isolated_env: dict[str, str],
     tmp_path: Path,
@@ -209,6 +235,9 @@ def test_lima_shell_forwards_complete_runtime_credential_groups(
             assert forwarded[name] == value
     assert forwarded["GOOGLE_GENERATIVE_AI_API_KEY"] == credentials["GEMINI_API_KEY"]
     assert forwarded["GITHUB_TOKEN"] == credentials["GH_TOKEN"]
+    assert forwarded["SSL_CERT_FILE"] == "/etc/ssl/certs/ca-certificates.crt"
+    assert forwarded["REQUESTS_CA_BUNDLE"] == "/etc/ssl/certs/ca-certificates.crt"
+    assert forwarded["NODE_EXTRA_CA_CERTS"] == "/etc/ssl/certs/ca-certificates.crt"
 
 
 @pytest.mark.unit

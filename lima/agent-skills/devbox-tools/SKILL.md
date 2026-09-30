@@ -2,15 +2,15 @@
 name: "devbox-tools"
 description: >
   Use this skill when choosing, adding, or integrating a command or
-  agent-facing capability provided by the devbox image or Lima VM.
+  agent-facing capability provisioned in the Lima devbox VM.
 ---
 
-# Devbox Capability Contract
+# VM Devbox Capability Contract
 
-The devbox image has two separate contracts for every agent-facing capability:
+The devbox VM has two separate contracts for every agent-facing capability:
 
 1. Runtime availability: the command, plugin, or service is installed and
-   works in the image.
+   works in the VM.
 2. Agent visibility: the agent has instructions or configuration that tells it
    when and how to use the capability.
 
@@ -19,7 +19,7 @@ agent knows about a command because it is on `PATH`.
 
 ## Registration Requirements
 
-When adding an image capability, complete all applicable parts together:
+When adding a VM capability, complete all applicable parts together:
 
 - Pin and install the runtime artifact, and document the exact command name.
 - Add an entry here describing when to use it, its safe invocation, and its
@@ -27,15 +27,14 @@ When adding an image capability, complete all applicable parts together:
 - Add explicit OpenCode MCP, plugin, or wrapper configuration when the
   capability is not a plain command.
 - Add tests for runtime availability and agent visibility or invocation.
-- For the container devbox, document when `devbox --recreate` is required. For
-  Lima, distinguish manifest-only changes (restart applies them) from embedded
-  template/provision-script changes (recreate the VM).
+- Document whether a tool-manifest change takes effect on VM restart or whether
+  an embedded template/provision-script change requires VM recreation.
 
-The skill is image-owned. The container stages it after its host `.agents`
-mount. Lima keeps the host `.agents` mount read-only and builds a guest-local
-overlay; image-owned skill names take precedence without modifying host files.
-That makes this catalog available for arbitrary project repositories without
-requiring a shared repository `AGENTS.md` or README.
+The skill is VM-owned and staged from this repository after the host `.agents`
+mount. The VM keeps that mount read-only and builds a guest-local overlay;
+VM-owned skill names take precedence without modifying host files. This makes
+the catalog available for arbitrary project repositories without requiring a
+shared repository `AGENTS.md` or README.
 
 ## Current Capability
 
@@ -61,27 +60,24 @@ requiring a shared repository `AGENTS.md` or README.
   `--no-security-check` in agent workflows.
 - Use Semble for natural-language searches over a live repository, or `rg` for
   targeted text searches when a portable snapshot is not needed.
-- The container test verifies both this active guidance and the budget gate in
-  `tests/container/test_opencode_config.py` and
-  `tests/container/test_image_binaries.py`.
+- The provisioned-VM test checks that this skill is active in the guest;
+  toolchain pins are checked by `devbox-toolchain-check`.
 
 ### Semble
 
 - Runtime command: `semble` (including `semble search` and its local MCP
   server).
-- Agent integration: the container image configures the local `semble` MCP
-  server; the Lima VM provides the CLI while its OpenCode integration is
-  handled by the VM integration work.
+- The VM provides the CLI and enables its local MCP server through the generated
+  OpenCode runtime configuration.
 - Use it for vague natural-language code searches, for example:
   `semble search "where are failed requests retried" . --json`.
 - Use ast-grep for syntax-aware structural queries, or `rg` for exact literal
   matches.
-- The container image prefetches the embedding model into its image-owned cache;
-  Lima prefetches it into VM-local `HF_HOME`. Incremental indexes use the
-  container's persistent cache or Lima's VM-local `SEMBLE_CACHE_LOCATION`, so
-  queries need no network or API key after provisioning.
-- The runtime search and fresh OpenCode MCP discovery are covered by container
-  tests.
+- Provisioning prefetches the embedding model into VM-local `HF_HOME` and keeps
+  incremental indexes under VM-local `SEMBLE_CACHE_LOCATION`, so queries need
+  no network or API key after provisioning.
+- The VM readiness probe verifies the local cache and provisioning tests verify
+  the manifest-pinned toolchain.
 
 ### GitHub search
 
@@ -107,7 +103,7 @@ requiring a shared repository `AGENTS.md` or README.
 
 - Runtime command: `devbox-go`.
 - Use it from a Go project when the project's `go.work` or `go.mod` declares a
-  different toolchain than the image default. `devbox-go --doctor` reports the
+  different toolchain than the VM default. `devbox-go --doctor` reports the
   selected version, `devbox-go version` runs Go with it, and
   `devbox-go install <tool-module>@<version>` builds a Go tool with it.
 - `devbox-go run COMMAND ...` exports `GOTOOLCHAIN` to child commands that
@@ -115,15 +111,14 @@ requiring a shared repository `AGENTS.md` or README.
   binary. Installed tools use the persistent Go cache's `bin` directory, which
   is on `PATH`; use a precompiled tool's own version-selection mechanism when
   needed.
-- Go's downloaded toolchains and module cache live under the container's
-  persistent `/sandbox/.cache/go` volume or Lima's VM-local `$HOME/.cache/go`.
-  Do not put these caches on the shared project mount.
+- Go's downloaded toolchains and module cache live under the VM-local
+  `$HOME/.cache/go`. Do not put these caches on the shared project mount.
 - If `devbox-go` is unavailable, use the reported `GOTOOLCHAIN=<version>+auto`
   value explicitly with the Go command or tool. Without a discoverable
   `go.work` or `go.mod`, the command fails rather than silently selecting the
-  image default.
-- Unit coverage is in `tests/unit/test_devbox_go.py`; container availability is
-  covered by `tests/container/test_image_binaries.py`.
+  VM default.
+- Unit coverage is in `tests/unit/test_devbox_go.py`; provisioned availability
+  is covered by `tests/vm/test_provisioned_vm.py`.
 
 ### Kubernetes operator profile (Lima)
 
@@ -148,9 +143,8 @@ requiring a shared repository `AGENTS.md` or README.
   inspection, not a publisher or checksum verification.
 - For ELF header details, or as a fallback when `file` is unavailable, use
   `readelf -h <artifact>` when `readelf` is installed.
-- Persistent devbox containers need `devbox --recreate` after image changes.
-- Runtime coverage is in `tests/container/test_image_binaries.py`; staged
-  guidance is checked in `tests/container/test_opencode_config.py`.
+- The VM readiness probe verifies that `file` and the manifest-pinned tools are
+  present after provisioning.
 
 ### Classic diff and patch
 
@@ -170,9 +164,8 @@ requiring a shared repository `AGENTS.md` or README.
   use `diff` when plain textual equality or exit-status semantics matter.
   Inside a git repository, prefer `git diff` and `git apply` over `diff` and
   `patch`.
-- Persistent devbox containers need `devbox --recreate` after image changes.
-- Runtime coverage is in `tests/container/test_image_binaries.py`; staged
-  guidance is checked in `tests/container/test_opencode_config.py`.
+- The VM readiness probe verifies that `diff` and `patch` are present after
+  provisioning.
 
 ### Token-hygiene utilities
 
@@ -226,4 +219,4 @@ Keep each entry short and operational. Include:
 - The test that proves the agent can discover or invoke it.
 
 Do not list a capability here before its runtime artifact and integration are
-actually present in the image.
+actually provisioned in the VM.

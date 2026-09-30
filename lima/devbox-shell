@@ -79,10 +79,13 @@ if [[ "$start_vm" == true ]]; then
   start_vm=false
 fi
 
-# Keep this set aligned with the environment values that the container devbox
-# passes to `podman run`. The unit test compares this list with ../devbox, so
-# adding a provider there requires updating the Lima passthrough too.
+# These variables are the explicit host-to-guest allowlist. Provider
+# credentials are conditionally forwarded below; CA-bundle values are static
+# guest paths, not host file paths. Keep this list synchronized with its tests.
 DEVBOX_ENV_VARS=(
+  SSL_CERT_FILE
+  REQUESTS_CA_BUNDLE
+  NODE_EXTRA_CA_CERTS
   GEMINI_API_KEY
   GOOGLE_GENERATIVE_AI_API_KEY
   GH_TOKEN
@@ -111,6 +114,10 @@ DEVBOX_ENV_VARS=(
   VERTEX_LOCATION
 )
 
+export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+export REQUESTS_CA_BUNDLE="$SSL_CERT_FILE"
+export NODE_EXTRA_CA_CERTS="$SSL_CERT_FILE"
+
 unset_if_empty() {
   local name
   for name in "$@"; do
@@ -120,9 +127,8 @@ unset_if_empty() {
   done
 }
 
-# Mirror the container devbox's provider aliases and conditional forwarding.
-# This keeps values in the Lima guest consistent even when the host exports
-# only one side of an alias or an incomplete credential group.
+# Normalize provider aliases and conditional credential groups before they
+# cross the host-to-VM boundary.
 if [[ -n "${GEMINI_API_KEY:-}" ]]; then
   export GOOGLE_GENERATIVE_AI_API_KEY="$GEMINI_API_KEY"
 else

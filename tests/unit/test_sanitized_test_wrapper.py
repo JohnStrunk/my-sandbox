@@ -7,7 +7,6 @@ import signal
 import subprocess
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -24,105 +23,6 @@ def _run_wrapper(
         env=env,
         cwd=repo_root,
     )
-
-
-def _make_fake_podman(
-    bin_dir: Path,
-    log_path: Path,
-    *,
-    status: int = 0,
-    message: str = "",
-    run_status: int = 0,
-    run_message: str = "",
-    rm_status: int = 0,
-    exists_status: int = 0,
-) -> None:
-    log = shlex.quote(str(log_path))
-    fake_podman = bin_dir / "podman"
-    fake_podman.write_text(
-        f"""#!/usr/bin/env bash
-set -euo pipefail
-printf 'HOME=%s\\n' "${{HOME-}}" > {log}
-printf 'XDG_CONFIG_HOME=%s\\n' "${{XDG_CONFIG_HOME-}}" >> {log}
-printf 'XDG_DATA_HOME=%s\\n' "${{XDG_DATA_HOME-}}" >> {log}
-printf 'XDG_RUNTIME_DIR=%s\\n' "${{XDG_RUNTIME_DIR-}}" >> {log}
-printf 'DBUS_SESSION_BUS_ADDRESS=%s\\n' "${{DBUS_SESSION_BUS_ADDRESS-<unset>}}" >> {log}
-printf 'REGISTRY_AUTH_FILE=%s\\n' "${{REGISTRY_AUTH_FILE-}}" >> {log}
-printf 'GH_TOKEN=%s\\n' "${{GH_TOKEN-<unset>}}" >> {log}
-printf 'CONTAINERS_CONF=%s\\n' "${{CONTAINERS_CONF-<unset>}}" >> {log}
-printf 'DOCKER_CONFIG=%s\\n' "${{DOCKER_CONFIG-<unset>}}" >> {log}
-printf 'DOCKER_AUTH_CONFIG=%s\\n' "${{DOCKER_AUTH_CONFIG-<unset>}}" >> {log}
-printf 'ARGS=%s\\n' "$*" >> {log}
-if [[ -f "${{XDG_CONFIG_HOME-}}/containers/containers.conf" ]]; then
-  printf 'CONFIG_COPY=present\\n' >> {log}
-else
-  printf 'CONFIG_COPY=absent\\n' >> {log}
-fi
-if [[ -f "${{XDG_CONFIG_HOME-}}/containers/auth.json" ]]; then
-  printf 'AUTH_COPY=present\\n' >> {log}
-else
-  printf 'AUTH_COPY=absent\\n' >> {log}
-fi
-while [[ "${{1-}}" == --root || "${{1-}}" == --runroot ]]; do
-  shift 2
-done
-if [[ "${{1-}}" == run && {run_status} -ne 0 ]]; then
-  printf '%s\\n' {shlex.quote(run_message)} >&2
-  exit {run_status}
-fi
-if [[ "${{1-}}" == rm && {rm_status} -ne 0 ]]; then
-  printf 'simulated probe removal failure\\n' >&2
-  exit {rm_status}
-fi
-if [[ "${{1-}}" == container && "${{2-}}" == exists && {exists_status} -ne 0 ]]; then
-  printf 'simulated container status failure\\n' >&2
-  exit {exists_status}
-fi
-if [[ "${{1-}}" == info ]]; then
-  if [[ {status} -ne 0 ]]; then
-    printf '%s\\n' {shlex.quote(message)} >&2
-    exit {status}
-  fi
-  printf 'true\\n'
-fi
-"""
-    )
-    fake_podman.chmod(0o700)
-
-
-def _podman_environment(
-    tmp_path: Path, fake_bin: Path, host_home: Path
-) -> dict[str, str]:
-    host_config = tmp_path / "host-config"
-    host_data = tmp_path / "host-data"
-    host_runtime = tmp_path / "host-runtime"
-    host_cache = tmp_path / "host-cache"
-    host_config.mkdir()
-    host_data.mkdir()
-    host_runtime.mkdir()
-    host_cache.mkdir()
-    host_containers = host_config / "containers"
-    host_containers.mkdir()
-    (host_containers / "containers.conf").write_text(
-        "[containers]\ndefault_sysctls = []\n"
-    )
-    (host_containers / "auth.json").write_text('{"auth":"fixture-auth-sentinel"}\n')
-    env = os.environ.copy()
-    env.update(
-        {
-            "PATH": f"{fake_bin}:{env.get('PATH', '')}",
-            "HOME": str(host_home),
-            "XDG_CONFIG_HOME": str(host_config),
-            "XDG_DATA_HOME": str(host_data),
-            "XDG_RUNTIME_DIR": str(host_runtime),
-            "XDG_CACHE_HOME": str(host_cache),
-            "GH_TOKEN": "host-secret-token",  # pragma: allowlist secret
-            "TAVILY_API_KEY": "host-tavily-token",  # pragma: allowlist secret
-            "CONTAINERS_CONF": str(tmp_path / "host-secret.conf"),
-            "DOCKER_AUTH_CONFIG": '{"auths":{"registry.example":"secret"}}',
-        }
-    )
-    return env
 
 
 @pytest.mark.unit
@@ -151,6 +51,7 @@ def test_wrapper_scrubs_host_environment(repo_root: Path, tmp_path: Path) -> Non
     child_env = json.loads(result.stdout)
     assert child_env["HOME"] != env["HOME"]
     assert child_env["XDG_CONFIG_HOME"] != env.get("XDG_CONFIG_HOME")
+    assert child_env["XDG_RUNTIME_DIR"] != env.get("XDG_RUNTIME_DIR")
     assert "GH_TOKEN" not in child_env
     assert "TAVILY_API_KEY" not in child_env
     assert "AWS_CONFIG_FILE" not in child_env
@@ -158,281 +59,52 @@ def test_wrapper_scrubs_host_environment(repo_root: Path, tmp_path: Path) -> Non
 
 
 @pytest.mark.unit
-def test_wrapper_restores_only_podman_runtime_allowlist(
-    repo_root: Path, tmp_path: Path
+def test_guest_vm_marker_does_not_forward_runtime_sockets_or_credentials(
+    repo_root: Path,
 ) -> None:
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    host_home = tmp_path / "host-home"
-    host_home.mkdir()
-    log_path = host_home / "podman.log"
-    _make_fake_podman(fake_bin, log_path)
-    env = _podman_environment(tmp_path, fake_bin, host_home)
-
-    result = _run_wrapper(repo_root, ["--require-podman", "--", "podman", "info"], env)
-
-    assert result.returncode == 0, result.stderr
-    logged = log_path.read_text()
-    assert f"HOME={host_home}" not in logged
-    assert f"XDG_CONFIG_HOME={tmp_path / 'host-config'}" not in logged
-    assert f"XDG_DATA_HOME={tmp_path / 'host-data'}" not in logged
-    assert f"XDG_RUNTIME_DIR={tmp_path / 'host-runtime'}" not in logged
-    assert "DBUS_SESSION_BUS_ADDRESS=<unset>" in logged
-    assert "GH_TOKEN=<unset>" in logged
-    assert "CONTAINERS_CONF=<unset>" in logged
-    assert "DOCKER_CONFIG=" in logged
-    assert "DOCKER_AUTH_CONFIG=<unset>" in logged
-    assert "CONFIG_COPY=present" in logged
-    assert "AUTH_COPY=absent" in logged
-    assert f"DOCKER_CONFIG={host_home}" not in logged
-    assert "REGISTRY_AUTH_FILE=" in logged
-    assert str(host_home) not in logged.split("REGISTRY_AUTH_FILE=", 1)[1]
-    assert f"--root {tmp_path / 'host-data' / 'containers' / 'storage'}" in logged
-    assert f"--runroot {tmp_path / 'host-runtime' / 'containers'}" in logged
-
-
-@pytest.mark.unit
-def test_guest_vm_podman_shim_keeps_only_guest_runtime_socket(
-    repo_root: Path, tmp_path: Path
-) -> None:
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    host_home = tmp_path / "host-home"
-    host_home.mkdir()
-    log_path = host_home / "podman.log"
-    _make_fake_podman(fake_bin, log_path)
-    env = _podman_environment(tmp_path, fake_bin, host_home)
-    env["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=/run/user/1000/bus"
-
-    result = _run_wrapper(
-        repo_root,
-        ["--guest-vm", "--require-podman", "--", "podman", "info"],
-        env,
-    )
-
-    assert result.returncode == 0, result.stderr
-    logged = log_path.read_text()
-    assert "XDG_RUNTIME_DIR=" + str(tmp_path / "host-runtime") in logged
-    assert "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus" in logged
-    assert "GH_TOKEN=<unset>" in logged
-
-
-@pytest.mark.unit
-def test_wrapper_distinguishes_podman_preflight_failure(
-    repo_root: Path, tmp_path: Path
-) -> None:
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    host_home = tmp_path / "host-home"
-    host_home.mkdir()
-    log_path = host_home / "podman.log"
-    _make_fake_podman(
-        fake_bin,
-        log_path,
-        status=42,
-        message="ping_group_range runtime configuration unavailable",
-    )
-    env = _podman_environment(tmp_path, fake_bin, host_home)
-    marker = tmp_path / "product-command-ran"
-    command = [sys.executable, "-c", f"Path({str(marker)!r}).touch()"]
-
-    result = _run_wrapper(repo_root, ["--require-podman", "--", *command], env)
-
-    assert result.returncode == 125
-    assert "Podman preflight failed" in result.stderr
-    assert "infrastructure/runtime configuration failure" in result.stderr
-    assert "ping_group_range runtime configuration unavailable" in result.stderr
-    assert not marker.exists()
-
-
-@pytest.mark.unit
-def test_wrapper_distinguishes_container_preflight_failure(
-    repo_root: Path, tmp_path: Path
-) -> None:
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    host_home = tmp_path / "host-home"
-    host_home.mkdir()
-    log_path = host_home / "podman.log"
-    _make_fake_podman(
-        fake_bin,
-        log_path,
-        run_status=42,
-        run_message="probe registry configuration unavailable",
-    )
-    env = _podman_environment(tmp_path, fake_bin, host_home)
-    marker = tmp_path / "product-command-ran"
-    command = [sys.executable, "-c", f"Path({str(marker)!r}).touch()"]
-
-    result = _run_wrapper(repo_root, ["--require-podman", "--", *command], env)
-
-    assert result.returncode == 125
-    assert "Podman container preflight failed" in result.stderr
-    assert "probe registry configuration unavailable" in result.stderr
-    assert not marker.exists()
-    assert "rm -f my-sandbox-podman-probe-" in log_path.read_text()
-
-
-@pytest.mark.unit
-def test_wrapper_reports_unknown_probe_cleanup_status(
-    repo_root: Path, tmp_path: Path
-) -> None:
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    host_home = tmp_path / "host-home"
-    host_home.mkdir()
-    log_path = host_home / "podman.log"
-    _make_fake_podman(
-        fake_bin,
-        log_path,
-        run_status=42,
-        run_message="probe runtime unavailable",
-        rm_status=17,
-        exists_status=125,
-    )
-    env = _podman_environment(tmp_path, fake_bin, host_home)
-    marker = tmp_path / "product-command-ran"
-
-    result = _run_wrapper(
-        repo_root,
-        [
-            "--require-podman",
-            "--",
-            sys.executable,
-            "-c",
-            f"Path({str(marker)!r}).touch()",
-        ],
-        env,
-    )
-
-    assert result.returncode == 125
-    assert "could not confirm removal of Podman probe container" in result.stderr
-    assert "container exists check exited 125" in result.stderr
-    assert not marker.exists()
-
-
-@pytest.mark.unit
-def test_wrapper_reports_probe_container_left_after_cleanup_failure(
-    repo_root: Path, tmp_path: Path
-) -> None:
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    host_home = tmp_path / "host-home"
-    host_home.mkdir()
-    log_path = host_home / "podman.log"
-    _make_fake_podman(
-        fake_bin,
-        log_path,
-        run_status=42,
-        run_message="probe runtime unavailable",
-        rm_status=17,
-        exists_status=0,
-    )
-    env = _podman_environment(tmp_path, fake_bin, host_home)
-    marker = tmp_path / "product-command-ran"
-
-    result = _run_wrapper(
-        repo_root,
-        [
-            "--require-podman",
-            "--",
-            sys.executable,
-            "-c",
-            f"Path({str(marker)!r}).touch()",
-        ],
-        env,
-    )
-
-    assert result.returncode == 125
-    assert "WARNING: could not remove Podman probe container" in result.stderr
-    assert not marker.exists()
-
-
-@pytest.mark.unit
-def test_wrapper_serializes_podman_runtime_sessions(
-    repo_root: Path, tmp_path: Path
-) -> None:
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    host_home = tmp_path / "host-home"
-    host_home.mkdir()
-    log_path = host_home / "podman.log"
-    _make_fake_podman(fake_bin, log_path)
-    env = _podman_environment(tmp_path, fake_bin, host_home)
-
-    active = tmp_path / "test-session-active"
-    overlap = tmp_path / "test-session-overlap"
-    command = [
-        sys.executable,
-        "-c",
-        """
-import os
-import pathlib
-import sys
-import time
-
-active, overlap = map(pathlib.Path, sys.argv[1:])
-lock_file = pathlib.Path(os.environ["MY_SANDBOX_PODMAN_RUNTIME_LOCK_FILE"])
-if os.environ.get("MY_SANDBOX_PODMAN_RUNTIME_LOCK_HELD") != "1":
-    raise SystemExit("runtime lock marker was not passed to the test command")
-if not lock_file.is_file():
-    raise SystemExit("runtime lock file was not created")
-try:
-    active.mkdir()
-except FileExistsError:
-    overlap.touch()
-time.sleep(0.2)
-try:
-    active.rmdir()
-except OSError:
-    pass
-""",
-        str(active),
-        str(overlap),
-    ]
-
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        futures = [
-            executor.submit(
-                _run_wrapper,
-                repo_root,
-                ["--require-podman", "--", *command],
-                env,
-            )
-            for _ in range(2)
-        ]
-        results = [future.result(timeout=45) for future in futures]
-
-    assert all(result.returncode == 0 for result in results), [
-        result.stderr for result in results
-    ]
-    assert not overlap.exists()
-
-
-@pytest.mark.unit
-def test_wrapper_propagates_command_status(repo_root: Path) -> None:
-    result = _run_wrapper(
-        repo_root,
-        ["--", sys.executable, "-c", "raise SystemExit(23)"],
-        os.environ.copy(),
-    )
-
-    assert result.returncode == 23
-    # The background-job launch must not add job-control noise on the
-    # success path.
-    assert result.stderr == ""
-
-
-@pytest.mark.unit
-def test_wrapper_passes_suite_tuning_knobs(repo_root: Path) -> None:
-    """The documented suite runs through the wrapper's env allowlist, so the
-    build-timeout knobs must pass through it (issue #252): a knob the wrapper
-    scrubs is a no-op in exactly the environments that need it.
-    """
     env = os.environ.copy()
-    env["DEVBOX_IMAGE_BUILD_TIMEOUT"] = "123.5"
-    env["DEVBOX_PODMAN_PROBE_TIMEOUT"] = "45.5"
-    env["DEVBOX_VM_START_TIMEOUT"] = "678.5"
+    env["XDG_RUNTIME_DIR"] = "/run/user/1000"
+    env["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=/run/user/1000/bus"
+    env["DOCKER_HOST"] = "unix:///run/user/1000/podman/podman.sock"
+    env["GH_TOKEN"] = "mock-guest-token"  # pragma: allowlist secret
+
+    result = _run_wrapper(
+        repo_root,
+        [
+            "--guest-vm",
+            "--",
+            sys.executable,
+            "-c",
+            (
+                "import json, os; print(json.dumps({key: os.environ.get(key) "
+                "for key in ('HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', "
+                "'DOCKER_HOST', 'MY_SANDBOX_VM_TEST_IN_GUEST', 'GH_TOKEN')}))"
+            ),
+        ],
+        env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    child_env = json.loads(result.stdout)
+    assert child_env["HOME"] != env["HOME"]
+    assert child_env["XDG_RUNTIME_DIR"] != "/run/user/1000"
+    assert child_env["DBUS_SESSION_BUS_ADDRESS"] is None
+    assert child_env["DOCKER_HOST"] is None
+    assert child_env["MY_SANDBOX_VM_TEST_IN_GUEST"] == "1"
+    assert child_env["GH_TOKEN"] is None
+
+
+@pytest.mark.unit
+def test_wrapper_passes_only_vm_timeout_tuning(repo_root: Path) -> None:
+    env = os.environ.copy()
+    env.update(
+        {
+            "DEVBOX_VM_START_TIMEOUT": "678.5",
+            "MY_SANDBOX_VM_TEST_FRESH": "1",
+            "UNRELATED_BUILD_TIMEOUT": "123.5",
+            "GH_TOKEN": "mock-timeout-token",  # pragma: allowlist secret
+        }
+    )
 
     result = _run_wrapper(
         repo_root,
@@ -447,9 +119,20 @@ def test_wrapper_passes_suite_tuning_knobs(repo_root: Path) -> None:
 
     assert result.returncode == 0, result.stderr
     child_env = json.loads(result.stdout)
-    assert child_env["DEVBOX_IMAGE_BUILD_TIMEOUT"] == "123.5"
-    assert child_env["DEVBOX_PODMAN_PROBE_TIMEOUT"] == "45.5"
     assert child_env["DEVBOX_VM_START_TIMEOUT"] == "678.5"
+    assert child_env["MY_SANDBOX_VM_TEST_FRESH"] == "1"
+    assert "UNRELATED_BUILD_TIMEOUT" not in child_env
+    assert "GH_TOKEN" not in child_env
+
+
+@pytest.mark.unit
+def test_wrapper_rejects_retired_podman_options(repo_root: Path) -> None:
+    env = os.environ.copy()
+
+    result = _run_wrapper(repo_root, ["--require-podman", "--", "true"], env)
+
+    assert result.returncode == 2
+    assert "unknown option: --require-podman" in result.stderr
 
 
 @pytest.mark.unit
@@ -489,53 +172,50 @@ def test_wrapper_stops_before_test_command_on_vm_capability_limit(
 
 
 @pytest.mark.unit
-def test_guest_vm_wrapper_keeps_runtime_sockets_out_of_test_processes(
-    repo_root: Path,
+def test_recursive_vm_preflight_receives_recursive_flag(
+    repo_root: Path, tmp_path: Path
 ) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    args_file = tmp_path / "preflight-args"
+    fake_python = fake_bin / "python3"
+    fake_python.write_text(
+        f"#!/usr/bin/env bash\nprintf '%s\\n' \"$@\" > {shlex.quote(str(args_file))}\n"
+    )
+    fake_python.chmod(0o755)
+    marker = tmp_path / "command-ran"
     env = os.environ.copy()
-    env["XDG_RUNTIME_DIR"] = "/run/user/1000"
-    env["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=/run/user/1000/bus"
-    env["DOCKER_HOST"] = "unix:///run/user/1000/podman/podman.sock"
-    env["GH_TOKEN"] = "mock-guest-token"  # pragma: allowlist secret
+    env["PATH"] = f"{fake_bin}:{env.get('PATH', '')}"
 
     result = _run_wrapper(
         repo_root,
-        [
-            "--guest-vm",
-            "--",
-            sys.executable,
-            "-c",
-            (
-                "import json, os; print(json.dumps({key: os.environ.get(key) "
-                "for key in ('HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', "
-                "'DOCKER_HOST', 'MY_SANDBOX_VM_TEST_IN_GUEST', 'GH_TOKEN')}))"
-            ),
-        ],
+        ["--require-recursive-vm", "--", "touch", str(marker)],
         env,
     )
 
     assert result.returncode == 0, result.stderr
-    child_env = json.loads(result.stdout)
-    assert child_env["HOME"] != env["HOME"]
-    assert child_env["XDG_RUNTIME_DIR"] != "/run/user/1000"
-    assert child_env["DBUS_SESSION_BUS_ADDRESS"] is None
-    assert child_env["DOCKER_HOST"] is None
-    assert child_env["MY_SANDBOX_VM_TEST_IN_GUEST"] == "1"
-    assert child_env["GH_TOKEN"] is None
+    assert marker.exists()
+    assert "--recursive" in args_file.read_text().splitlines()
+
+
+@pytest.mark.unit
+def test_wrapper_propagates_command_status(repo_root: Path) -> None:
+    result = _run_wrapper(
+        repo_root,
+        ["--", sys.executable, "-c", "raise SystemExit(23)"],
+        os.environ.copy(),
+    )
+
+    assert result.returncode == 23
+    assert result.stderr == ""
 
 
 @pytest.mark.unit
 def test_wrapper_sigint_exits_fast_with_command_cleanup(
     repo_root: Path, tmp_path: Path
 ) -> None:
-    """A graceful command must shut down on the forwarded SIGINT without the
-    wrapper waiting out its whole escalation grace.
-    """
     cleanup_marker = tmp_path / "int-cleanup-ran"
     ready_marker = tmp_path / "int-command-ready"
-    # Foreground sleep: an *async* sleep would ignore SIGINT (POSIX: async
-    # commands in non-interactive shells inherit SIG_IGN for it) and turn
-    # this into the escalation path instead of the graceful one.
     command = (
         "trap 'touch " + shlex.quote(str(cleanup_marker)) + "' INT\n"
         "touch " + shlex.quote(str(ready_marker)) + "\n"
@@ -575,7 +255,7 @@ def test_wrapper_sigint_exits_fast_with_command_cleanup(
             proc.kill()
             proc.wait()
 
-    assert proc.returncode == 130, (tmp_path / "err").read_text()  # 128 + SIGINT
+    assert proc.returncode == 130, (tmp_path / "err").read_text()
     assert cleanup_marker.exists(), "command INT trap never ran"
     assert elapsed < 5, f"graceful INT took {elapsed:.1f}s to shut down"
 
@@ -584,17 +264,8 @@ def test_wrapper_sigint_exits_fast_with_command_cleanup(
 def test_wrapper_sigterm_terminates_command_tree(
     repo_root: Path, tmp_path: Path
 ) -> None:
-    """Interrupting the wrapper must terminate the whole command tree (issue #252).
-
-    The command models a wedged nested `podman build`: both the command and
-    its child ignore SIGTERM, so only the wrapper's escalated group SIGKILL
-    can stop them. Before the fix, killing the wrapper orphaned exactly this
-    kind of tree, which kept burning CPU after the run was over.
-    """
+    """A SIGTERM-ignoring command tree must not outlive the wrapper."""
     pidfile = tmp_path / "command-pids"
-    # SIG_IGN survives fork and exec, so the ignore is set explicitly in the
-    # child as well as the parent: both processes genuinely ignore SIGTERM
-    # and only the wrapper's escalated group SIGKILL can stop them.
     command = (
         "trap '' TERM INT\n"
         "(trap '' TERM INT; exec sleep 600) &\n"
@@ -623,13 +294,10 @@ def test_wrapper_sigterm_terminates_command_tree(
         while time.monotonic() < deadline:
             if pidfile.exists():
                 break
-            assert proc.poll() is None, (
-                "wrapper exited before the command started: "
-                f"{(tmp_path / 'err').read_text()}"
-            )
+            assert proc.poll() is None, "wrapper exited before the command started"
             time.sleep(0.05)
         assert pidfile.exists(), "command never started before the signal"
-        command_pid, child_pid = (int(v) for v in pidfile.read_text().split())
+        command_pid, child_pid = (int(value) for value in pidfile.read_text().split())
 
         proc.send_signal(signal.SIGTERM)
         proc.wait(timeout=60)
@@ -639,8 +307,7 @@ def test_wrapper_sigterm_terminates_command_tree(
             proc.wait()
 
     stderr = stderr_path.read_text()
-
-    assert proc.returncode == 143, stderr  # 128 + SIGTERM
+    assert proc.returncode == 143, stderr
     assert "received SIGTERM" in stderr
     assert "terminating the command process group" in stderr
     assert _wait_pid_gone(command_pid), (
@@ -652,22 +319,11 @@ def test_wrapper_sigterm_terminates_command_tree(
 
 
 @pytest.mark.unit
-def test_wrapper_sigterm_terminates_detached_session_builds(
+def test_wrapper_sigterm_terminates_detached_session_commands(
     repo_root: Path, tmp_path: Path
 ) -> None:
-    """Interrupting the wrapper must not orphan detached-session builds (issue #252).
-
-    This is the full chain from the issue: the suite launches builds via
-    `run_in_process_group`, which gives each one its own session, so a
-    wedged build survives any group-wide signal aimed at the suite itself.
-    The suite's SIGTERM handler must kill its tracked process groups before
-    the wrapper's group kill lands, or an interrupted run leaves a
-    CPU-spinning `podman build` behind.
-    """
-    build_pidfile = tmp_path / "detached-build.pid"
-    # A stand-in for the pytest process running under the wrapper: it
-    # installs the suite's termination handlers and starts a build through
-    # the suite's runner (own session, ignores SIGTERM).
+    """The suite runner must reap detached child sessions on interruption."""
+    command_pidfile = tmp_path / "detached-command.pid"
     suite_mock = tmp_path / "suite-mock.py"
     suite_mock.write_text(
         "import sys\n"
@@ -678,32 +334,25 @@ def test_wrapper_sigterm_terminates_detached_session_builds(
         "    install_termination_handlers,\n"
         "    run_in_process_group,\n"
         ")\n"
-        "\n"
         "install_termination_handlers()\n"
-        "\n"
-        "\n"
-        "def start_wedge() -> None:\n"
+        "def start_wedge():\n"
         "    run_in_process_group(\n"
-        "        [\n"
-        "            'bash',\n"
-        "            '-c',\n"
-        "            \"trap '' TERM; printf '%s\\\\n' $$ > "
-        f"{str(build_pidfile)!r}; "
-        "(trap '' TERM; exec sleep 600) & wait\",\n"
-        "        ],\n"
+        "        ['bash', '-c', \"trap '' TERM; "
+        f"printf '%s\\\\n' $$ > {str(command_pidfile)!r}; "
+        "(trap '' TERM; exec sleep 600) & wait\"],\n"
         "        timeout=600,\n"
         "    )\n"
-        "\n"
-        "\n"
         "worker = threading.Thread(target=start_wedge, daemon=True)\n"
         "worker.start()\n"
         "while not __import__('os').path.exists("
-        f"{str(build_pidfile)!r}):\n"
+        f"{str(command_pidfile)!r}):\n"
         "    time.sleep(0.05)\n"
         "print('READY', flush=True)\n"
         "time.sleep(600)\n"
     )
-    with (tmp_path / "out").open("w") as out, (tmp_path / "err").open("w") as err:
+    stdout_path = tmp_path / "suite.stdout"
+    stderr_path = tmp_path / "suite.stderr"
+    with stdout_path.open("w") as out, stderr_path.open("w") as err:
         proc = subprocess.Popen(
             [
                 str(repo_root / "scripts" / "sanitized-test.sh"),
@@ -719,14 +368,11 @@ def test_wrapper_sigterm_terminates_detached_session_builds(
         )
     try:
         deadline = time.monotonic() + 15
-        while time.monotonic() < deadline and not build_pidfile.exists():
-            assert proc.poll() is None, (
-                "wrapper exited before the build started: "
-                f"{(tmp_path / 'err').read_text()}"
-            )
+        while time.monotonic() < deadline and not command_pidfile.exists():
+            assert proc.poll() is None, "wrapper exited before the command started"
             time.sleep(0.05)
-        assert build_pidfile.exists(), "detached build never started"
-        build_pid = int(build_pidfile.read_text().strip())
+        assert command_pidfile.exists(), "detached command never started"
+        command_pid = int(command_pidfile.read_text().strip())
 
         proc.send_signal(signal.SIGTERM)
         proc.wait(timeout=60)
@@ -735,13 +381,10 @@ def test_wrapper_sigterm_terminates_detached_session_builds(
             proc.kill()
             proc.wait()
 
-    # The wedged build ignored SIGTERM by construction: only the suite's
-    # tracked-group handler (SIGKILL) or the wrapper's escalation can have
-    # killed it. Either way, it must be dead -- no orphan left spinning.
-    stderr = (tmp_path / "err").read_text()
-    assert proc.returncode == 143, stderr  # 128 + SIGTERM
+    stderr = stderr_path.read_text()
+    assert proc.returncode == 143, stderr
     assert "received SIGTERM" in stderr
     assert "terminating the command process group" in stderr
-    assert _wait_pid_gone(build_pid), (
-        f"detached-session build {build_pid} survived the wrapper interruption"
+    assert _wait_pid_gone(command_pid), (
+        f"detached command {command_pid} survived the wrapper interruption"
     )

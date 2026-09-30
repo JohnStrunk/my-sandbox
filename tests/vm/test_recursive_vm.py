@@ -90,12 +90,14 @@ limactl shell "$name" -- bash -ceu '
 
 @pytest.mark.e2e_kind
 def test_kind_cluster_runs_inside_the_provisioned_vm(devbox_vm: LimaVM):
-    command = rf"""
+    home = shlex.quote(devbox_vm.guest_home)
+    validate_kind = shlex.quote(f"{devbox_vm.repo_path}/lima/validate-kind.sh")
+    command = f"""
 set -euo pipefail
-export HOME={devbox_vm.guest_home}
+export HOME={home}
 export DOCKER_HOST="unix:///run/user/$(id -u)/podman/podman.sock"
 export KIND_EXPERIMENTAL_PROVIDER=podman
-bash {devbox_vm.repo_path}/lima/validate-kind.sh 1
+bash {validate_kind} 1
 """
     result = devbox_vm.run(
         ["bash", "-ceu", command],

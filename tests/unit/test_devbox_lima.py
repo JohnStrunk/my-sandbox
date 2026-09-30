@@ -1,5 +1,4 @@
 import getpass
-import hashlib
 import json
 import stat
 from concurrent.futures import ThreadPoolExecutor
@@ -7,34 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.conftest import run_bash_script
-
-
-def _fingerprint(repo_root: Path) -> str:
-    """Mirror the fingerprint composed by Lima's user provisioner."""
-
-    def sha(path: Path) -> str:
-        return hashlib.sha256(path.read_bytes()).hexdigest()
-
-    asset_files = (
-        (repo_root / "container/devbox-go", "/var/lib/devbox-vm/tool-assets/devbox-go"),
-        (
-            repo_root / "lima/check_toolchain.py",
-            "/var/lib/devbox-vm/tool-assets/check_toolchain.py",
-        ),
-        (repo_root / "container/semble", "/var/lib/devbox-vm/tool-assets/semble"),
-    )
-    asset_manifest = "".join(
-        f"{sha(source)}  {guest_path}\n" for source, guest_path in asset_files
-    )
-    components = (
-        sha(repo_root / "container/tool-versions.json"),
-        sha(repo_root / "lima/provision-system.sh"),
-        sha(repo_root / "lima/provision-user.sh"),
-        sha(repo_root / "lima/provision-tools.sh"),
-        hashlib.sha256(asset_manifest.encode()).hexdigest(),
-    )
-    return hashlib.sha256(("\n".join(components) + "\n").encode()).hexdigest()
+from tests.conftest import expected_lima_provisioning_fingerprint, run_bash_script
 
 
 def _install_lima_shim(
@@ -184,7 +156,7 @@ def test_running_vm_is_fast_and_opencode_uses_allowlisted_environment(
     calls, capture = _install_lima_shim(
         tmp_path,
         isolated_env,
-        fingerprint=_fingerprint(repo_root),
+        fingerprint=expected_lima_provisioning_fingerprint(repo_root),
     )
     gemini_alias = "GOOGLE_GENERATIVE_AI_API_KEY"
     isolated_env["GEMINI_API_KEY"] = "mock-gemini-token"  # pragma: allowlist secret
@@ -221,7 +193,9 @@ def test_opencode_launch_builds_runtime_config_inside_the_vm(
     tmp_path: Path,
 ):
     calls, capture = _install_lima_shim(
-        tmp_path, isolated_env, fingerprint=_fingerprint(repo_root)
+        tmp_path,
+        isolated_env,
+        fingerprint=expected_lima_provisioning_fingerprint(repo_root),
     )
 
     result = run_bash_script(
@@ -316,7 +290,9 @@ def test_reprovision_clears_manifest_fingerprint_warning(
     tmp_path: Path,
 ):
     calls, _ = _install_lima_shim(tmp_path, isolated_env)
-    isolated_env["MOCK_VM_FINGERPRINT_AFTER_START"] = _fingerprint(repo_root)
+    isolated_env["MOCK_VM_FINGERPRINT_AFTER_START"] = (
+        expected_lima_provisioning_fingerprint(repo_root)
+    )
 
     result = run_bash_script(
         devbox_path, ["--reprovision"], cwd=project_dir, env=isolated_env, timeout=15

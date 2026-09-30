@@ -42,11 +42,6 @@ def build_config() -> dict[str, object]:
             },
             {
                 "action": "external_directory",
-                "resource": "/sandbox/*",
-                "effect": "allow",
-            },
-            {
-                "action": "external_directory",
                 "resource": "/tmp/*",
                 "effect": "allow",
             },

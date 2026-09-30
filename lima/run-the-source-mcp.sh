@@ -10,10 +10,13 @@ uv_bin="$(command -v uv)" || {
   exit 127
 }
 venv="$HOME/.local/state/devbox-toolchain/the-source-mcp"
+ca_bundle=/etc/ssl/certs/ca-certificates.crt
 
 /usr/bin/env -i \
   HOME="${HOME:?OpenCode did not provide HOME}" \
   PATH="${PATH:?OpenCode did not provide PATH}" \
+  SSL_CERT_FILE="$ca_bundle" \
+  REQUESTS_CA_BUNDLE="$ca_bundle" \
   UV_CACHE_DIR="$HOME/.cache/uv" \
   UV_PROJECT_ENVIRONMENT="$venv" \
   "$uv_bin" sync --project "$source_project" --locked
@@ -54,5 +57,7 @@ names = (
 )
 env = {name: os.environ[name] for name in names}
 env["PATH"] = "/usr/bin:/bin"
+env["SSL_CERT_FILE"] = "/etc/ssl/certs/ca-certificates.crt"
+env["REQUESTS_CA_BUNDLE"] = "/etc/ssl/certs/ca-certificates.crt"
 os.execve(command, [command], env)
 ' "$venv/bin/igloo-mcp"

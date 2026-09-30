@@ -41,6 +41,11 @@ def test_vm_config_baseline_and_no_github_mcp(
         "resource": "/root/*",
         "effect": "deny",
     } in config["permissions"]
+    assert {
+        "action": "external_directory",
+        "resource": "/sandbox/*",
+        "effect": "allow",
+    } not in config["permissions"]
     assert {"action": "websearch", "resource": "*", "effect": "allow"} in config[
         "permissions"
     ]
@@ -180,6 +185,8 @@ def test_the_source_wrapper_restricts_child_environment(
     assert set(uv_env) == {
         "HOME",
         "PATH",
+        "SSL_CERT_FILE",
+        "REQUESTS_CA_BUNDLE",
         "UV_CACHE_DIR",
         "UV_PROJECT_ENVIRONMENT",
         "PWD",
@@ -205,11 +212,15 @@ def test_the_source_wrapper_restricts_child_environment(
         "IGLOO_MCP_PASSWORD",
         "IGLOO_MCP_SERVER_NAME",
         "IGLOO_MCP_SERVER_INSTRUCTIONS",
+        "SSL_CERT_FILE",
+        "REQUESTS_CA_BUNDLE",
         "PWD",
         "SHLVL",
         "_",
     }
     assert mcp_env["IGLOO_MCP_PASSWORD"] == "mock-password"  # pragma: allowlist secret
+    assert mcp_env["SSL_CERT_FILE"] == "/etc/ssl/certs/ca-certificates.crt"
+    assert mcp_env["REQUESTS_CA_BUNDLE"] == "/etc/ssl/certs/ca-certificates.crt"
     assert mcp_args == []
     assert "ANTHROPIC_API_KEY" not in mcp_env
     assert "GH_TOKEN" not in mcp_env

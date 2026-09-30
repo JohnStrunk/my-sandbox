@@ -9,13 +9,11 @@ tier="${1:-}"
 case "$tier" in
   vm)
     markers="vm or e2e_kind"
-    wrapper_flag="--require-vm"
     ;;
   recursive)
     markers="recursive"
     # The outer runner already checked the host KVM nested parameter; the L1
     # guest may not expose that host-only sysfs knob to its own process.
-    wrapper_flag="--require-vm"
     ;;
   *)
     printf 'usage: %s {vm|recursive}\n' "$0" >&2
@@ -89,12 +87,12 @@ limactl start \
   --param GitUserEmail=ci-test@example.invalid \
   "$repo_root/lima/devbox.yaml"
 
-# The quoted script is evaluated in the guest so its HOME and positional args
-# resolve there, not in the runner.
-# shellcheck disable=SC2016
-limactl shell devbox --workdir /workspace/src/my-sandbox -- bash -ceu '
-  exec ./scripts/sanitized-test.sh --guest-vm "$1" -- \
-    env DEVBOX_VM_START_TIMEOUT=3600 \
+# Run the test wrapper directly in the guest. The host environment is not
+# preserved; only explicit non-secret test controls enter through `env`.
+# shellcheck disable=SC2016 # `$HOME` must expand inside the guest shell.
+limactl shell --workdir /workspace/src/my-sandbox devbox bash -c '
+  exec ./scripts/sanitized-test.sh --guest-vm --require-vm -- \
+    env MY_SANDBOX_VM_TEST_FRESH=1 DEVBOX_VM_START_TIMEOUT=3600 \
       UV_PROJECT_ENVIRONMENT="$HOME/.cache/my-sandbox-test-venv" \
-      uv run --extra test pytest -m "$2"
-' -- "$wrapper_flag" "$markers"
+      uv run --extra test pytest -m "$1"
+' run-vm-ci "$markers"

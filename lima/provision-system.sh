@@ -33,7 +33,7 @@ case "$DEVBOX_REPO/" in
   "$repo_prefix"*) ;;
   *) echo "devbox: RepoPath must be inside SrcPath" >&2; exit 1 ;;
 esac
-MANIFEST_SOURCE="$DEVBOX_REPO/container/tool-versions.json"
+MANIFEST_SOURCE="$DEVBOX_REPO/lima/tool-versions.json"
 if [[ -L "$MANIFEST_SOURCE" || ! -f "$MANIFEST_SOURCE" ]]; then
   echo "devbox: tool manifest must be a regular file inside RepoPath" >&2
   exit 1
@@ -177,7 +177,7 @@ if [[ ! -x /usr/bin/python3 ]]; then
   dnf install -y --setopt=install_weak_deps=False python3
 fi
 MANIFEST="$PROVISION_TMP/tool-versions.json"
-copy_repo_file container/tool-versions.json "$MANIFEST"
+copy_repo_file lima/tool-versions.json "$MANIFEST"
 if [[ -L "$MANIFEST" || "$(stat -c %s "$MANIFEST")" -gt 1048576 ]]; then
   echo "devbox: copied tool manifest is symlinked or too large" >&2
   exit 1
@@ -193,6 +193,21 @@ except (OSError, json.JSONDecodeError) as exc:
     raise SystemExit(f"devbox: invalid tool manifest: {exc}")
 if not isinstance(manifest, dict) or not isinstance(manifest.get("tools"), dict):
     raise SystemExit("devbox: tool manifest must contain an object-valued tools field")
+expected_anchors = {
+    "redhat-ipa-ca.crt",
+    "redhat-rhcsv2-ca.crt",
+    "redhat-root-ca.crt",
+}
+anchors = manifest.get("trust_anchors")
+if not isinstance(anchors, dict) or set(anchors) != expected_anchors:
+    raise SystemExit("devbox: tool manifest has an incomplete CA trust-anchor map")
+if any(
+    not isinstance(digest, str)
+    or len(digest) != 64
+    or any(character not in "0123456789abcdef" for character in digest)
+    for digest in anchors.values()
+):
+    raise SystemExit("devbox: tool manifest has an invalid CA trust-anchor digest")
 PY
 
 # Keep root-owned stamps outside the guest user's writable home and shared tree.
@@ -220,6 +235,9 @@ export GOPATH="${GOPATH:-$HOME/.cache/go}"
 export GOCACHE="${GOCACHE:-$GOPATH/build-cache}"
 export CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
 export RUSTUP_HOME="${RUSTUP_HOME:-/var/lib/devbox-toolbuilder/.rustup}"
+export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+export REQUESTS_CA_BUNDLE="$SSL_CERT_FILE"
+export NODE_EXTRA_CA_CERTS="$SSL_CERT_FILE"
 export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-/var/lib/devbox-toolbuilder/.cache/ms-playwright}"
 export PATH="$HOME/.local/bin:$CARGO_HOME/bin:/var/lib/devbox-toolbuilder/.local/bin:/var/lib/devbox-toolbuilder/.cargo/bin:/usr/local/node/bin:/usr/local/go/bin:$GOPATH/bin:$PATH"
 export UV_CACHE_DIR="${UV_CACHE_DIR:-$HOME/.cache/uv}"
@@ -235,8 +253,8 @@ if ! cmp -s "$profile_tmp" "$profile_file"; then
 fi
 
 # --- Fedora packages -------------------------------------------------------
-# Mirrors the container toolchain and includes Playwright's headless Chromium
-# libraries plus the nested-VM/operator runtime. Lima itself provides the
+# Provides the VM toolchain, Playwright's headless Chromium libraries, and the
+# nested-VM/operator runtime. Lima itself provides the
 # subuid/subgid ranges, cgroup-v2 delegation, and linger for rootless Podman.
 packages=(
   aardvark-dns
@@ -302,6 +320,45 @@ if ((${#missing[@]})); then
   rm -rf /var/cache/dnf
 fi
 
+# Preserve Red Hat internal TLS trust for guest tools and integrations.
+# These pins are embedded in the VM at create time. A writable shared-checkout
+# change cannot turn an arbitrary source file into a root-owned trust anchor.
+declare -A TRUST_ANCHOR_SHA256=(
+  ["redhat-ipa-ca.crt"]="9c7eb653696cdc9a1e4037b154d805ddfac28aa853e154ef0c5f959c9c7e2013"
+  ["redhat-rhcsv2-ca.crt"]="79fa34635ab392f0b5775b94c944f870122be5e170fe78241ac08bd0e499648e"
+  ["redhat-root-ca.crt"]="e9713aed04b4ef3003edd10fc9c4f8ab875436e4a44195f0cbafcdf95e9bad2c"
+)
+ca_anchor_dir=/etc/pki/ca-trust/source/anchors
+install -d -m 0755 "$ca_anchor_dir"
+ca_trust_changed=false
+for cert in redhat-ipa-ca.crt redhat-rhcsv2-ca.crt redhat-root-ca.crt; do
+  ca_snapshot="$PROVISION_TMP/$cert"
+  ca_digest="${TRUST_ANCHOR_SHA256[$cert]:-}"
+  manifest_ca_digest="$(jq -er --arg cert "$cert" '.trust_anchors[$cert]' "$MANIFEST")"
+  if [[ ! "$ca_digest" =~ ^[0-9a-f]{64}$ ]] \
+    || [[ "$manifest_ca_digest" != "$ca_digest" ]]; then
+    echo "devbox: trust-anchor pin for $cert differs from the embedded provisioner" >&2
+    exit 1
+  fi
+  copy_repo_file "lima/certs/$cert" "$ca_snapshot"
+  printf '%s  %s\n' "$ca_digest" "$ca_snapshot" | sha256sum -c -
+  if ! cmp -s "$ca_snapshot" "$ca_anchor_dir/$cert"; then
+    install -m 0644 "$ca_snapshot" "$ca_anchor_dir/$cert"
+    ca_trust_changed=true
+  fi
+done
+if [[ "$ca_trust_changed" == true ]] \
+  || [[ ! -s /etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem ]]; then
+  update-ca-trust
+fi
+ca_bundle=/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem
+compat_ca_bundle=/etc/ssl/certs/ca-certificates.crt
+install -d -m 0755 "$(dirname "$compat_ca_bundle")"
+if [[ ! -L "$compat_ca_bundle" ]] \
+  || [[ "$(readlink "$compat_ca_bundle")" != "$ca_bundle" ]]; then
+  ln -sfn "$ca_bundle" "$compat_ca_bundle"
+fi
+
 # The guest user needs access to the passed-through KVM device for nested L2s.
 usermod --append --groups kvm "$DEVBOX_USER"
 modprobe kvm || true
@@ -309,7 +366,7 @@ case "$(uname -m)" in
   x86_64) modprobe kvm_intel || modprobe kvm_amd || true ;;
 esac
 
-# Google Cloud CLI is from Google's signed RPM repository, matching the image.
+# Google Cloud CLI is from Google's signed RPM repository, matching the VM.
 # Skip RPM scriptlets so third-party package code never executes as root.
 if ! rpm -q google-cloud-cli >/dev/null 2>&1; then
   case "$(manifest_arch)" in
@@ -338,9 +395,9 @@ fi
 # the writable host checkout. Root executes only the copied script as builder.
 copy_repo_file lima/provision-tools.sh "$tool_script_snapshot"
 install -d -m 0755 -o root -g root "$tool_assets_dir"
-copy_repo_file container/devbox-go "$tool_assets_dir/devbox-go"
+copy_repo_file lima/devbox-go "$tool_assets_dir/devbox-go"
 copy_repo_file lima/check_toolchain.py "$tool_assets_dir/check_toolchain.py"
-copy_repo_file container/semble "$tool_assets_dir/semble"
+copy_repo_file lima/semble "$tool_assets_dir/semble"
 tool_script_sha256="$(sha256sum "$tool_script_snapshot" | awk '{print $1}')"
 printf '%s\n' "$tool_script_sha256" \
   >/var/lib/devbox-vm/tool-provision.sha256.new
@@ -462,6 +519,9 @@ as_toolbuilder() {
       USER="$TOOL_BUILDER_USER" \
       LOGNAME="$TOOL_BUILDER_USER" \
       PATH="$TOOL_BUILDER_HOME/.local/bin:$TOOL_BUILDER_HOME/.cargo/bin:/usr/local/node/bin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin" \
+      SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+      REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
+      NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt \
       UV_CACHE_DIR="$TOOL_BUILDER_HOME/.cache/uv" \
       CARGO_HOME="$TOOL_BUILDER_HOME/.cargo" \
       RUSTUP_HOME="$TOOL_BUILDER_HOME/.rustup" \
@@ -474,8 +534,7 @@ as_toolbuilder() {
 # --- Rootless Podman and Kubernetes host settings --------------------------
 # Lima's boot script configures the static subordinate IDs, user-manager
 # delegation, and linger. The VM itself can safely use netavark bridges, so
-# prepare the forwarding/sysctl values once here rather than using the
-# container devbox's pasta/netavark capability preflight.
+# prepare the forwarding/sysctl values once here for rootless Podman.
 sysctl_file=/etc/sysctl.d/90-devbox-kubernetes.conf
 sysctl_tmp="$(new_temp_dir)/sysctl.conf"
 cat >"$sysctl_tmp" <<'EOF'
