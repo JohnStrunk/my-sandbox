@@ -97,9 +97,10 @@ Lima VM workflow and its host requirements are described in
 
 ### Launching the VM Devbox
 
-The Lima VM is the default runtime. Create the VM once using the host setup
-instructions in [`lima/README.md`](lima/README.md), then run the launcher from
-the project directory you want to work in:
+The Lima VM is the default runtime. After completing the host setup in
+[`lima/README.md`](lima/README.md), run the launcher from the project directory
+you want to work in. On first use, `devbox` creates and starts the VM from this
+checkout's Lima template:
 
 ```shell
 cd ~/src/my-project

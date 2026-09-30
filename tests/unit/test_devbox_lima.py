@@ -60,7 +60,10 @@ set -euo pipefail
 printf '%s\\n' "$*" >>"$MOCK_LIMACTL_CALLS"
 case "${1:-}" in
   list)
-    cat "$MOCK_LIMA_STATUS_FILE"
+    status="$(cat "$MOCK_LIMA_STATUS_FILE")"
+    if [[ -n "$status" ]]; then
+      printf '%s %s\n' "$MOCK_LIMA_INSTANCE" "$status"
+    fi
     ;;
   start)
     printf 'Running' >"$MOCK_LIMA_STATUS_FILE"
@@ -107,6 +110,7 @@ esac
     env["PATH"] = f"{bin_dir}:{env['PATH']}"
     env["MOCK_LIMACTL_CALLS"] = str(calls)
     env["MOCK_LIMA_STATUS_FILE"] = str(status_file)
+    env["MOCK_LIMA_INSTANCE"] = env.get("DEVBOX_LIMA_INSTANCE", "devbox")
     env["MOCK_VM_FINGERPRINT_FILE"] = str(fingerprint_file)
     env["MOCK_SHELL_CAPTURE"] = str(shell_capture)
     return calls, shell_capture
@@ -141,6 +145,32 @@ def test_default_launcher_starts_vm_and_enters_same_project_path(
     assert "--start" not in shell_call
     assert "--start" not in payload["args"]
     assert "--preserve-env" in payload["args"]
+
+
+@pytest.mark.unit
+def test_default_launcher_creates_missing_vm_from_checkout_template(
+    devbox_path: Path,
+    repo_root: Path,
+    isolated_env: dict[str, str],
+    tmp_path: Path,
+):
+    src_root = repo_root.parent
+    (Path(isolated_env["HOME"]) / "src").symlink_to(src_root, target_is_directory=True)
+    calls, _ = _install_lima_shim(
+        tmp_path, isolated_env, status="", fingerprint="unused"
+    )
+
+    result = run_bash_script(devbox_path, cwd=repo_root, env=isolated_env, timeout=15)
+
+    assert result.returncode == 0, result.stderr
+    logged = calls.read_text().splitlines()
+    create_call = next(call for call in logged if call.startswith("start --name"))
+    assert f"{repo_root}/lima/devbox.yaml" in create_call
+    assert f"SrcPath={src_root}" in create_call
+    assert f"RepoPath={repo_root}" in create_call
+    assert f"KbPath={Path(isolated_env['HOME']) / 'kb'}" in create_call
+    assert create_call.count("--param") == 5
+    assert any("--workdir" in call for call in logged)
 
 
 @pytest.mark.unit

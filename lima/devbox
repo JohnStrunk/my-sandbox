@@ -43,35 +43,83 @@ release_lima_lock() {
 trap release_lima_lock EXIT
 
 lima_status() {
-  local status
-  if ! status="$(limactl list --format '{{.Status}}' "$instance" 2>/dev/null)"; then
+  local instances name instance_status status=""
+  if ! instances="$(limactl list --format '{{.Name}} {{.Status}}' 2>/dev/null)"; then
     echo "devbox: could not inspect Lima instance '$instance'" >&2
     return 1
   fi
-  if [[ -z "$status" ]]; then
-    echo "devbox: Lima instance '$instance' does not exist; create it using the instructions in '$HERE/README.md'" >&2
-    return 1
-  fi
+  while read -r name instance_status; do
+    if [[ "$name" == "$instance" ]]; then
+      status="$instance_status"
+      break
+    fi
+  done <<<"$instances"
   printf '%s\n' "$status"
 }
 
+create_instance() {
+  local src_root repo_path kb_path git_user_name git_user_email
+  src_root="$(realpath -m "$HOME/src")" || {
+    echo "devbox: could not resolve the host ~/src mount" >&2
+    return 1
+  }
+  repo_path="$(realpath -e "$HERE/..")" || {
+    echo "devbox: could not resolve the devbox repository path" >&2
+    return 1
+  }
+  case "$repo_path/" in
+    "$src_root/"*) ;;
+    *)
+      echo "devbox: the my-sandbox checkout must be under '$src_root' to create the Lima VM" >&2
+      echo "       Move or clone this checkout under ~/src and retry." >&2
+      return 1
+      ;;
+  esac
+  kb_path="$(realpath -m "$HOME/kb")" || {
+    echo "devbox: could not resolve the host ~/kb mount" >&2
+    return 1
+  }
+  git_user_name="$(git config --global user.name || true)"
+  git_user_email="$(git config --global user.email || true)"
+
+  echo "==> Creating and starting Lima VM '$instance'"
+  if ! limactl start --name "$instance" "$HERE/devbox.yaml" \
+    --param "SrcPath=$src_root" \
+    --param "RepoPath=$repo_path" \
+    --param "KbPath=$kb_path" \
+    --param "GitUserName=$git_user_name" \
+    --param "GitUserEmail=$git_user_email"; then
+    echo "devbox: could not create Lima instance '$instance'; inspect the Lima logs and '$HERE/README.md'" >&2
+    return 1
+  fi
+}
+
 ensure_running() {
-  local status="${1:-}"
-  if [[ -z "$status" ]]; then
+  local status
+  if [[ $# -gt 0 ]]; then
+    status="$1"
+  else
     status="$(lima_status)" || return
   fi
-  if [[ "$status" == Running ]]; then
-    return 0
-  fi
-  if [[ "$status" != Stopped ]]; then
-    echo "devbox: cannot start Lima instance '$instance' while it is '$status'" >&2
-    return 1
-  fi
-  echo "==> Starting Lima VM '$instance'"
-  if ! limactl start "$instance"; then
-    echo "devbox: could not start Lima instance '$instance'; inspect it with 'limactl list' or try 'devbox --reset'" >&2
-    return 1
-  fi
+  case "$status" in
+    Running)
+      return 0
+      ;;
+    Stopped)
+      echo "==> Starting Lima VM '$instance'"
+      if ! limactl start "$instance"; then
+        echo "devbox: could not start Lima instance '$instance'; inspect it with 'limactl list' or try 'devbox --reset'" >&2
+        return 1
+      fi
+      ;;
+    "")
+      create_instance
+      ;;
+    *)
+      echo "devbox: cannot start Lima instance '$instance' while it is '$status'" >&2
+      return 1
+      ;;
+  esac
 }
 
 require_no_command() {
@@ -82,7 +130,12 @@ require_no_command() {
 }
 
 require_existing_instance() {
-  lima_status >/dev/null
+  local status
+  status="$(lima_status)" || return 1
+  if [[ -z "$status" ]]; then
+    echo "devbox: Lima instance '$instance' does not exist; run 'devbox' to create it first" >&2
+    return 1
+  fi
 }
 
 provisioning_fingerprint() {
@@ -221,7 +274,10 @@ case "$action" in
   stop)
     require_no_command
     status="$(lima_status)" || exit 1
-    if [[ "$status" == Running ]]; then
+    if [[ -z "$status" ]]; then
+      echo "devbox: Lima instance '$instance' does not exist" >&2
+      exit 1
+    elif [[ "$status" == Running ]]; then
       echo "==> Stopping Lima VM '$instance'"
       limactl stop "$instance"
     elif [[ "$status" == Stopped ]]; then
@@ -241,7 +297,10 @@ case "$action" in
   reprovision)
     require_no_command
     status="$(lima_status)" || exit 1
-    if [[ "$status" == Running ]]; then
+    if [[ -z "$status" ]]; then
+      echo "devbox: Lima instance '$instance' does not exist; run 'devbox' to create it first" >&2
+      exit 1
+    elif [[ "$status" == Running ]]; then
       echo "==> Stopping Lima VM '$instance' so provisioning can rerun"
       limactl stop "$instance"
     elif [[ "$status" != Stopped ]]; then
