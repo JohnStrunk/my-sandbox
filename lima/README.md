@@ -84,28 +84,13 @@ and operator/Kubernetes profile needed to replace the container path.
 
 ## Creating the VM
 
-From a checkout under the shared `~/src`, create the instance (name `devbox`,
-derived from the template filename). `RepoPath` must be the guest-visible path
-to that checkout; the translation below also handles hosts where `~/src` is a
-symlink. Pass the host Git identity so provisioning can seed the VM's global
-Git config:
-
-```shell
-cd /path/to/my-sandbox
-src_path="$(readlink -f "$HOME/src")"
-repo_path="$(pwd -P)"
-kb_path="$(readlink -f "$HOME/kb")"
-case "$repo_path" in
-  "$src_path"/*) ;;
-  *) echo "checkout must be under ~/src" >&2; exit 1 ;;
-esac
-limactl start "$repo_path/lima/devbox.yaml" \
-  --param "SrcPath=$src_path" \
-  --param "RepoPath=$repo_path" \
-  --param "KbPath=$kb_path" \
-  --param "GitUserName=$(git config --global user.name)" \
-  --param "GitUserEmail=$(git config --global user.email)"
-```
+The first invocation of `devbox` automatically creates the `devbox` instance
+from this checkout's `devbox.yaml`, then starts it. Keep the `my-sandbox`
+checkout under the shared `~/src` mount so the VM can read its template,
+provisioning scripts, and tool manifest. The launcher passes the resolved
+`~/src` and checkout paths, the `~/kb` path, and the host's global Git identity
+to Lima; no separate `limactl start` command is needed. Host directories under
+`~/src` and `~/kb` are created by Lima when they do not already exist.
 
 The first boot downloads the Fedora 44 cloud image, installs the full toolchain,
 prefetches the Playwright browser and Semble model, and runs the readiness
