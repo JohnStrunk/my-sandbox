@@ -1103,11 +1103,11 @@ def pytest_sessionstart(session: pytest.Session) -> None:
 def pytest_terminal_summary(terminalreporter: pytest.TerminalReporter) -> None:
     """Separate capability-only skips from product failures in VM tiers."""
     skips = terminalreporter.stats.get("skipped", [])
-    capability_skips = [
-        report
-        for report, *_ in skips
-        if "VM infrastructure limitation:" in str(getattr(report, "longrepr", ""))
-    ]
+    capability_skips = []
+    for entry in skips:
+        report = entry[0] if isinstance(entry, tuple) else entry
+        if "VM infrastructure limitation:" in str(getattr(report, "longrepr", "")):
+            capability_skips.append(report)
     if capability_skips:
         terminalreporter.write_sep(
             "=",

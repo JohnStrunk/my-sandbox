@@ -296,11 +296,19 @@ jobs:
       - name: Install pinned Lima
         run: ./scripts/install-lima-ci.sh
 
-      - name: Verify runner KVM access
-        run: test -r /dev/kvm && test -w /dev/kvm
-
       - name: Run provisioned-VM and kind tests
-        run: ./scripts/run-vm-ci.sh vm
+        run: |
+          set +e
+          python3 -I scripts/vm_preflight.py
+          preflight_status=$?
+          set -e
+          if [[ "$preflight_status" -eq 125 ]]; then
+            echo "### VM tier skipped: host KVM is unavailable" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          elif [[ "$preflight_status" -ne 0 ]]; then
+            exit "$preflight_status"
+          fi
+          ./scripts/run-vm-ci.sh vm
 
   recursive-vm:
     name: "Recursive VM Tests"
@@ -328,10 +336,6 @@ jobs:
       - name: Install pinned Lima
         if: needs.changes.outputs.recursive == 'true'
         run: ./scripts/install-lima-ci.sh
-
-      - name: Verify nested KVM access
-        if: needs.changes.outputs.recursive == 'true'
-        run: test -r /dev/kvm && test -w /dev/kvm
 
       - name: Run Lima-in-Lima test
         if: needs.changes.outputs.recursive == 'true'

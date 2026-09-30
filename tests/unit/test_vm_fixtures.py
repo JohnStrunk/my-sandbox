@@ -1,6 +1,7 @@
 import subprocess
 from pathlib import Path
 from subprocess import CompletedProcess
+from types import SimpleNamespace
 
 import pytest
 
@@ -12,6 +13,7 @@ from tests.conftest import (
     copy_repository_for_vm,
     guest_runtime_environment,
     lima_vm_start_command,
+    pytest_terminal_summary,
     vm_start_timeout,
     vm_test_environment,
 )
@@ -205,3 +207,31 @@ def test_private_lima_cleanup_does_not_trust_partial_instance_list(
 
     assert errors == ["limactl list failed (exit 1): partial failure"]
     assert calls == [["limactl", "list", "-q"]]
+
+
+@pytest.mark.unit
+def test_vm_skip_summary_handles_pytest_report_and_legacy_tuple_entries():
+    class TerminalSummaryRecorder:
+        stats = {
+            "skipped": [
+                SimpleNamespace(longrepr="VM infrastructure limitation: no KVM"),
+                (SimpleNamespace(longrepr="VM infrastructure limitation: no nesting"),),
+                SimpleNamespace(longrepr="optional test skipped"),
+            ]
+        }
+        messages: list[tuple[str, str]] = []
+
+        def write_sep(self, separator: str, message: str) -> None:
+            self.messages.append((separator, message))
+
+    reporter = TerminalSummaryRecorder()
+
+    pytest_terminal_summary(reporter)  # type: ignore[arg-type]
+
+    assert reporter.messages == [
+        (
+            "=",
+            "VM infrastructure limitations: 2 test(s) skipped because required "
+            "host capabilities were unavailable",
+        )
+    ]
