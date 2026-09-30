@@ -26,12 +26,20 @@ Options:
   --resource-cgroup-root DIR
                       Cgroup hierarchy to inspect (defaults to
                       /sys/fs/cgroup; useful for diagnostics and tests).
+  --require-vm        Require accessible /dev/kvm before starting the command.
+  --require-recursive-vm
+                      Also require host KVM nested virtualization to be enabled.
+  --guest-vm          Run inside the existing devbox guest. Keep test processes
+                      isolated; the Podman shim alone can use runtime sockets.
   -h, --help        Show this help text.
 EOF
 }
 
 require_podman=false
 resource_preflight_enabled=false
+require_vm=false
+require_recursive_vm=false
+guest_vm=false
 resource_cgroup_root="/sys/fs/cgroup"
 podman_probe_image="docker.io/library/alpine:3.22"
 while (($# > 0)); do
@@ -50,6 +58,19 @@ while (($# > 0)); do
       ;;
     --resource-preflight)
       resource_preflight_enabled=true
+      shift
+      ;;
+    --require-vm)
+      require_vm=true
+      shift
+      ;;
+    --require-recursive-vm)
+      require_vm=true
+      require_recursive_vm=true
+      shift
+      ;;
+    --guest-vm)
+      guest_vm=true
       shift
       ;;
     --resource-cgroup-root)
@@ -85,12 +106,34 @@ if (($# == 0)); then
   exit 2
 fi
 
+if [[ "$require_vm" == true ]]; then
+  vm_preflight_path="${PATH:-/usr/local/bin:/usr/bin:/bin}"
+  if ! command -v python3 >/dev/null 2>&1; then
+    printf '%s\n' \
+      'sanitized-test: python3 is required for the VM capability preflight.' \
+      'sanitized-test: this is an infrastructure/runtime configuration failure, not a product test failure.' >&2
+    exit 125
+  fi
+  vm_preflight_args=()
+  if [[ "$require_recursive_vm" == true ]]; then
+    vm_preflight_args+=(--recursive)
+  fi
+  if env -i "PATH=$vm_preflight_path" python3 -I \
+    "$SCRIPT_DIR/vm_preflight.py" "${vm_preflight_args[@]}"; then
+    :
+  else
+    preflight_status=$?
+    exit "$preflight_status"
+  fi
+fi
+
 host_path="${PATH:-/usr/local/bin:/usr/bin:/bin}"
 host_home="${HOME-}"
 host_xdg_config_home="${XDG_CONFIG_HOME-}"
 host_xdg_data_home="${XDG_DATA_HOME-}"
 host_xdg_runtime_dir="${XDG_RUNTIME_DIR-}"
 host_xdg_cache_home="${XDG_CACHE_HOME-}"
+host_dbus_session_bus_address="${DBUS_SESSION_BUS_ADDRESS-}"
 if [[ -z "$host_xdg_config_home" && -n "$host_home" ]]; then
   host_xdg_config_home="$host_home/.config"
 fi
@@ -212,6 +255,10 @@ podman_info_stdout="$runtime_root/podman-info.stdout"
 podman_info_stderr="$runtime_root/podman-info.stderr"
 podman_probe_stdout="$runtime_root/podman-probe.stdout"
 podman_probe_stderr="$runtime_root/podman-probe.stderr"
+podman_runtime_dir="$isolated_xdg_runtime_dir"
+if [[ "$guest_vm" == true && "$host_xdg_runtime_dir" == /* ]]; then
+  podman_runtime_dir="$host_xdg_runtime_dir"
+fi
 podman_global_args=()
 if [[ -n "$podman_path" ]]; then
   if [[ -n "$host_containers_config_dir" ]]; then
@@ -248,9 +295,13 @@ if [[ -n "$podman_path" ]]; then
     printf 'export HOME=%q\n' "$podman_home"
     printf 'export XDG_CONFIG_HOME=%q\n' "$podman_config_home"
     printf 'export XDG_DATA_HOME=%q\n' "$isolated_xdg_data_home"
-    printf 'export XDG_RUNTIME_DIR=%q\n' "$isolated_xdg_runtime_dir"
+    printf 'export XDG_RUNTIME_DIR=%q\n' "$podman_runtime_dir"
     printf 'export TMPDIR=%q\n' "$isolated_tmp"
     printf 'export REGISTRY_AUTH_FILE=%q\n' "$registry_auth_file"
+    if [[ "$guest_vm" == true && "$host_dbus_session_bus_address" == unix:* ]]; then
+      printf 'export DBUS_SESSION_BUS_ADDRESS=%q\n' \
+        "$host_dbus_session_bus_address"
+    fi
     printf '%s\n' \
       'unset AWS_CONFIG_FILE AWS_SHARED_CREDENTIALS_FILE AZURE_CONFIG_DIR CLOUDSDK_CONFIG' \
       'unset CONTAINERS_CONF CONTAINERS_REGISTRIES_CONF CONTAINERS_STORAGE_CONF' \
@@ -299,6 +350,9 @@ safe_env=(
   "XDG_CACHE_HOME=$isolated_xdg_cache_home"
   "XDG_RUNTIME_DIR=$isolated_xdg_runtime_dir"
 )
+if [[ "$guest_vm" == true ]]; then
+  safe_env+=("MY_SANDBOX_VM_TEST_IN_GUEST=1")
+fi
 if [[ "$require_podman" == true ]]; then
   if [[ -z "$host_xdg_cache_home" ]]; then
     printf '%s\n' \
@@ -315,7 +369,7 @@ fi
 # Non-secret suite tuning knobs: the documented suite runs through this
 # wrapper's env allowlist, so a knob that cannot pass through is a no-op in
 # exactly the environments that need it (issue #252).
-for name in LANG LC_ALL LC_CTYPE TERM CI DEVBOX_IMAGE_BUILD_TIMEOUT DEVBOX_PODMAN_PROBE_TIMEOUT; do
+for name in LANG LC_ALL LC_CTYPE TERM CI DEVBOX_IMAGE_BUILD_TIMEOUT DEVBOX_PODMAN_PROBE_TIMEOUT DEVBOX_VM_START_TIMEOUT; do
   if [[ -n "${!name-}" ]]; then
     safe_env+=("$name=${!name}")
   fi

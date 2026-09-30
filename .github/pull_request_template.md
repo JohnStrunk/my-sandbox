@@ -19,7 +19,7 @@
 
 <!-- Exact commands and their results, with pass/skip counts. For example:
      ./scripts/fast-check.sh
-     uv run --extra test pytest -m "not e2e_inference and not cold_bootstrap"
+     uv run --extra test pytest -m "not e2e_inference and not cold_bootstrap and not vm and not recursive and not e2e_kind"
      Paste real output instead of asserting success. -->
 
 ## Known limitations

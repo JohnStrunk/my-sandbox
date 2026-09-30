@@ -46,6 +46,7 @@ printf 'HOME=%s\\n' "${{HOME-}}" > {log}
 printf 'XDG_CONFIG_HOME=%s\\n' "${{XDG_CONFIG_HOME-}}" >> {log}
 printf 'XDG_DATA_HOME=%s\\n' "${{XDG_DATA_HOME-}}" >> {log}
 printf 'XDG_RUNTIME_DIR=%s\\n' "${{XDG_RUNTIME_DIR-}}" >> {log}
+printf 'DBUS_SESSION_BUS_ADDRESS=%s\\n' "${{DBUS_SESSION_BUS_ADDRESS-<unset>}}" >> {log}
 printf 'REGISTRY_AUTH_FILE=%s\\n' "${{REGISTRY_AUTH_FILE-}}" >> {log}
 printf 'GH_TOKEN=%s\\n' "${{GH_TOKEN-<unset>}}" >> {log}
 printf 'CONTAINERS_CONF=%s\\n' "${{CONTAINERS_CONF-<unset>}}" >> {log}
@@ -176,6 +177,7 @@ def test_wrapper_restores_only_podman_runtime_allowlist(
     assert f"XDG_CONFIG_HOME={tmp_path / 'host-config'}" not in logged
     assert f"XDG_DATA_HOME={tmp_path / 'host-data'}" not in logged
     assert f"XDG_RUNTIME_DIR={tmp_path / 'host-runtime'}" not in logged
+    assert "DBUS_SESSION_BUS_ADDRESS=<unset>" in logged
     assert "GH_TOKEN=<unset>" in logged
     assert "CONTAINERS_CONF=<unset>" in logged
     assert "DOCKER_CONFIG=" in logged
@@ -187,6 +189,32 @@ def test_wrapper_restores_only_podman_runtime_allowlist(
     assert str(host_home) not in logged.split("REGISTRY_AUTH_FILE=", 1)[1]
     assert f"--root {tmp_path / 'host-data' / 'containers' / 'storage'}" in logged
     assert f"--runroot {tmp_path / 'host-runtime' / 'containers'}" in logged
+
+
+@pytest.mark.unit
+def test_guest_vm_podman_shim_keeps_only_guest_runtime_socket(
+    repo_root: Path, tmp_path: Path
+) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    host_home = tmp_path / "host-home"
+    host_home.mkdir()
+    log_path = host_home / "podman.log"
+    _make_fake_podman(fake_bin, log_path)
+    env = _podman_environment(tmp_path, fake_bin, host_home)
+    env["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=/run/user/1000/bus"
+
+    result = _run_wrapper(
+        repo_root,
+        ["--guest-vm", "--require-podman", "--", "podman", "info"],
+        env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    logged = log_path.read_text()
+    assert "XDG_RUNTIME_DIR=" + str(tmp_path / "host-runtime") in logged
+    assert "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus" in logged
+    assert "GH_TOKEN=<unset>" in logged
 
 
 @pytest.mark.unit
@@ -404,6 +432,7 @@ def test_wrapper_passes_suite_tuning_knobs(repo_root: Path) -> None:
     env = os.environ.copy()
     env["DEVBOX_IMAGE_BUILD_TIMEOUT"] = "123.5"
     env["DEVBOX_PODMAN_PROBE_TIMEOUT"] = "45.5"
+    env["DEVBOX_VM_START_TIMEOUT"] = "678.5"
 
     result = _run_wrapper(
         repo_root,
@@ -420,6 +449,79 @@ def test_wrapper_passes_suite_tuning_knobs(repo_root: Path) -> None:
     child_env = json.loads(result.stdout)
     assert child_env["DEVBOX_IMAGE_BUILD_TIMEOUT"] == "123.5"
     assert child_env["DEVBOX_PODMAN_PROBE_TIMEOUT"] == "45.5"
+    assert child_env["DEVBOX_VM_START_TIMEOUT"] == "678.5"
+
+
+@pytest.mark.unit
+def test_wrapper_stops_before_test_command_on_vm_capability_limit(
+    repo_root: Path, tmp_path: Path
+) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_python = fake_bin / "python3"
+    preflight_env = tmp_path / "preflight-env"
+    fake_python.write_text(
+        "#!/usr/bin/env bash\n"
+        f"env > {shlex.quote(str(preflight_env))}\n"
+        "printf '%s\\n' "
+        "'vm-preflight: infrastructure limitation: /dev/kvm unavailable' >&2\n"
+        "exit 125\n"
+    )
+    fake_python.chmod(0o755)
+    marker = tmp_path / "command-ran"
+    env = os.environ.copy()
+    env["PATH"] = f"{fake_bin}:{env.get('PATH', '')}"
+    env["GH_TOKEN"] = "mock-preflight-token"  # pragma: allowlist secret
+    env["PYTHONPATH"] = str(tmp_path / "untrusted-python")
+
+    result = _run_wrapper(
+        repo_root,
+        ["--require-vm", "--", "touch", str(marker)],
+        env,
+    )
+
+    assert result.returncode == 125
+    assert "infrastructure limitation" in result.stderr
+    assert not marker.exists()
+    preflight_environment = preflight_env.read_text()
+    assert "GH_TOKEN" not in preflight_environment
+    assert "PYTHONPATH" not in preflight_environment
+
+
+@pytest.mark.unit
+def test_guest_vm_wrapper_keeps_runtime_sockets_out_of_test_processes(
+    repo_root: Path,
+) -> None:
+    env = os.environ.copy()
+    env["XDG_RUNTIME_DIR"] = "/run/user/1000"
+    env["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=/run/user/1000/bus"
+    env["DOCKER_HOST"] = "unix:///run/user/1000/podman/podman.sock"
+    env["GH_TOKEN"] = "mock-guest-token"  # pragma: allowlist secret
+
+    result = _run_wrapper(
+        repo_root,
+        [
+            "--guest-vm",
+            "--",
+            sys.executable,
+            "-c",
+            (
+                "import json, os; print(json.dumps({key: os.environ.get(key) "
+                "for key in ('HOME', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', "
+                "'DOCKER_HOST', 'MY_SANDBOX_VM_TEST_IN_GUEST', 'GH_TOKEN')}))"
+            ),
+        ],
+        env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    child_env = json.loads(result.stdout)
+    assert child_env["HOME"] != env["HOME"]
+    assert child_env["XDG_RUNTIME_DIR"] != "/run/user/1000"
+    assert child_env["DBUS_SESSION_BUS_ADDRESS"] is None
+    assert child_env["DOCKER_HOST"] is None
+    assert child_env["MY_SANDBOX_VM_TEST_IN_GUEST"] == "1"
+    assert child_env["GH_TOKEN"] is None
 
 
 @pytest.mark.unit
