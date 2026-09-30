@@ -15,6 +15,7 @@ _VALIDATOR_INPUTS = [
     "uv.lock",
     "lima/provision-system.sh",
     "lima/provision-user.sh",
+    "lima/provision-tools.sh",
     "lima/probe-readiness.sh",
 ]
 
@@ -68,6 +69,25 @@ def test_tool_version_validator_rejects_hardcoded_consumer_versions(
     errors = validate_tool_versions(copy_root)
 
     assert any("hard-coded version" in error for error in errors)
+
+
+@pytest.mark.unit
+def test_tool_version_validator_rejects_non_version_manifest_values(
+    repo_root: Path, tmp_path: Path
+):
+    copy_root = tmp_path / "repo"
+    _copy_validator_inputs(repo_root, copy_root)
+
+    def mutate(data):
+        data["tools"]["opencode"]["version"] = "https://attacker.invalid/package.tgz"
+
+    _edit_manifest(copy_root, mutate)
+
+    errors = validate_tool_versions(copy_root)
+
+    assert any(
+        "opencode" in error and "safe version token" in error for error in errors
+    )
 
 
 @pytest.mark.unit
@@ -191,30 +211,71 @@ def test_validator_flags_unknown_manifest_field(repo_root: Path, tmp_path: Path)
 def test_manifest_declares_lima_consumers(repo_root: Path):
     manifest = json.loads((repo_root / "container" / "tool-versions.json").read_text())
 
-    for tool in ("opencode", "uv", "limactl"):
+    expected = {
+        "acli",
+        "antigravity_cli",
+        "ast_grep",
+        "go",
+        "google_workspace_cli",
+        "hadolint",
+        "helm",
+        "kind",
+        "kubectl",
+        "limactl",
+        "markdownlint_cli2",
+        "node",
+        "opencode",
+        "pipenv",
+        "playwright_cli",
+        "pre_commit",
+        "repomix",
+        "rust",
+        "rustup",
+        "semble",
+        "uv",
+    }
+    for tool in expected:
         consumers = manifest["tools"][tool]["consumers"]
         assert consumers.get("lima") is True, tool
+    assert manifest["tools"]["github_mcp_server"]["consumers"].get("lima") is not True
 
 
 @pytest.mark.unit
-def test_tool_version_validator_reports_lima_pin_drift(repo_root: Path, tmp_path: Path):
+def test_tool_version_validator_reports_missing_lima_manifest_read(
+    repo_root: Path, tmp_path: Path
+):
     copy_root = tmp_path / "repo"
     _copy_validator_inputs(repo_root, copy_root)
 
-    script = copy_root / "lima" / "provision-system.sh"
+    script = copy_root / "lima" / "provision-tools.sh"
     script.write_text(
         script.read_text().replace(
-            'OPENCODE_VERSION="2.0.16"', 'OPENCODE_VERSION="2.0.15"', 1
+            "ensure_npm_package opencode", "ensure_npm_package not_opencode", 1
         )
     )
 
     errors = validate_tool_versions(copy_root)
 
-    assert any("pin for 'opencode'" in error and "2.0.15" in error for error in errors)
+    assert any("does not read 'opencode' version" in error for error in errors)
 
 
 @pytest.mark.unit
-def test_tool_version_validator_reports_missing_lima_pin(
+def test_tool_version_validator_rejects_undeclared_lima_manifest_read(
+    repo_root: Path, tmp_path: Path
+):
+    copy_root = tmp_path / "repo"
+    _copy_validator_inputs(repo_root, copy_root)
+
+    script = copy_root / "lima" / "provision-user.sh"
+    script.write_text(script.read_text() + "manifest_version unknown_tool\n")
+
+    errors = validate_tool_versions(copy_root)
+
+    assert any("reads 'unknown_tool'" in error for error in errors)
+
+
+@pytest.mark.unit
+def test_tool_version_validator_requires_lima_release_checksum_reads(
     repo_root: Path, tmp_path: Path
 ):
     copy_root = tmp_path / "repo"
@@ -225,139 +286,52 @@ def test_tool_version_validator_reports_missing_lima_pin(
         "\n".join(
             line
             for line in script.read_text().splitlines()
-            if not line.startswith("LIMACTL_VERSION=")
+            if "verify_download limactl" not in line
         )
         + "\n"
     )
 
     errors = validate_tool_versions(copy_root)
 
-    assert any("does not pin 'limactl'" in error for error in errors)
+    assert any("does not read 'limactl' release checksums" in error for error in errors)
 
 
 @pytest.mark.unit
-def test_tool_version_validator_rejects_undeclared_lima_pin(
+def test_tool_version_validator_rejects_undeclared_lima_checksum_read(
     repo_root: Path, tmp_path: Path
 ):
     copy_root = tmp_path / "repo"
     _copy_validator_inputs(repo_root, copy_root)
 
     script = copy_root / "lima" / "provision-user.sh"
-    script.write_text(script.read_text() + 'TOTALLY_NEW_TOOL_VERSION="1.2.3"\n')
+    script.write_text(script.read_text() + "verify_download github_mcp_server\n")
 
     errors = validate_tool_versions(copy_root)
 
-    assert any("totally_new_tool" in error for error in errors)
+    assert any("reads 'github_mcp_server' checksums" in error for error in errors)
 
 
 @pytest.mark.unit
-def test_tool_version_validator_checks_lima_renovate_metadata(
+def test_tool_version_validator_requires_agent_skill_provenance_reads(
     repo_root: Path, tmp_path: Path
 ):
     copy_root = tmp_path / "repo"
     _copy_validator_inputs(repo_root, copy_root)
 
-    script = copy_root / "lima" / "provision-system.sh"
+    script = copy_root / "lima" / "provision-user.sh"
     script.write_text(
-        script.read_text().replace(
-            "# renovate: datasource=github-releases depName=lima-vm/lima",
-            "# renovate: datasource=github-releases depName=wrong/tool",
-            1,
+        "\n".join(
+            line
+            for line in script.read_text().splitlines()
+            if "manifest_agent_skill ast_grep sha256" not in line
         )
+        + "\n"
     )
-
-    errors = validate_tool_versions(copy_root)
-
-    assert any("renovate" in error and "limactl" in error for error in errors)
-
-
-@pytest.mark.unit
-def test_tool_version_validator_flags_duplicate_lima_pin(
-    repo_root: Path, tmp_path: Path
-):
-    copy_root = tmp_path / "repo"
-    _copy_validator_inputs(repo_root, copy_root)
-
-    # A second LIMACTL_VERSION anywhere in lima/*.sh is ambiguous, even
-    # when it matches the manifest.
-    script = copy_root / "lima" / "provision-user.sh"
-    script.write_text(script.read_text() + 'LIMACTL_VERSION="2.2.0"\n')
-
-    errors = validate_tool_versions(copy_root)
-
-    assert any("pins 'limactl' more than once" in error for error in errors)
-
-
-@pytest.mark.unit
-def test_tool_version_validator_rejects_pin_of_non_lima_tool(
-    repo_root: Path, tmp_path: Path
-):
-    copy_root = tmp_path / "repo"
-    _copy_validator_inputs(repo_root, copy_root)
-
-    # hadolint is in the manifest, but only as a docker/ci/pre-commit
-    # consumer; the VM scripts must not pin it.
-    script = copy_root / "lima" / "provision-user.sh"
-    script.write_text(script.read_text() + 'HADOLINT_VERSION="2.15.1"\n')
 
     errors = validate_tool_versions(copy_root)
 
     assert any(
-        "pins 'hadolint'" in error and "'lima' consumer" in error for error in errors
-    )
-
-
-@pytest.mark.unit
-def test_tool_version_validator_ignores_commented_lima_pin(
-    repo_root: Path, tmp_path: Path
-):
-    copy_root = tmp_path / "repo"
-    _copy_validator_inputs(repo_root, copy_root)
-
-    # A commented-out pin must not count (it must not mask a missing or
-    # duplicate live pin either).
-    script = copy_root / "lima" / "provision-system.sh"
-    script.write_text(script.read_text() + '# OPENCODE_VERSION="9.9.9"\n')
-
-    assert validate_tool_versions(copy_root) == []
-
-
-@pytest.mark.unit
-def test_tool_version_validator_accepts_v_prefixed_lima_pin(
-    repo_root: Path, tmp_path: Path
-):
-    copy_root = tmp_path / "repo"
-    _copy_validator_inputs(repo_root, copy_root)
-
-    script = copy_root / "lima" / "provision-system.sh"
-    script.write_text(
-        script.read_text().replace(
-            'OPENCODE_VERSION="2.0.16"', 'OPENCODE_VERSION="v2.0.16"', 1
-        )
-    )
-
-    assert validate_tool_versions(copy_root) == []
-
-
-@pytest.mark.unit
-def test_tool_version_validator_flags_missing_lima_checksum(
-    repo_root: Path, tmp_path: Path
-):
-    copy_root = tmp_path / "repo"
-    _copy_validator_inputs(repo_root, copy_root)
-
-    # Corrupt the script's embedded copy of the manifest-declared amd64
-    # digest: the download would no longer be verified against the
-    # manifest.
-    manifest = json.loads((copy_root / "container" / "tool-versions.json").read_text())
-    digest = manifest["tools"]["limactl"]["checksums"]["amd64"]
-    script = copy_root / "lima" / "provision-system.sh"
-    script.write_text(script.read_text().replace(digest, "00" * 32, 1))
-
-    errors = validate_tool_versions(copy_root)
-
-    assert any(
-        "must embed the 'limactl' amd64 release checksum" in error for error in errors
+        "does not read 'ast_grep' agent_skill['sha256']" in error for error in errors
     )
 
 

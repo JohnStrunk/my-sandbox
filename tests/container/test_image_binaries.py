@@ -248,6 +248,45 @@ def test_repomix_version_matches_manifest(devbox_image: str, repo_root: Path):
 
 
 @pytest.mark.container
+def test_node_version_matches_manifest(devbox_image: str, repo_root: Path):
+    manifest = json.loads((repo_root / "container" / "tool-versions.json").read_text())
+    expected_version = manifest["tools"]["node"]["version"]
+
+    res = run_in_devbox(devbox_image, ["node", "--version"], user="sandbox")
+
+    assert res.returncode == 0, (
+        f"Node version check failed.\nStdout: {res.stdout}\nStderr: {res.stderr}"
+    )
+    assert res.stdout.strip().removeprefix("v") == expected_version
+
+
+@pytest.mark.container
+def test_rust_version_matches_manifest(devbox_image: str, repo_root: Path):
+    manifest = json.loads((repo_root / "container" / "tool-versions.json").read_text())
+    expected_version = manifest["tools"]["rust"]["version"]
+
+    res = run_in_devbox(devbox_image, ["rustc", "--version"], user="sandbox")
+
+    assert res.returncode == 0, (
+        f"Rust version check failed.\nStdout: {res.stdout}\nStderr: {res.stderr}"
+    )
+    assert res.stdout.split()[1] == expected_version
+
+
+@pytest.mark.container
+def test_rustup_version_matches_manifest(devbox_image: str, repo_root: Path):
+    manifest = json.loads((repo_root / "container" / "tool-versions.json").read_text())
+    expected_version = manifest["tools"]["rustup"]["version"]
+
+    res = run_in_devbox(devbox_image, ["rustup", "--version"], user="sandbox")
+
+    assert res.returncode == 0, (
+        f"rustup version check failed.\nStdout: {res.stdout}\nStderr: {res.stderr}"
+    )
+    assert res.stdout.split()[1] == expected_version
+
+
+@pytest.mark.container
 def test_opencode_v2_version_matches_manifest(devbox_image: str, repo_root: Path):
     manifest = json.loads((repo_root / "container" / "tool-versions.json").read_text())
     expected_version = manifest["tools"]["opencode"]["version"]

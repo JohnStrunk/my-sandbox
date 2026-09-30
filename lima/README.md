@@ -1,24 +1,27 @@
 # devbox Lima VM
 
-This directory holds the Lima template for the **devbox VM**: a minimal,
-VM-native development environment for my-sandbox. A single Fedora guest
-runs OpenCode directly inside it, with Podman available as a project
-tool, nested virtualization always enabled (for L2 test VMs, minikube,
-kind, and iterating on my-sandbox itself), and the host directories that
-matter shared in at the same paths.
+This directory holds the Lima template for the **VM-native devbox**. A single
+Fedora guest runs OpenCode directly inside it, with the full manifest-pinned
+toolchain, rootless Podman available as a project tool, and nested
+virtualization enabled for L2 test VMs, kind, and minikube. Project files are
+shared at their host paths inside the VM. Host-shared directories are protected
+from the package builder; configuration and credentials are mounted behind a
+root-owned parent and exposed only to the guest user.
 
-The container devbox (`../devbox`) remains fully supported; the VM is the
-path to full toolchain parity with nested-VM support, and provisioning
-parity beyond the minimal set here is tracked separately in
-[issue #270](https://github.com/JohnStrunk/my-sandbox/issues/270).
+Issue [#267](https://github.com/JohnStrunk/my-sandbox/issues/267) provides the
+minimal bootstrap environment; this full template is the foundation for the
+VM-native migration tracked by
+[#280](https://github.com/JohnStrunk/my-sandbox/issues/280).
+The container devbox remains available during the migration.
 
 ## Why a VM
 
 The container devbox cannot run VMs: there is no `/dev/kvm` inside a
 rootless container, and nested rootless kind was removed as unreliable.
-The decided replacement (2026-09-28) is a VM-native devbox. This
-bootstrap gets a working VM in place as quickly as possible so agent
-sessions can run _inside_ the target environment.
+The decided replacement (2026-09-28) is a VM-native devbox. The minimal
+bootstrap got a working VM in place quickly so agent sessions could run
+_inside_ the target environment. This full template adds the pinned toolchain
+and operator/Kubernetes profile needed to replace the container path.
 
 ## One-time host preparation (Fedora)
 
@@ -81,28 +84,51 @@ sessions can run _inside_ the target environment.
 
 ## Creating the VM
 
-One command creates and boots the instance (name `devbox`, derived from
-the template filename). Pass the host Git identity once so provisioning
-can seed the VM's global Git config:
+From a checkout under the shared `~/src`, create the instance (name `devbox`,
+derived from the template filename). `RepoPath` must be the guest-visible path
+to that checkout; the translation below also handles hosts where `~/src` is a
+symlink. Pass the host Git identity so provisioning can seed the VM's global
+Git config:
 
 ```shell
-limactl start ~/src/my-sandbox/lima/devbox.yaml \
+cd /path/to/my-sandbox
+src_path="$(readlink -f "$HOME/src")"
+repo_path="$(pwd -P)"
+kb_path="$(readlink -f "$HOME/kb")"
+case "$repo_path" in
+  "$src_path"/*) ;;
+  *) echo "checkout must be under ~/src" >&2; exit 1 ;;
+esac
+limactl start "$repo_path/lima/devbox.yaml" \
+  --param "SrcPath=$src_path" \
+  --param "RepoPath=$repo_path" \
+  --param "KbPath=$kb_path" \
   --param "GitUserName=$(git config --global user.name)" \
   --param "GitUserEmail=$(git config --global user.email)"
 ```
 
-The first boot downloads the Fedora 44 cloud image, installs packages,
-and runs the readiness probe; expect several minutes. Subsequent starts
-are much faster (provisioning is idempotent and re-runs on every start).
+The first boot downloads the Fedora 44 cloud image, installs the full toolchain,
+prefetches the Playwright browser and Semble model, and runs the readiness
+probe; expect several minutes. Subsequent starts are much faster. Provisioning
+re-runs idempotently on every start and reads `container/tool-versions.json`
+from the shared checkout. Third-party npm/Python packages, browser/model
+prefetch, and automatic version checks run as `devbox-toolbuilder`, a separate
+unprivileged account with no access to host mounts. The readiness probe checks
+a root-owned stamp from the builder's manifest check rather than running
+package commands as the credential-capable guest.
 
 **Note:** Lima embeds the template and its provisioning scripts into the
 instance at create time. Readiness probes must be inline
 `probes[].script` entries with a `#!` line; unlike provisioning, a local
 `probes[].file` path is treated as a URL locator. The inline script is
 kept in sync with `probe-readiness.sh`, and a unit test checks the copy.
-Later changes to `lima/*.sh` or `lima/devbox.yaml` do **not** propagate to
-an existing instance; recreate it to pick them up (see
-[Recreating the VM](#recreating-the-vm)).
+Later changes to the embedded `lima/provision-system.sh`,
+`lima/provision-user.sh`, or `lima/devbox.yaml` do **not** propagate to an
+existing instance; recreate it to pick them up (see
+[Recreating the VM](#recreating-the-vm)). `lima/provision-tools.sh`, the tool
+manifest, and the root-owned tool assets are read from the checkout at every
+start. Version-only changes in the live tool manifest are applied on
+stop/start without recreating the VM.
 
 ## Using the VM
 
@@ -128,13 +154,15 @@ Inside the VM the guest home (`/home/<user>.guest`) is VM-local, with
 symlinks for the shared paths, so everything works from `~`:
 
 ```shell
-cd ~/src/my-sandbox && opencode   # start an agent session
+repo="$(dirname "$(dirname "$(readlink -f /etc/devbox/tool-versions.json)")")"
+cd "$repo" && opencode   # start an agent session
 ```
 
 The existing worktree workflow carries over unchanged: `.worktrees/`
-under the repo works inside the VM because the same-path mounts make the
-worktree `.git` pointers (which reference host-absolute paths) resolve
-identically. One caveat: `uv sync` in a checkout or worktree puts
+under the repo works inside the VM because the same-path `~/src` mount makes
+the worktree `.git` pointers (which reference host-absolute paths) resolve
+identically. The `~/kb` mount has a separate same-path alias for its worktree
+metadata. One caveat: `uv sync` in a checkout or worktree puts
 `.venv` on the shared `~/src` mount — see
 [`.venv` lives on the shared mount](#venv-lives-on-the-shared-mount)
 below.
@@ -152,8 +180,50 @@ limactl start devbox
 
 Everything persists: VM-local state (the guest home, VM-local caches,
 nested Podman storage, OpenCode state) lives on the VM disk, and the
-shared paths are host directories. Provisioning re-runs on every start
-and is idempotent.
+shared paths are host directories. Provisioning re-runs on every start and is
+idempotent. Package installs and automatic version checks use the isolated
+`devbox-toolbuilder` account; it cannot traverse the root-owned `~/.host-config`
+parent or the protected parent of `~/src`. The KB alias points into the
+protected mount tree. Provisioning verifies these boundaries directly and
+refuses to protect a `SrcPath` parent inside the guest home.
+
+### Tool-version updates and drift
+
+Provisioning reads `container/tool-versions.json` from the shared checkout on
+every start. It stores the root-owned system-script digest in
+`/var/lib/devbox-vm/system-provision.sha256` and the combined manifest,
+script, and tool-asset fingerprint in the VM-local
+`~/.local/share/devbox-toolchain/provisioning.fingerprint`.
+When the manifest changes, provisioning reports the drift, installs any new
+pins, runs `devbox-toolchain-check` as the isolated builder, then records the
+new fingerprint and a root-owned manifest stamp. The readiness probe checks
+that stamp and does not execute third-party package commands with host
+credentials mounted.
+The `devbox-toolchain-check` command remains available for manual use as the
+current guest user. Apply a version-only bump without rebuilding the VM:
+
+```shell
+repo="$(dirname "$(dirname "$(readlink -f /etc/devbox/tool-versions.json)")")"
+git -C "$repo" pull --ff-only
+limactl stop devbox
+limactl start devbox
+```
+
+Changes to `lima/provision-system.sh`, `lima/provision-user.sh`, or
+`lima/devbox.yaml` are embedded at VM creation and still require the
+[recreate procedure](#recreating-the-vm). The non-embedded
+`lima/provision-tools.sh` helper is refreshed on each start. The
+`devbox-toolchain-check` command reports every manifest-declared Lima tool at
+its exact version, plus `make`, Python/pip, and ShellCheck.
+
+The rootless Podman Docker-compatible API is enabled at
+`$XDG_RUNTIME_DIR/podman/podman.sock` and exported through `DOCKER_HOST` for
+Docker API clients. Kind uses its explicit experimental Podman provider; ten
+consecutive create/delete cycles passed, so Docker CE is not installed.
+`lima/validate-kind.sh` repeats that acceptance check.
+The VM keeps `net.ipv4.conf.default.route_localnet=0` to preserve the loopback
+routing boundary; a rootless Podman published-port smoke test passed with it
+disabled.
 
 After the VM is known-good, protect it against accidental deletion:
 
@@ -165,35 +235,54 @@ limactl protect devbox
 
 ## Recreating the VM
 
-To pick up template or provisioning changes (including version-pin
-bumps), recreate the instance. Host-side data (`~/src`, `~/kb`, and the
+To pick up template or provisioning-script changes, recreate the instance.
+Version-only tool pin changes do not require a recreate; use the
+[drift/re-provision procedure](#tool-version-updates-and-drift). Host-side
+data (`~/src`, `~/kb`, and the
 other mounts) is untouched; only VM-local state (guest home, VM-local
 caches, nested Podman storage, OpenCode state) is lost:
 
 ```shell
+cd /path/to/my-sandbox
+src_path="$(readlink -f "$HOME/src")"
+repo_path="$(pwd -P)"
+kb_path="$(readlink -f "$HOME/kb")"
 limactl delete --force devbox     # --force is needed when protected
-limactl start ~/src/my-sandbox/lima/devbox.yaml \
+limactl start "$repo_path/lima/devbox.yaml" \
+  --param "SrcPath=$src_path" \
+  --param "RepoPath=$repo_path" \
+  --param "KbPath=$kb_path" \
   --param "GitUserName=$(git config --global user.name)" \
   --param "GitUserEmail=$(git config --global user.email)"
 ```
 
 ## Shared vs VM-local state
 
-| Path                        | Shared?  | Notes                            |
-| --------------------------- | -------- | -------------------------------- |
-| `~/src`                     | 9p, RW   | Projects root, worktrees         |
-| `<repo>/.venv`              | 9p, RW   | Under `~/src`; venv caveat below |
-| `~/kb`                      | 9p, RW   | Knowledge base (`kbase.py sync`) |
-| `~/.agents`                 | 9p, RW   | Agent skills (devbox-tools)      |
-| `~/.config/opencode`        | 9p, RW   | OpenCode config                  |
-| `~/.local/share/opencode`   | 9p, RW   | Session data                     |
-| `~/.config/gh`              | 9p, RW   | gh auth state                    |
-| `~/.config/gcloud`          | 9p, RW   | gcloud ADC and config            |
-| `~/.config/acli`            | 9p, RW   | Atlassian CLI config             |
-| `~/.config/gws`             | 9p, RW   | Google Workspace CLI             |
-| `~/.local/state/opencode`   | VM-local | Single service owner             |
-| `~/.gitconfig`              | VM-local | Git identity, HTTPS rewrite      |
-| uv/pre-commit/Podman caches | VM-local | Rebuilt on demand                |
+| Path | Shared? | Notes |
+| --- | --- | --- |
+| `~/src` | 9p, RW (virtiofs after host validation) | Same-path projects root and worktrees; its guest-side parent is accessible only to the guest UID |
+| `<repo>/.venv` | 9p, RW (virtiofs after host validation) | Under `~/src`; venv caveat below |
+| `~/kb` | 9p, RW (virtiofs after host validation) | Mounted at `~/.host-config/kb`; a same-path alias preserves absolute worktree pointers |
+| Host `~/.agents` → guest `~/.host-config/agents` | 9p, RO | Root-owned parent grants traversal only to guest UID; image skills win in guest-local `~/.agents` |
+| `~/.config/opencode` | 9p, RW (virtiofs after host validation) | Mounted under `~/.host-config/config/opencode`, linked into guest config |
+| `~/.local/share/opencode` | 9p, RW (virtiofs after host validation) | Mounted under `~/.host-config/local/share/opencode` |
+| `~/.config/gh` | 9p, RW (virtiofs after host validation) | Host credentials, protected from package builder |
+| `~/.config/gcloud` | 9p, RW (virtiofs after host validation) | gcloud ADC/config, protected from package builder |
+| `~/.config/acli` | 9p, RW (virtiofs after host validation) | Atlassian CLI config, protected from package builder |
+| `~/.config/gws` | 9p, RW (virtiofs after host validation) | Google Workspace CLI config, protected from package builder |
+| `~/.local/state/opencode` | VM-local | Single service owner |
+| `/var/lib/devbox-toolbuilder` | VM-local | npm/uv/Rust installs, Playwright browser, Semble model; guest can use installed binaries but cannot modify packages |
+| `~/.cache/{go,uv,semble/index}` | VM-local | Guest-writable Go, uv, and Semble index caches |
+| `/usr/local/node` | VM-local | Manifest-pinned Node.js and npm runtime |
+| `~/.cargo` | VM-local | Guest-local Cargo cache; Rust toolchain is read from builder install |
+| `~/.local/share/kubebuilder-envtest` | VM-local | `setup-envtest` default asset store |
+| `~/.gitconfig` | VM-local | Git identity, HTTPS rewrite |
+
+The template remains on 9p because Lima's `virtiofsd` exited before guest
+startup during the direct host-to-VM attempt in this environment. The #268
+benchmark recommends virtiofs for the full Linux/QEMU template after a direct
+host-to-VM mixed-write check passes. On a host where virtiofsd starts, switch
+`mountType` to `virtiofs` only after running that check; otherwise keep 9p.
 
 The guest home directory itself is VM-local (Lima's default
 `/home/<user>.guest`); `provision-user.sh` symlinks the shared paths into
@@ -239,33 +328,44 @@ created 465 and 518 sessions, saw each other's project sessions, and the
 database passed `PRAGMA integrity_check` with no SQLite lock/corruption or
 service-registration replacement errors. No production session data was used.
 
-This is guest-to-guest evidence only; it does **not** prove host-to-VM 9p
-coherency. The host OpenCode process and CodeBurn could not be exercised from
+This is guest-to-guest evidence only; it does **not** prove host-to-VM
+filesystem coherency for OpenCode's SQLite data. The host OpenCode process and
+CodeBurn could not be exercised from
 the guest, so keep host-shared session data provisional until a host writer
-and host CodeBurn read are verified. The minimal guest also has no MCP servers
-configured and no Semble/GitHub MCP binaries: GitHub MCP is superseded by the
-`gh` decision in #275, while Semble/runtime validation remains for #270/#272.
-The TUI session-switching UX, model-backed conversation resume, and MCP
-load-once behavior were not validated.
+and host CodeBurn read are verified. The full template now provisions Semble
+and its VM-local model cache. GitHub MCP is intentionally not installed: the
+decision in #275 makes the `gh` CLI canonical. TUI session-switching UX and
+model-backed conversation resume remain to be validated in the later
+integration work.
 
 ## What is inside
 
 - **Fedora 44** cloud image, digest-pinned (x86_64 and aarch64).
 - **qemu/KVM**, `nestedVirtualization: true`, default `cpuType` (host),
   8 CPUs / 16 GiB RAM / 100 GiB sparse disk.
-- **Podman** (rootless): Lima's boot scripts provide the base
-  (`/etc/subuid` + `/etc/subgid`, cgroup delegation, linger);
-  provisioning installs Podman and its networking/storage stack.
-- **OpenCode** (pinned from `container/tool-versions.json`), **git**,
-  **gh**, **uv** (pinned), **jq**, **Node.js/npm**.
-- **limactl** (pinned) plus `qemu-kvm`, `qemu-img`, and `edk2-ovmf` inside
-  the guest, for nested L2 VMs.
+- **Rootless Podman**: Lima's boot scripts provide static `/etc/subuid` and
+  `/etc/subgid`, cgroup-v2 delegation, and linger; provisioning installs
+  Podman/netavark, configures the Docker-compatible socket, and sets bridge
+  sysctls as root. Docker CE is not installed.
+- **Manifest-pinned tools**: OpenCode, Go + `devbox-go`, uv, Rust, Node/npm,
+  Playwright CLI + bundled Chromium, ast-grep + its skills, Semble + prefetched
+  model, Repomix, Hadolint, markdownlint-cli2, pre-commit, acli, Google
+  Workspace CLI, Antigravity CLI, kind, kubectl, Helm, and Pipenv. Release
+  assets with manifest checksums are verified before installation.
+- **Operator profile**: GNU make, kind, kubectl, Helm, Python/pip, Pipenv, and
+  a VM-local `~/.local/share/kubebuilder-envtest` asset-store location.
+- **Additional CLIs/utilities**: `gh`, `glab`, `gcloud`, `gws`, ShellCheck,
+  `tokei`, `just`, `difft`, `hyperfine`, `fd`, `file`, `diff`, and `patch`.
+- **Nested VMs**: pinned `limactl` plus `qemu-kvm`, `qemu-img`, and
+  `edk2-ovmf` inside the guest.
 - Git configured for GitHub over HTTPS (SSH remotes rewritten, `gh` as
   the credential helper), identity seeded once from the host.
 
-Version pins in `lima/*.sh` carry `# renovate:` comments and are kept in
-sync with `container/tool-versions.json` by
-`scripts/validate_tool_versions.py` (the `lima` consumer).
+Every tool installed at a manifest-pinned version declares a `lima` consumer
+in `container/tool-versions.json`. Provisioning reads those versions and
+checksummed asset digests at runtime; `scripts/validate_tool_versions.py`
+ensures the scripts consume every declared Lima tool, and
+`lima/check_toolchain.py` verifies the installed versions.
 
 ## Deviations from the issue text
 
@@ -290,13 +390,6 @@ recommendation from
 are recorded in
 [directory-sharing-benchmark.md](directory-sharing-benchmark.md).
 
-## Deferred
-
-- OpenCode single-instance validation (host + VM sharing config/data):
-  [issue #269](https://github.com/JohnStrunk/my-sandbox/issues/269)
-- Full toolchain parity with the container devbox:
-  [issue #270](https://github.com/JohnStrunk/my-sandbox/issues/270)
-
 ## Acceptance checklist
 
 After the one-time `limactl start` succeeds and the readiness probe
@@ -304,6 +397,18 @@ passes, verify from inside the VM (opened with
 `~/src/my-sandbox/lima/devbox-shell`):
 
 - [ ] `cd ~/src/my-sandbox && git status` sees the host checkout.
+- [ ] `devbox-toolchain-check` reports the pinned manifest versions and
+      operator tools; `make --version`, `kind version`, `kubectl version
+      --client`, `helm version`, and `pipenv --version` all succeed.
+- [ ] `~/src/my-sandbox/lima/validate-kind.sh` completes ten consecutive
+      create/delete cycles using rootless Podman's Docker-compatible socket.
+- [ ] `~/.agents/skills/devbox-tools/SKILL.md` and the ast-grep skills are
+      present; image-owned files take precedence at those skill names.
+- [ ] `HF_HOME` and `SEMBLE_CACHE_LOCATION` point under the VM-local cache,
+      and Playwright's bundled Chromium launches without another download.
+- [ ] Updating a tool version in the shared manifest and restarting the VM
+      changes the stored fingerprint and applies the new version without a
+      VM rebuild.
 - [ ] Create a worktree and set `UV_PROJECT_ENVIRONMENT` to a unique
       VM-local path before `uv sync --extra test`; run
       `uv run --extra test pytest -m unit` — tests pass. Do not reuse that

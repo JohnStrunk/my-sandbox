@@ -1,7 +1,5 @@
 #!/bin/bash
-# Readiness probe for the devbox Lima VM. Lima runs probes over SSH as
-# the devbox user (no login shell), so tool paths are absolute.
-# A failing probe makes `limactl start` report the VM as not ready.
+# Readiness probe for the devbox Lima VM, run as the guest user.
 set -euo pipefail
 
 fail() {
@@ -9,41 +7,130 @@ fail() {
   exit 1
 }
 
-# Tools installed by provision-system.sh / provision-user.sh.
-test -x /usr/bin/git || fail "git is not installed"
-test -x /usr/bin/gh || fail "gh is not installed"
-test -x /usr/bin/podman || fail "podman is not installed"
-test -x /usr/local/bin/opencode || fail "opencode is not installed"
-test -x /usr/local/bin/limactl || fail "limactl is not installed"
-test -x "${HOME}/.local/bin/uv" || fail "uv is not installed"
+TOOL_BUILDER_HOME=/var/lib/devbox-toolbuilder
+PATH="$HOME/.local/bin:$HOME/.cargo/bin:$TOOL_BUILDER_HOME/.local/bin:$TOOL_BUILDER_HOME/.cargo/bin:/usr/local/node/bin:/usr/local/go/bin:/usr/local/bin:$PATH"
+export PATH
+export UV_CACHE_DIR="$HOME/.cache/uv"
+export CARGO_HOME="$HOME/.cargo"
+export RUSTUP_HOME="$TOOL_BUILDER_HOME/.rustup"
+export HF_HOME="$TOOL_BUILDER_HOME/.cache/semble/huggingface"
+export SEMBLE_CACHE_LOCATION="$HOME/.cache/semble/index"
+export PLAYWRIGHT_BROWSERS_PATH="$TOOL_BUILDER_HOME/.cache/ms-playwright"
+export PLAYWRIGHT_MCP_BROWSER=chromium
+DOCKER_HOST="unix:///run/user/$(id -u)/podman/podman.sock"
+export DOCKER_HOST
 
-# Nested virtualization. With -cpu host the guest only sees the vmx/svm
-# CPU flag when the host KVM module exposes nesting, so this is the real
-# guard for L2 VM support on x86_64. (Lima <= 2.2 does not itself fail
-# when host nesting is disabled.) aarch64 has no equivalent flag; the L2
-# boot test in lima/README.md's checklist covers it.
+for tool in \
+  acli agy cargo diff difft fd file ffmpeg gh glab gcloud gws \
+  hadolint helm hyperfine jq just kind kubectl limactl make \
+  markdownlint-cli2 node npm npx opencode patch pipenv pip3 \
+  playwright-cli podman pre-commit python3 qemu-img repomix rg \
+  rustc rustup semble shellcheck tokei uv uvx
+do
+  command -v "$tool" >/dev/null 2>&1 || fail "$tool is not installed"
+done
+
+# Version commands ran under the isolated package builder. Check its stamp
+# instead of executing third-party tools in this probe.
+manifest_sha256="$(
+  sha256sum /etc/devbox/tool-versions.json | awk '{print $1}'
+)"
+builder_manifest_sha256="$(
+  cat /var/lib/devbox-vm/toolchain-manifest.sha256 \
+    2>/dev/null || true
+)"
+[[ "$builder_manifest_sha256" == "$manifest_sha256" ]] \
+  || fail "isolated manifest-pinned toolchain check is missing or stale"
+
+test -x "$HOME/.local/bin/devbox-go" \
+  || fail "devbox-go wrapper is not installed"
+test -x /usr/local/bin/sg \
+  || fail "ast-grep compatibility command sg is not installed"
+test -x "$HOME/.local/bin/semble" \
+  || fail "Semble wrapper is not installed"
+test -d "$PLAYWRIGHT_BROWSERS_PATH" \
+  || fail "Playwright Chromium is not installed"
+test -d "$HF_HOME" || fail "Semble HF_HOME is not VM-local"
+test -d "$HOME/.local/share/kubebuilder-envtest" \
+  || fail "the VM-local setup-envtest asset cache is missing"
+test -r "$HOME/.agents/skills/devbox-tools/SKILL.md" \
+  || fail "image-owned devbox-tools skill is not staged"
+test -r "$HOME/.agents/skills/ast-grep/SKILL.md" \
+  || fail "ast-grep skill is not staged"
+test -r "$HOME/.agents/skills/ast-grep-outline/SKILL.md" \
+  || fail "ast-grep-outline skill is not staged"
+grep -Eq '^[0-9a-f]{64}$' \
+  "$HOME/.local/share/devbox-toolchain/provisioning.fingerprint" \
+  || fail "the toolchain fingerprint is missing or invalid"
+
+# The host must pass KVM through, and the guest user must be in kvm.
 test -e /dev/kvm \
   || fail "/dev/kvm is missing (host nested virtualization?)"
 case "$(uname -m)" in
   x86_64)
     grep -qm1 -w vmx /proc/cpuinfo \
-      || fail \
-        "no vmx CPU flag: host nested virtualization is off" \
-        "(kvm_intel nested=0?)"
+      || grep -qm1 -w svm /proc/cpuinfo \
+      || fail "no vmx/svm CPU flag: host nested virtualization is off"
     ;;
 esac
 getent group kvm | grep -qw "$(id -un)" \
   || fail "the devbox user is not in the kvm group"
 
-# Rootless Podman base (configured by Lima's 20-rootless-base.sh).
+# Lima sets Podman subordinate IDs and cgroup delegation.
 grep -q "^$(id -un):" /etc/subuid \
   || fail "/etc/subuid has no entry for $(id -un)"
 grep -q "^$(id -un):" /etc/subgid \
   || fail "/etc/subgid has no entry for $(id -un)"
+test -S "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock" \
+  || fail "the rootless Podman API socket is not available"
+[[ "$(stat -fc %T /sys/fs/cgroup)" == cgroup2fs ]] \
+  || fail "the VM is not using cgroup v2"
+check_sysctl() {
+  local name="$1" expected="$2" actual
+  actual="$(sysctl -n "$name" 2>/dev/null)" \
+    || fail "could not read sysctl $name"
+  [[ "$actual" == "$expected" ]] \
+    || fail "sysctl $name is $actual; expected $expected"
+}
+check_sysctl net.ipv4.conf.default.route_localnet 0
+check_sysctl net.ipv4.conf.default.arp_notify 1
+check_sysctl net.ipv4.conf.default.rp_filter 2
+check_sysctl net.ipv4.ip_forward 1
+check_sysctl net.ipv6.conf.default.accept_dad 0
+check_sysctl net.ipv6.conf.default.accept_ra 0
+check_sysctl net.ipv6.conf.all.forwarding 1
+check_sysctl fs.inotify.max_user_instances 8192
+check_sysctl fs.inotify.max_user_watches 524288
+check_sysctl fs.inotify.max_queued_events 65536
+check_sysctl kernel.pid_max 4194304
+user_service="user@$(id -u).service"
+task_limit="$(systemctl show -p TasksMax --value "$user_service")"
+[[ "$task_limit" == infinity ]] \
+  || fail "user service task limit is $task_limit"
+fd_limit="$(systemctl show -p LimitNOFILE --value "$user_service")"
+[[ "$fd_limit" == 1048576 ]] \
+  || fail "user service NOFILE limit is $fd_limit"
+curl --fail --silent --show-error --max-time 5 \
+  --unix-socket "${DOCKER_HOST#unix://}" http://d/_ping 2>/dev/null \
+  | grep -qx OK \
+  || fail "the Podman Docker-compatible API is not responding"
 
-# Same-path 9p mounts (keep in sync with the mounts in devbox.yaml).
+# Mounts use virtiofs or the documented 9p fallback. Host-shared paths sit
+# behind root-owned parents traversable only by the guest UID.
+verify_guest_only_parent() {
+  local parent="$1" label="$2" acl
+  [[ "$(stat -c %U "$parent")" == root ]] \
+    || fail "$label parent is not root-owned"
+  acl="$(getfacl --omit-header --numeric "$parent")"
+  grep -Fxq "user:$(id -u):--x" <<<"$acl" \
+    || fail "$label parent does not grant guest traversal"
+  grep -Fxq 'other::---' <<<"$acl" \
+    || fail "$label parent is accessible to other users"
+}
+verify_guest_only_parent "$HOME/.host-config" "host-config"
+src_parent="$(dirname "${PARAM_SrcPath:-/nonexistent}")"
+verify_guest_only_parent "$src_parent" "SrcPath"
 for rel in \
-  .agents \
   .config/acli \
   .config/gcloud \
   .config/gh \
@@ -53,17 +140,42 @@ for rel in \
   kb \
   src
 do
-  findmnt -rn -t 9p -o TARGET | grep -xq -- ".*/${rel}" \
-    || fail "the 9p mount for '~/${rel}' is not live"
-  # provision-user.sh links each shared path into the guest home; a real
-  # (non-symlink) path here means the sharing setup did not run through.
-  test -L "${HOME}/${rel}" \
-    || fail "'~/${rel}' is not a symlink to its 9p mount (provisioning?)"
+  target=""
+  case "$rel" in
+    src) target="${PARAM_SrcPath:-}" ;;
+    .config/*) target="$HOME/.host-config/config/${rel#.config/}" ;;
+    .local/share/opencode)
+      target="$HOME/.host-config/local/share/opencode"
+      ;;
+    kb) target="$HOME/.host-config/kb" ;;
+  esac
+  [[ -n "$target" ]] \
+    || fail "the shared mount for '~/${rel}' is not live"
+  findmnt -rn -t 9p,virtiofs -o TARGET | grep -Fxq -- "$target" \
+    || fail "the shared mount for '~/${rel}' is not at '$target'"
+  if [[ "$target" == "$HOME/$rel" ]]; then
+    [[ -d "$HOME/$rel" && ! -L "$HOME/$rel" ]] \
+      || fail "'~/${rel}' is not the live mount"
+  else
+    [[ -L "$HOME/$rel" && "$(readlink "$HOME/$rel")" == "$target" ]] \
+      || fail "'~/${rel}' is not linked to its shared mount"
+  fi
 done
 
-# OpenCode's volatile state must stay VM-local, never host-shared.
-if [ -L "${HOME}/.local/state/opencode" ]; then
-  fail \
-    "OpenCode state dir (.local/state/opencode) must stay VM-local:" \
-    "it must not be a symlink"
+kb_alias="${PARAM_KbPath:-}"
+kb_alias_target="$(readlink "$kb_alias" 2>/dev/null || true)"
+[[ -L "$kb_alias" && "$kb_alias_target" == "$HOME/.host-config/kb" ]] \
+  || fail "KB worktree path alias is incorrect"
+
+findmnt -rn -t 9p,virtiofs -o TARGET \
+  | grep -Fxq -- "$HOME/.host-config/agents" \
+  || fail "the read-only host skill mount is not live"
+[[ -d "$HOME/.agents" && ! -L "$HOME/.agents" ]] \
+  || fail "$HOME/.agents is not the guest-local skill overlay"
+
+# OpenCode's volatile state remains VM-local (single service owner).
+if [[ -L "$HOME/.local/state/opencode" ]]; then
+  fail "OpenCode state dir (.local/state/opencode) must not be a symlink"
 fi
+
+echo "devbox readiness: full toolchain and operator profile are ready"
