@@ -101,8 +101,8 @@ def test_filter_ignores_manifest_checksum_embedded_in_lima_script(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ):
-    # lima/*.sh embeds manifest checksums verbatim to verify downloads;
-    # the embedded form is assignment syntax, not JSON.
+    # Keep the filter correct for any Lima consumer that explicitly embeds a
+    # manifest checksum; current provisioning reads checksum fields dynamically.
     manifest_line = f'    "amd64": "{_DIGEST}",'
     manifest = tmp_path / "tool-versions.json"
     manifest.write_text('{\n  "checksums": {\n' + manifest_line + "\n  }\n}\n")

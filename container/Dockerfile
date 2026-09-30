@@ -6,9 +6,7 @@ FROM docker.io/fedora:latest@sha256:43b29f65a41eb9c35e1cd5323e3bdf3b655c2357a9f4
 USER root
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-# Install system utilities matching devcontainer
-# Prevent Node.js 22 Intl.Segmenter crashes without full ICU data:
-# https://bugzilla.redhat.com/show_bug.cgi?id=2418608
+# Install base utilities and the nested-container runtime dependencies.
 # hadolint ignore=DL3041
 RUN dnf install -y --setopt=install_weak_deps=False \
     ca-certificates \
@@ -28,9 +26,6 @@ RUN dnf install -y --setopt=install_weak_deps=False \
     just \
     jq \
     libcap \
-    nodejs22-full-i18n \
-    nodejs \
-    npm \
     nss \
     openssl \
     patch \
@@ -64,20 +59,49 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
 ARG TARGETARCH=amd64
 COPY tool-versions.json /tmp/devbox-tool-versions.json
 
+# Node.js includes bundled npm and full ICU data. Verify the platform archive
+# against the canonical manifest before extracting it.
+RUN node_version="$(jq -er '.tools.node.version' /tmp/devbox-tool-versions.json)" \
+    && case "${TARGETARCH}" in \
+        amd64) node_arch=x64; node_checksum="$(jq -er '.tools.node.checksums.amd64' /tmp/devbox-tool-versions.json)" ;; \
+        arm64) node_arch=arm64; node_checksum="$(jq -er '.tools.node.checksums.arm64' /tmp/devbox-tool-versions.json)" ;; \
+        *) echo "Unsupported architecture for Node.js: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+    && node_archive="node-v${node_version}-linux-${node_arch}.tar.xz" \
+    && curl --retry 3 --retry-connrefused -fsSL \
+      "https://nodejs.org/dist/v${node_version}/${node_archive}" \
+      -o "/tmp/${node_archive}" \
+    && printf '%s  %s\n' "${node_checksum}" "/tmp/${node_archive}" \
+      | sha256sum -c - \
+    && tar -C /usr/local -xJf "/tmp/${node_archive}" \
+    && ln -sfn "/usr/local/node-v${node_version}-linux-${node_arch}" /usr/local/node \
+    && ln -sfn /usr/local/node/bin/node /usr/local/bin/node \
+    && ln -sfn /usr/local/node/bin/npm /usr/local/bin/npm \
+    && ln -sfn /usr/local/node/bin/npx /usr/local/bin/npx \
+    && rm -f "/tmp/${node_archive}"
+ENV PATH="/usr/local/node/bin:${PATH}"
+
 # Install Hadolint
 RUN hadolint_version="$(jq -er '.tools.hadolint.version' /tmp/devbox-tool-versions.json)" \
     && hadolint_version="${hadolint_version#v}" \
     && case "${TARGETARCH:-amd64}" in \
-        amd64) hadolint_arch=x86_64 ;; \
-        arm64) hadolint_arch=arm64 ;; \
+        amd64) hadolint_arch=x86_64; hadolint_checksum="$(jq -er '.tools.hadolint.checksums.amd64' /tmp/devbox-tool-versions.json)" ;; \
+        arm64) hadolint_arch=arm64; hadolint_checksum="$(jq -er '.tools.hadolint.checksums.arm64' /tmp/devbox-tool-versions.json)" ;; \
         *) echo "Unsupported architecture for Hadolint: ${TARGETARCH}" >&2; exit 1 ;; \
     esac \
     && curl -sSL "https://github.com/hadolint/hadolint/releases/download/v${hadolint_version}/hadolint-linux-${hadolint_arch}" -o /usr/local/bin/hadolint \
+    && printf '%s  %s\n' "${hadolint_checksum}" /usr/local/bin/hadolint | sha256sum -c - \
     && chmod +x /usr/local/bin/hadolint
 
 # Go toolchain
 RUN go_version="$(jq -er '.tools.go.version' /tmp/devbox-tool-versions.json)" \
+    && case "${TARGETARCH}" in \
+        amd64) go_checksum="$(jq -er '.tools.go.checksums.amd64' /tmp/devbox-tool-versions.json)" ;; \
+        arm64) go_checksum="$(jq -er '.tools.go.checksums.arm64' /tmp/devbox-tool-versions.json)" ;; \
+        *) echo "Unsupported architecture for Go: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
     && curl -fsSL "https://go.dev/dl/go${go_version}.linux-${TARGETARCH}.tar.gz" -o /tmp/go.tgz \
+    && printf '%s  %s\n' "${go_checksum}" /tmp/go.tgz | sha256sum -c - \
     && tar -C /usr/local -xzf /tmp/go.tgz \
     && rm /tmp/go.tgz
 ENV PATH="/usr/local/go/bin:${PATH}"
@@ -86,14 +110,39 @@ ENV PATH="/usr/local/go/bin:${PATH}"
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
     PATH="/usr/local/cargo/bin:${PATH}"
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path \
+RUN rustup_version="$(jq -er '.tools.rustup.version' /tmp/devbox-tool-versions.json)" \
+    && rust_version="$(jq -er '.tools.rust.version' /tmp/devbox-tool-versions.json)" \
+    && case "${TARGETARCH}" in \
+        amd64) rustup_arch=x86_64-unknown-linux-gnu; rustup_checksum="$(jq -er '.tools.rustup.checksums.amd64' /tmp/devbox-tool-versions.json)" ;; \
+        arm64) rustup_arch=aarch64-unknown-linux-gnu; rustup_checksum="$(jq -er '.tools.rustup.checksums.arm64' /tmp/devbox-tool-versions.json)" ;; \
+        *) echo "Unsupported architecture for rustup: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+    && curl --retry 3 --retry-connrefused -fsSL \
+      "https://static.rust-lang.org/rustup/archive/${rustup_version}/${rustup_arch}/rustup-init" \
+      -o /tmp/rustup-init \
+    && printf '%s  %s\n' "${rustup_checksum}" /tmp/rustup-init | sha256sum -c - \
+    && chmod 0755 /tmp/rustup-init \
+    && /tmp/rustup-init -y --no-modify-path --default-toolchain "${rust_version}" \
+    && rm /tmp/rustup-init \
     && chmod -R a+w "${RUSTUP_HOME}" "${CARGO_HOME}"
 
 # uv (Python packaging)
 RUN uv_version="$(jq -er '.tools.uv.version' /tmp/devbox-tool-versions.json)" \
     && uv_version="${uv_version#v}" \
-    && curl -LsSf "https://astral.sh/uv/${uv_version}/install.sh" | sh \
-    && mv /root/.local/bin/uv /root/.local/bin/uvx /usr/local/bin/
+    && case "${TARGETARCH}" in \
+        amd64) uv_arch=x86_64; uv_checksum="$(jq -er '.tools.uv.checksums.amd64' /tmp/devbox-tool-versions.json)" ;; \
+        arm64) uv_arch=aarch64; uv_checksum="$(jq -er '.tools.uv.checksums.arm64' /tmp/devbox-tool-versions.json)" ;; \
+        *) echo "Unsupported architecture for uv: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+    && uv_dir="uv-${uv_arch}-unknown-linux-gnu" \
+    && curl --retry 3 --retry-connrefused -fsSL \
+      "https://github.com/astral-sh/uv/releases/download/${uv_version}/${uv_dir}.tar.gz" \
+      -o /tmp/uv.tar.gz \
+    && printf '%s  %s\n' "${uv_checksum}" /tmp/uv.tar.gz | sha256sum -c - \
+    && tar -C /tmp -xzf /tmp/uv.tar.gz \
+    && install -Dm755 "/tmp/${uv_dir}/uv" /usr/local/bin/uv \
+    && install -Dm755 "/tmp/${uv_dir}/uvx" /usr/local/bin/uvx \
+    && rm -rf /tmp/uv.tar.gz "/tmp/${uv_dir}"
 ENV UV_CACHE_DIR=/sandbox/.uv_cache
 
 # markdownlint-cli2 version must match the rev in .pre-commit-config.yaml -
@@ -117,9 +166,13 @@ RUN markdownlint_version="$(jq -er '.tools.markdownlint_cli2.version' /tmp/devbo
 # Install Google Antigravity CLI
 RUN agy_version="$(jq -er '.tools.antigravity_cli.version' /tmp/devbox-tool-versions.json)" \
     && agy_version="${agy_version#v}" \
-    && arch="${TARGETARCH}" \
-    && if [ "$arch" = "amd64" ]; then arch="x64"; fi \
-    && curl -fsSL "https://github.com/google-antigravity/antigravity-cli/releases/download/${agy_version}/agy_cli_linux_${arch}.tar.gz" -o /tmp/agy.tgz \
+    && case "${TARGETARCH}" in \
+        amd64) agy_arch=x64; agy_checksum="$(jq -er '.tools.antigravity_cli.checksums.amd64' /tmp/devbox-tool-versions.json)" ;; \
+        arm64) agy_arch=arm64; agy_checksum="$(jq -er '.tools.antigravity_cli.checksums.arm64' /tmp/devbox-tool-versions.json)" ;; \
+        *) echo "Unsupported architecture for Antigravity CLI: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+    && curl -fsSL "https://github.com/google-antigravity/antigravity-cli/releases/download/${agy_version}/agy_cli_linux_${agy_arch}.tar.gz" -o /tmp/agy.tgz \
+    && printf '%s  %s\n' "${agy_checksum}" /tmp/agy.tgz | sha256sum -c - \
     && tar -C /tmp -xzf /tmp/agy.tgz antigravity \
     && mv /tmp/antigravity /usr/local/bin/agy \
     && chmod +x /usr/local/bin/agy \
@@ -210,10 +263,17 @@ RUN case "${TARGETARCH}" in \
 # Atlassian CLI (acli)
 RUN acli_version="$(jq -er '.tools.acli.version' /tmp/devbox-tool-versions.json)" \
     && acli_version="${acli_version#v}" \
-    && curl -L "https://acli.atlassian.com/linux/${acli_version}/acli_${acli_version}_linux_${TARGETARCH}.tar.gz" -o /tmp/acli.tar.gz \
+    && case "${TARGETARCH}" in \
+        amd64) acli_arch=amd64; acli_checksum="$(jq -er '.tools.acli.checksums.amd64' /tmp/devbox-tool-versions.json)" ;; \
+        arm64) acli_arch=arm64; acli_checksum="$(jq -er '.tools.acli.checksums.arm64' /tmp/devbox-tool-versions.json)" ;; \
+        *) echo "Unsupported architecture for Atlassian CLI: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+    && curl --retry 3 --retry-connrefused -fLsS "https://acli.atlassian.com/linux/${acli_version}/acli_${acli_version}_linux_${acli_arch}.tar.gz" -o /tmp/acli.tar.gz \
+    && printf '%s  %s\n' "${acli_checksum}" /tmp/acli.tar.gz | sha256sum -c - \
+    && acli_dir="/tmp/acli_${acli_version}_linux_${acli_arch}" \
     && tar xzf /tmp/acli.tar.gz -C /tmp/ \
-    && mv /tmp/acli_*_linux_${TARGETARCH}/acli /usr/local/bin/acli \
-    && rm -rf /tmp/acli.tar.gz /tmp/acli_*_linux_${TARGETARCH}
+    && install -Dm755 "${acli_dir}/acli" /usr/local/bin/acli \
+    && rm -rf /tmp/acli.tar.gz "${acli_dir}"
 
 RUN google_workspace_version="$(jq -er '.tools.google_workspace_cli.version' /tmp/devbox-tool-versions.json)" \
     && google_workspace_version="${google_workspace_version#v}" \

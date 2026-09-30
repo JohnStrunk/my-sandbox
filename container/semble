@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-real_semble=/sandbox/.local/bin/semble-bin
+real_semble="${SEMBLE_BIN:-${HOME}/.local/bin/semble-bin}"
 
 if [[ "${1:-}" == search ]]; then
   translated_args=()

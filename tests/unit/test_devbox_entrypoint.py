@@ -81,7 +81,9 @@ fi
     finally:
         process.terminate()
         try:
-            process.communicate(timeout=5)
+            # The entrypoint allows five seconds for Podman's service child
+            # to stop before it removes the Unix socket.
+            process.communicate(timeout=10)
         except subprocess.TimeoutExpired:
             process.kill()
             process.communicate()
@@ -184,7 +186,8 @@ exit 0
     finally:
         process.terminate()
         try:
-            process.communicate(timeout=5)
+            # Allow the entrypoint's bounded service shutdown to finish.
+            process.communicate(timeout=10)
         except subprocess.TimeoutExpired:
             process.kill()
             process.communicate()

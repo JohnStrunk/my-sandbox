@@ -2,7 +2,7 @@
 name: "devbox-tools"
 description: >
   Use this skill when choosing, adding, or integrating a command or
-  agent-facing capability provided by the devbox image.
+  agent-facing capability provided by the devbox image or Lima VM.
 ---
 
 # Devbox Capability Contract
@@ -27,13 +27,15 @@ When adding an image capability, complete all applicable parts together:
 - Add explicit OpenCode MCP, plugin, or wrapper configuration when the
   capability is not a plain command.
 - Add tests for runtime availability and agent visibility or invocation.
-- If the devbox container is persistent, document that `devbox --recreate` is
-  required after changing image contents or integration triggers.
+- For the container devbox, document when `devbox --recreate` is required. For
+  Lima, distinguish manifest-only changes (restart applies them) from embedded
+  template/provision-script changes (recreate the VM).
 
-The skill is image-owned and is copied into the active `.agents/skills`
-directory after any host `.agents` mount is applied. That makes this catalog
-available for arbitrary project repositories without requiring a shared
-repository `AGENTS.md` or README.
+The skill is image-owned. The container stages it after its host `.agents`
+mount. Lima keeps the host `.agents` mount read-only and builds a guest-local
+overlay; image-owned skill names take precedence without modifying host files.
+That makes this catalog available for arbitrary project repositories without
+requiring a shared repository `AGENTS.md` or README.
 
 ## Current Capability
 
@@ -67,34 +69,39 @@ repository `AGENTS.md` or README.
 
 - Runtime command: `semble` (including `semble search` and its local MCP
   server).
-- Agent integration: OpenCode receives the always-on local `semble` MCP server.
+- Agent integration: the container image configures the local `semble` MCP
+  server; the Lima VM provides the CLI while its OpenCode integration is
+  handled by the VM integration work.
 - Use it for vague natural-language code searches, for example:
   `semble search "where are failed requests retried" . --json`.
 - Use ast-grep for syntax-aware structural queries, or `rg` for exact literal
   matches.
-- The embedding model is baked into the image and incremental indexes live in
-  the shared `/sandbox/.cache/semble` volume, so queries need no network or API
-  key after the image is built.
+- The container image prefetches the embedding model into its image-owned cache;
+  Lima prefetches it into VM-local `HF_HOME`. Incremental indexes use the
+  container's persistent cache or Lima's VM-local `SEMBLE_CACHE_LOCATION`, so
+  queries need no network or API key after provisioning.
 - The runtime search and fresh OpenCode MCP discovery are covered by container
   tests.
 
 ### GitHub search
 
-- Agent integration: OpenCode receives the pinned local `github-mcp-server`
-  through a stdio proxy when GitHub credentials are available.
-- For `search_issues`, `search_pull_requests`, `search_code`, and related search
-  tools, the proxy requires only the `fields` needed for the current step and
-  clamps `perPage` to 20 or less. Use `page` for follow-up results instead of
-  asking for a large unbounded response.
-- Do not request `body`, comments, labels, or full repository objects during a
-  discovery search unless they are required. Use a targeted read tool after
-  identifying the relevant issue, pull request, or repository.
-- If the MCP server is unavailable, use `gh api` with an explicit `--jq`
-  projection and `--paginate` as the fallback; do not print full API objects.
-- Search tool results are capped at 64 KiB; an oversized result returns an
-  actionable error asking for fewer fields or a smaller page.
-- The local server's pinned version and binary availability are validated by
-  the image and tool-manifest checks.
+- Runtime command: `gh` is the canonical GitHub surface; do not depend on a
+  GitHub MCP server for repository, issue, or pull-request work.
+- Always pass an explicit `--json` field list or `gh api --jq` projection. Do
+  not print full API objects. Keep list pages bounded, and read bodies/comments
+  with a targeted `gh issue view` or `gh pr view` only after shortlisting.
+- For dependency-aware issue selection, one bounded
+  `gh api 'repos/OWNER/REPO/issues?state=open&per_page=100'` call includes
+  labels, assignees, and `issue_dependencies_summary.total_blocked_by`.
+- Read dependency links with `gh issue view NUMBER --json blockedBy,blocking`;
+  add one with `gh issue edit ISSUE --add-blocked-by DEPENDENCY`, or remove one
+  with `gh issue edit ISSUE --remove-blocking DEPENDENCY`. Search with
+  `gh search issues 'has:blocked-by'`; `is:blocked` is ambiguous here because
+  `blocked` is also a label.
+- Use `gh search issues`/`gh search prs` with explicit `--json` fields for
+  discovery, then a targeted view for the full issue or pull request.
+- The devbox provisions GitHub CLI authentication and GitHub-over-HTTPS access
+  when credentials are available.
 
 ### Project-aware Go toolchains
 
@@ -108,14 +115,30 @@ repository `AGENTS.md` or README.
   binary. Installed tools use the persistent Go cache's `bin` directory, which
   is on `PATH`; use a precompiled tool's own version-selection mechanism when
   needed.
-- Go's downloaded toolchains and module cache live under the persistent
-  `/sandbox/.cache/go` volume. `devbox --recreate` keeps that cache.
+- Go's downloaded toolchains and module cache live under the container's
+  persistent `/sandbox/.cache/go` volume or Lima's VM-local `$HOME/.cache/go`.
+  Do not put these caches on the shared project mount.
 - If `devbox-go` is unavailable, use the reported `GOTOOLCHAIN=<version>+auto`
   value explicitly with the Go command or tool. Without a discoverable
   `go.work` or `go.mod`, the command fails rather than silently selecting the
   image default.
 - Unit coverage is in `tests/unit/test_devbox_go.py`; container availability is
   covered by `tests/container/test_image_binaries.py`.
+
+### Kubernetes operator profile (Lima)
+
+- Available in the Lima VM: GNU `make`, `kind`, `kubectl`, Helm, Python/pip,
+  Pipenv, and the VM-local `~/.local/share/kubebuilder-envtest` asset store.
+- `kind` uses its explicit experimental Podman provider. The VM also exports
+  the rootless Podman Docker-compatible socket in `DOCKER_HOST` for Docker API
+  clients; do not install or assume Docker CE in the VM.
+- Use `devbox-toolchain-check` to verify manifest-pinned tools and report the
+  operator versions. `lima/validate-kind.sh` exercises ten create/delete
+  cycles and cleans up any cluster left by a failed attempt.
+- The VM configures netavark bridge networking, applies the required sysctls,
+  and raises user-service task/inotify limits for nested Kubernetes workloads.
+- Runtime and version-check coverage is in `tests/unit/test_lima_toolchain.py`
+  and `tests/unit/test_lima_template.py`.
 
 ### Release artifact inspection
 

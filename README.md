@@ -494,12 +494,13 @@ for exact literal matches.
 
 ## VM-Native Devbox (Lima)
 
-For work that needs real virtualization (nested VMs, `/dev/kvm`, minikube
-or kind clusters), `lima/` holds a minimal Fedora Lima VM template that
-boots a VM-native devbox: OpenCode runs inside the VM, Podman is available
-as a project tool, and `~/src`, `~/kb`, and the shared config directories
-are mounted at the same paths as on the host, so the existing worktree
-workflow carries over unchanged.
+For work that needs real virtualization (nested VMs, `/dev/kvm`, minikube,
+or kind clusters), `lima/` holds the Fedora Lima VM template for the
+VM-native devbox: OpenCode runs inside the VM, the full toolchain is
+provisioned from `container/tool-versions.json`, and rootless Podman is
+available as a project tool. `~/src`, `~/kb`, and the shared config
+directories are mounted at the same paths as on the host, so the existing
+worktree workflow carries over unchanged.
 
 See [`lima/README.md`](lima/README.md) for host prerequisites and the
 single create command.
@@ -528,7 +529,9 @@ single create command.
 │   ├── devbox.yaml            # Lima VM template (VM-native devbox)
 │   ├── provision-system.sh    # Root VM provisioning (idempotent)
 │   ├── provision-user.sh      # User VM provisioning (idempotent)
-│   ├── probe-readiness.sh     # VM readiness probe
+│   ├── probe-readiness.sh     # Full toolchain and VM readiness probe
+│   ├── check_toolchain.py     # Verify pinned tools and operator profile
+│   ├── validate-kind.sh      # Ten-cycle rootless kind acceptance check
 │   └── README.md              # VM host setup and usage docs
 ├── scripts/
 │   ├── fast-check.sh          # Fast lint + unit test validation
@@ -780,9 +783,10 @@ because CI runs it in its own path-gated and scheduled job.
 
 ### Managing Tool Versions
 
-Pinned versions for tools installed in the devbox image or CI are maintained in
-[`container/tool-versions.json`](container/tool-versions.json). The Dockerfile
-and workflow read that manifest directly. Pre-commit requires literal `rev`
+Pinned versions for tools installed in the devbox image, CI, or Lima VM are
+maintained in [`container/tool-versions.json`](container/tool-versions.json).
+The Dockerfile and workflow read that manifest directly; Lima provisioning
+reads its live shared copy on every VM start. Pre-commit requires literal `rev`
 values, so its revisions are checked against the manifest by the validation
 hook.
 
@@ -805,14 +809,16 @@ The Renovate configuration updates the manifest and groups related pre-commit
 consumer updates so a version change remains synchronized.
 
 Some entries also pin release-provenance metadata that Renovate cannot
-recompute: `ast_grep` carries per-platform release checksums and the official
-agent-skill archive hash, while `github_mcp_server` and `limactl` carry
-per-platform release checksums. Every such entry declares a
-`provenance.url_templates` block mapping each checksummed field to the asset
-that must hash to it. Each installing consumer verifies exactly those fields:
-the Dockerfile reads them for `docker` consumers, and the Lima provisioning
-scripts embed them for `lima` consumers (`scripts/validate_tool_versions.py`
-keeps both in sync).
+recompute. `ast_grep` carries per-platform release checksums and the official
+agent-skill archive hash; `hadolint`, `go`, `node`, `antigravity_cli`, `acli`,
+`rustup`, `uv`, `helm`, `kind`, `kubectl`, `github_mcp_server`, and `limactl`
+carry per-platform release checksums. Every such entry declares a
+`provenance.url_templates` block
+mapping each checksummed field to the asset that must hash to it. Each
+installing consumer verifies exactly those fields:
+the Dockerfile reads them for `docker` consumers, and Lima provisioning reads
+and verifies them at runtime for `lima` consumers
+(`scripts/validate_tool_versions.py` checks each declared consumer).
 
 Verify the pinned digests against upstream (this runs in CI, so a version-only
 bump fails fast rather than at image-build time), or refresh the whole unit in
@@ -824,12 +830,11 @@ python3 scripts/verify_provenance.py --update  # recompute and rewrite digests
 ```
 
 The detect-secrets hook uses `scripts/detect_secrets_filters.py` to ignore only
-the intentional SHA-256 values inside the manifest's `checksums` objects and
-the copies of those digests embedded in `lima/*.sh`. The manifest is still
-scanned for every other detector and every other field, so a real secret must
-not be added to the checksum metadata. After changing a version or checksum,
-run the supported refresh and validation workflow without editing
-`.secrets.baseline`:
+the intentional SHA-256 values inside the manifest's `checksums` objects. The
+manifest is still scanned for every other detector and every other field, so
+a real secret must not be added to the checksum metadata. After changing a
+version or checksum, use the supported refresh and validation workflow
+without editing `.secrets.baseline`:
 
 ```shell
 python3 scripts/verify_provenance.py --update

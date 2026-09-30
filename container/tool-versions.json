@@ -4,9 +4,20 @@
       "version": "2.15.1",
       "datasource": "github-releases",
       "depName": "hadolint/hadolint",
+      "checksums": {
+        "amd64": "c7187db94eeeeca956519a6af171adc31453941a1e777961f6e680f697c8c507",
+        "arm64": "f6198ef8090f404dbb771abfee086eb8c48ac177f30da7fd3510aca35b344b5d"
+      },
+      "provenance": {
+        "url_templates": {
+          "checksums.amd64": "https://github.com/hadolint/hadolint/releases/download/v{version}/hadolint-linux-x86_64",
+          "checksums.arm64": "https://github.com/hadolint/hadolint/releases/download/v{version}/hadolint-linux-arm64"
+        }
+      },
       "consumers": {
         "docker": true,
         "ci": true,
+        "lima": true,
         "pre-commit": "https://github.com/hadolint/hadolint"
       }
     },
@@ -14,14 +25,82 @@
       "version": "1.27.1",
       "datasource": "golang-version",
       "depName": "golang",
+      "checksums": {
+        "amd64": "63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445",
+        "arm64": "3450b45a3f9ee8568792736a5c5e70a1f2e9b36c35a8f74958c03e51d7d92bec"
+      },
+      "provenance": {
+        "url_templates": {
+          "checksums.amd64": "https://go.dev/dl/go{version}.linux-amd64.tar.gz",
+          "checksums.arm64": "https://go.dev/dl/go{version}.linux-arm64.tar.gz"
+        }
+      },
       "consumers": {
-        "docker": true
+        "docker": true,
+        "lima": true
+      }
+    },
+    "node": {
+      "version": "22.23.1",
+      "datasource": "node-version",
+      "depName": "node",
+      "checksums": {
+        "amd64": "9749e988f437343b7fa832c69ded82a312e41a03116d766797ac14f6f9eee578",
+        "arm64": "0294e8b915ab75f92c7513d2fcb830ae06e10684e6c603e99a87dbf8835389c1"
+      },
+      "provenance": {
+        "url_templates": {
+          "checksums.amd64": "https://nodejs.org/dist/v{version}/node-v{version}-linux-x64.tar.xz",
+          "checksums.arm64": "https://nodejs.org/dist/v{version}/node-v{version}-linux-arm64.tar.xz"
+        }
+      },
+      "consumers": {
+        "docker": true,
+        "lima": true
+      }
+    },
+    "rust": {
+      "version": "1.98.1",
+      "datasource": "rust-version",
+      "depName": "rust",
+      "consumers": {
+        "docker": true,
+        "lima": true
+      }
+    },
+    "rustup": {
+      "version": "1.29.1",
+      "datasource": "github-tags",
+      "depName": "rust-lang/rustup",
+      "checksums": {
+        "amd64": "dda7234360b7f578ca8b0ddcb80145646fa61a67c1720a5abc7051b35c9fcb71",
+        "arm64": "15f6e4ce9f583b929c996c91562bad6d4454f3281de858b02cdfdef615fac433"
+      },
+      "provenance": {
+        "url_templates": {
+          "checksums.amd64": "https://static.rust-lang.org/rustup/archive/{version}/x86_64-unknown-linux-gnu/rustup-init",
+          "checksums.arm64": "https://static.rust-lang.org/rustup/archive/{version}/aarch64-unknown-linux-gnu/rustup-init"
+        }
+      },
+      "consumers": {
+        "docker": true,
+        "lima": true
       }
     },
     "uv": {
       "version": "0.12.17",
       "datasource": "github-releases",
       "depName": "astral-sh/uv",
+      "checksums": {
+        "amd64": "fa82fd8dde8e8eefdecada6aa0889666556cfceb690d06e0c3bca49eb3070a63",
+        "arm64": "d636d1b678e9e7f367ecb22b46bd1cabbed234d6bc3b4d96365d2b507f72f86c"
+      },
+      "provenance": {
+        "url_templates": {
+          "checksums.amd64": "https://github.com/astral-sh/uv/releases/download/{version}/uv-x86_64-unknown-linux-gnu.tar.gz",
+          "checksums.arm64": "https://github.com/astral-sh/uv/releases/download/{version}/uv-aarch64-unknown-linux-gnu.tar.gz"
+        }
+      },
       "consumers": {
         "docker": true,
         "lima": true
@@ -34,6 +113,7 @@
       "consumers": {
         "docker": true,
         "ci": true,
+        "lima": true,
         "pre-commit": "https://github.com/DavidAnson/markdownlint-cli2"
       }
     },
@@ -42,15 +122,27 @@
       "datasource": "npm",
       "depName": "@playwright/cli",
       "consumers": {
-        "docker": true
+        "docker": true,
+        "lima": true
       }
     },
     "antigravity_cli": {
       "version": "1.2.7",
       "datasource": "github-releases",
       "depName": "google-antigravity/antigravity-cli",
+      "checksums": {
+        "amd64": "e410dd56d8c213ef12643d3ff5eaaab57a17e05bbf72e9415322f23879fc4a18",
+        "arm64": "8ddbb669158de1d1bc4c1fe5c130dca8f51da80d62569a54a4133f06768a723b"
+      },
+      "provenance": {
+        "url_templates": {
+          "checksums.amd64": "https://github.com/google-antigravity/antigravity-cli/releases/download/{version}/agy_cli_linux_x64.tar.gz",
+          "checksums.arm64": "https://github.com/google-antigravity/antigravity-cli/releases/download/{version}/agy_cli_linux_arm64.tar.gz"
+        }
+      },
       "consumers": {
-        "docker": true
+        "docker": true,
+        "lima": true
       }
     },
     "opencode": {
@@ -98,12 +190,75 @@
         "docker": true
       }
     },
+    "helm": {
+      "version": "4.3.0",
+      "datasource": "github-releases",
+      "depName": "helm/helm",
+      "checksums": {
+        "amd64": "86584a54def73570558f66f5111cc53dfed56689637ae32c1201205d494f54fb",
+        "arm64": "31c5794dd55c66a51e6b7d2e2ac7a114ae8b1de41ff1d9ba51748ac973b06a08"
+      },
+      "provenance": {
+        "url_templates": {
+          "checksums.amd64": "https://get.helm.sh/helm-v{version}-linux-amd64.tar.gz",
+          "checksums.arm64": "https://get.helm.sh/helm-v{version}-linux-arm64.tar.gz"
+        }
+      },
+      "consumers": {
+        "lima": true
+      }
+    },
+    "kind": {
+      "version": "0.33.0",
+      "datasource": "github-releases",
+      "depName": "kubernetes-sigs/kind",
+      "checksums": {
+        "amd64": "aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d",
+        "arm64": "20022bee6cfcd5086cb7234d218e3454e6090022f2a8f55d1fa7fcf42c3867a2"
+      },
+      "provenance": {
+        "url_templates": {
+          "checksums.amd64": "https://github.com/kubernetes-sigs/kind/releases/download/v{version}/kind-linux-amd64",
+          "checksums.arm64": "https://github.com/kubernetes-sigs/kind/releases/download/v{version}/kind-linux-arm64"
+        }
+      },
+      "consumers": {
+        "lima": true
+      }
+    },
+    "kubectl": {
+      "version": "1.37.1",
+      "datasource": "github-releases",
+      "depName": "kubernetes/kubernetes",
+      "checksums": {
+        "amd64": "65691ff77eb6fa44c908b77a1082c9f092c3b9733b5cefabec0d1104890e21a8",
+        "arm64": "ff749f4b78d9c4f1ec87307df9b50119ed819e2094aa9810cb9acffc3286c8c7"
+      },
+      "provenance": {
+        "url_templates": {
+          "checksums.amd64": "https://dl.k8s.io/release/v{version}/bin/linux/amd64/kubectl",
+          "checksums.arm64": "https://dl.k8s.io/release/v{version}/bin/linux/arm64/kubectl"
+        }
+      },
+      "consumers": {
+        "lima": true
+      }
+    },
+    "pipenv": {
+      "version": "2026.8.0",
+      "datasource": "pypi",
+      "depName": "pipenv",
+      "consumers": {
+        "lima": true
+      }
+    },
     "repomix": {
       "version": "1.18.0",
       "datasource": "npm",
       "depName": "repomix",
       "consumers": {
-        "docker": true
+        "docker": true,
+        "lima": true
       }
     },
     "ast_grep": {
@@ -119,22 +274,34 @@
           "agent_skill.sha256": "https://github.com/ast-grep/agent-skill/archive/{agent_skill.commit}.tar.gz"
         }
       },
-      "consumers": {"docker": true}
+      "consumers": {"docker": true, "lima": true}
     },
     "semble": {
       "version": "0.6.0",
       "datasource": "pypi",
       "depName": "semble",
       "consumers": {
-        "docker": true
+        "docker": true,
+        "lima": true
       }
     },
     "acli": {
       "version": "1.3.29-stable",
       "datasource": "custom.acli",
       "depName": "acli",
+      "checksums": {
+        "amd64": "8dcfc7bcf9dc788e7143e93d74445310094977ba1bad2513c6c613460851d34e",
+        "arm64": "cea39c4eb90c65d8d0cafc869a75fa3b6afaaf4573f8da650f4ae73801f8ec46"
+      },
+      "provenance": {
+        "url_templates": {
+          "checksums.amd64": "https://acli.atlassian.com/linux/{version}/acli_{version}_linux_amd64.tar.gz",
+          "checksums.arm64": "https://acli.atlassian.com/linux/{version}/acli_{version}_linux_arm64.tar.gz"
+        }
+      },
       "consumers": {
-        "docker": true
+        "docker": true,
+        "lima": true
       }
     },
     "google_workspace_cli": {
@@ -142,7 +309,8 @@
       "datasource": "npm",
       "depName": "@googleworkspace/cli",
       "consumers": {
-        "docker": true
+        "docker": true,
+        "lima": true
       }
     },
     "pre_commit": {
@@ -151,6 +319,7 @@
       "depName": "pre-commit",
       "consumers": {
         "docker": true,
+        "lima": true,
         "ci": true
       }
     },
