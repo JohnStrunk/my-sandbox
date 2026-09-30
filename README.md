@@ -622,7 +622,7 @@ the test extras and invoke pytest through `uv`; this is the underlying command
 used by the sanitized wrapper locally and in CI:
 
 ```shell
-uv run --extra test pytest -m "not e2e_inference and not cold_bootstrap"
+uv run --extra test pytest -m "not e2e_inference and not cold_bootstrap and not vm and not recursive and not e2e_kind"
 ```
 
 Tests are organized with markers:
@@ -631,6 +631,13 @@ Tests are organized with markers:
   helper logic (no real Podman required).
 - `container` - Static and smoke checks against a built `devbox` image.
 - `integration` - Container lifecycle and nested Podman-in-Podman checks.
+- `vm` - Checks against the current devbox guest or a session-scoped disposable
+  Lima VM provisioned from `lima/devbox.yaml`; requires accessible `/dev/kvm`.
+- `recursive` - Nested Lima-in-Lima checks; also requires host nested KVM to be
+  enabled. The recursive fixture uses a minimal VM-local repository copy rather
+  than stacking the full shared `~/src` mount (see
+  [`lima/directory-sharing-benchmark.md`](lima/directory-sharing-benchmark.md)).
+- `e2e_kind` - End-to-end kind cluster checks inside the provisioned VM.
 - `cold_bootstrap` - Cold-cache `pre-commit` bootstrap check inside the
   devbox image. Deselected by default because it initializes every hook
   environment from an empty cache; CI runs it as its own path-gated step in
@@ -642,7 +649,62 @@ CI runs the sanitized wrapper around the underlying pytest command. The
 which is available there). The `cold_bootstrap` marker runs as a dedicated
 step that a `changes` job path-gates on pre-commit/container/CI-relevant
 edits, and a daily schedule always includes it. `e2e_inference` is opt-in
-since it needs real provider credentials.
+since it needs real provider credentials. The `vm`, `recursive`, and
+`e2e_kind` tiers run in dedicated KVM-capable CI jobs rather than the default
+container-suite job.
+
+The VM tiers are explicit because they need host KVM capabilities and can
+create virtual machines. Run the VM provisioning checks with:
+
+```shell
+./scripts/sanitized-test.sh --require-vm -- \
+  uv run --extra test pytest -m vm
+```
+
+When already inside the devbox VM, add `--guest-vm`; this keeps the private
+temporary `HOME` and credential scrub. Only the Podman shim and the explicit
+kind test receive the guest's runtime directory and Unix D-Bus address; all
+other test processes keep an isolated runtime directory. The fixture
+detects the VM guest and runs VM checks there instead of booting another full
+devbox VM:
+
+```shell
+./scripts/sanitized-test.sh --guest-vm --require-vm -- \
+  uv run --extra test pytest -m "vm or e2e_kind"
+```
+
+`--guest-vm` (and direct pytest execution in an existing guest) is for trusted
+local source only: the temporary HOME and environment scrub do not hide the
+current guest user's mounted files under `~/.host-config`. Do not use it to run
+untrusted branches or pull-request code. CI uses `scripts/run-vm-ci.sh`, which
+creates a disposable guest with empty credential/config mounts instead.
+
+The recursive tier additionally checks `/sys/module/kvm_intel/parameters/nested`
+or `/sys/module/kvm_amd/parameters/nested` before running:
+
+```shell
+./scripts/sanitized-test.sh --require-recursive-vm -- \
+  uv run --extra test pytest -m recursive
+```
+
+For the recursive tier from inside the devbox VM, use both options:
+
+```shell
+./scripts/sanitized-test.sh --guest-vm --require-recursive-vm -- \
+  uv run --extra test pytest -m recursive
+```
+
+An unavailable capability is reported as an infrastructure limitation (status
+`125`) by the required wrapper, not as a product-test failure. Running the
+markers directly skips with an explicit infrastructure reason and reports
+capability-only skips in pytest's terminal summary. The VM fixture uses a
+private Lima home and a minimal source mount; it never forwards provider
+credentials or host CLI configuration. Recursive tests copy the checkout to
+the devbox VM's local disk before creating a minimal-mount L2, avoiding
+9p-over-9p. Set `DEVBOX_VM_START_TIMEOUT` (seconds)
+to raise the default one-hour bound for unusually slow first-boot provisioning.
+CI runs the regular VM tier on every change and the recursive tier on a nightly
+schedule or when VM/test/CI paths change.
 
 ### Isolated by default
 
@@ -706,7 +768,7 @@ For container and integration tests, add `--require-podman`:
 
 ```shell
 ./scripts/sanitized-test.sh --require-podman -- \
-  uv run --extra test pytest -m "not e2e_inference and not cold_bootstrap"
+  uv run --extra test pytest -m "not e2e_inference and not cold_bootstrap and not vm and not recursive and not e2e_kind"
 ```
 
 `--require-podman` uses `docker.io/library/alpine:3.22` for its bounded real
@@ -821,7 +883,7 @@ CI rather than relying on the cache.
 | Command | Checks | Approximate cost |
 | --- | --- | --- |
 | `./scripts/fast-check.sh` | Pre-commit lint hooks and unit tests (`tests/unit`) | Seconds after the first run; no container image build |
-| `uv run --extra test pytest -m "not e2e_inference and not cold_bootstrap"` | Everything above plus container image build/smoke tests and container lifecycle/nested-Podman integration tests | Several minutes; builds the devbox container image |
+| `uv run --extra test pytest -m "not e2e_inference and not cold_bootstrap and not vm and not recursive and not e2e_kind"` | Everything above plus container image build/smoke tests and container lifecycle/nested-Podman integration tests | Several minutes; builds the devbox container image |
 | `uv run --extra test pytest -m cold_bootstrap` | Cold-cache `pre-commit` bootstrap inside the freshly built devbox image | Roughly two extra minutes beyond the row above; downloads every hook environment |
 
 Use `./scripts/fast-check.sh` while iterating on launcher scripts,

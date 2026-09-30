@@ -24,6 +24,9 @@ markers = [
     "unit: Fast isolated unit tests for CLI argument parsing and helper logic",
     "container: Container image static and smoke verification tests",
     "integration: Integration tests for container lifecycle and nested Podman",
+    "vm: Tests against a provisioned Lima guest; requires /dev/kvm",
+    "recursive: Lima-in-Lima tests; requires nested KVM",
+    "e2e_kind: End-to-end kind cluster tests inside a provisioned Lima VM",
     "cold_bootstrap: Cold-cache pre-commit bootstrap validation (path-gated and scheduled in CI)",
     "e2e_inference: End-to-end LLM inference tests for API providers",
 ]

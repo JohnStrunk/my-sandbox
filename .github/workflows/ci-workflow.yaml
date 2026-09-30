@@ -20,10 +20,11 @@ permissions:
 
 jobs:
   changes:
-    name: "Detect cold bootstrap relevance"
+    name: "Detect test-tier relevance"
     runs-on: ubuntu-latest
     outputs:
       cold_bootstrap: ${{ steps.filter.outputs.cold_bootstrap }}
+      recursive: ${{ steps.filter.outputs.recursive }}
 
     steps:
       - name: Checkout repository
@@ -35,7 +36,7 @@ jobs:
           submodules: "recursive"
           fetch-depth: 0
 
-      - name: Evaluate cold bootstrap path filters
+      - name: Evaluate CI test-tier path filters
         id: filter
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -46,19 +47,30 @@ jobs:
           # inside the devbox image. Everything else keeps the fast cached
           # validation.
           relevant='^(\.pre-commit-config\.yaml|\.secrets\.baseline|\.github/workflows/|container/|pyproject\.toml|uv\.lock|scripts/sanitized-test\.sh|scripts/validate_tool_versions\.py|scripts/detect_secrets_filters\.py|tests/container/test_image_binaries\.py)'
+          recursive_relevant='^(\.github/workflows/|container/|devbox$|lima/|scripts/(sanitized-test\.sh|vm_preflight\.py|install-lima-ci\.sh|run-vm-ci\.sh|validate_tool_versions\.py)|tests/(conftest\.py|vm/|unit/(test_vm_preflight|test_vm_fixtures|test_devbox_lima|test_lima_template)\.py)|pyproject\.toml|uv\.lock)'
           cold_bootstrap=true
+          recursive=true
           if [[ "$EVENT_NAME" == "pull_request" ]]; then
             if ! changed="$(git diff --name-only "$BASE_SHA" HEAD 2>/dev/null)"; then
               echo "::warning::Base commit diff failed; forcing cold bootstrap."
+              echo "::warning::Base commit diff failed; forcing recursive VM tests."
             elif grep -Eq "$relevant" <<<"$changed"; then
               echo "Cold bootstrap requested by changed paths:"
               grep -E "$relevant" <<<"$changed"
             else
               cold_bootstrap=false
             fi
+            if [[ -n "${changed:-}" ]] && grep -Eq "$recursive_relevant" <<<"$changed"; then
+              echo "Recursive VM tests requested by changed paths:"
+              grep -E "$recursive_relevant" <<<"$changed"
+            elif [[ -n "${changed:-}" ]]; then
+              recursive=false
+            fi
           fi
           printf 'cold_bootstrap=%s\n' "$cold_bootstrap" >> "$GITHUB_OUTPUT"
+          printf 'recursive=%s\n' "$recursive" >> "$GITHUB_OUTPUT"
           echo "cold_bootstrap=${cold_bootstrap}" >> "$GITHUB_STEP_SUMMARY"
+          echo "recursive=${recursive}" >> "$GITHUB_STEP_SUMMARY"
 
   pre-commit:
     name: "Pre-commit checks"
@@ -248,7 +260,7 @@ jobs:
         run: >-
           ./scripts/sanitized-test.sh --require-podman --
           env UV_CACHE_DIR="${HOME}/.cache/uv"
-          uv run --extra test pytest -m "not e2e_inference and not cold_bootstrap"
+          uv run --extra test pytest -m "not e2e_inference and not cold_bootstrap and not vm and not recursive and not e2e_kind"
 
       # Reuses the image and Podman storage the test suite already built, so
       # only the network-dependent hook-environment download is repeated.
@@ -266,6 +278,80 @@ jobs:
           path: ${{ runner.temp }}/podman-storage.tar.zst
           key: podman-storage-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.podman-version.outputs.version }}-${{ hashFiles('container/**') }}
 
+  vm:
+    name: "VM Tests"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install QEMU and UEFI firmware
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf
+
+      - name: Install pinned Lima
+        run: ./scripts/install-lima-ci.sh
+
+      - name: Run provisioned-VM and kind tests
+        run: |
+          set +e
+          python3 -I scripts/vm_preflight.py
+          preflight_status=$?
+          set -e
+          if [[ "$preflight_status" -eq 125 ]]; then
+            echo "### VM tier skipped: host KVM is unavailable" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          elif [[ "$preflight_status" -ne 0 ]]; then
+            exit "$preflight_status"
+          fi
+          ./scripts/run-vm-ci.sh vm
+
+  recursive-vm:
+    name: "Recursive VM Tests"
+    needs:
+      - changes
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Explain path-gated skip
+        if: needs.changes.outputs.recursive != 'true'
+        run: echo "No recursive-VM-relevant paths changed; nightly CI always runs this tier."
+
+      - name: Checkout repository
+        if: needs.changes.outputs.recursive == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install QEMU and UEFI firmware
+        if: needs.changes.outputs.recursive == 'true'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf
+
+      - name: Install pinned Lima
+        if: needs.changes.outputs.recursive == 'true'
+        run: ./scripts/install-lima-ci.sh
+
+      - name: Run Lima-in-Lima test
+        if: needs.changes.outputs.recursive == 'true'
+        run: |
+          set +e
+          python3 scripts/vm_preflight.py --recursive
+          preflight_status=$?
+          set -e
+          if [[ "$preflight_status" -eq 125 ]]; then
+            echo "### Recursive VM tier skipped: host nested KVM is unavailable" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          elif [[ "$preflight_status" -ne 0 ]]; then
+            exit "$preflight_status"
+          fi
+          ./scripts/run-vm-ci.sh recursive
+
   # This is a dummy job to determine success of the CI workflow
   ci-success:
     name: CI Workflow - Success
@@ -274,6 +360,8 @@ jobs:
       - changes
       - pre-commit
       - test
+      - vm
+      - recursive-vm
     runs-on: ubuntu-latest
     steps:
       - name: Check all jobs
