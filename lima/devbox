@@ -83,7 +83,7 @@ create_instance() {
   git_user_email="$(git config --global user.email || true)"
 
   echo "==> Creating and starting Lima VM '$instance'"
-  if ! limactl start --name "$instance" "$HERE/devbox.yaml" \
+  if ! limactl start --yes --name "$instance" "$HERE/devbox.yaml" \
     --param "SrcPath=$src_root" \
     --param "RepoPath=$repo_path" \
     --param "KbPath=$kb_path" \

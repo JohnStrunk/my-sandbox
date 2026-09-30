@@ -164,7 +164,7 @@ def test_default_launcher_creates_missing_vm_from_checkout_template(
 
     assert result.returncode == 0, result.stderr
     logged = calls.read_text().splitlines()
-    create_call = next(call for call in logged if call.startswith("start --name"))
+    create_call = next(call for call in logged if call.startswith("start --yes --name"))
     assert f"{repo_root}/lima/devbox.yaml" in create_call
     assert f"SrcPath={src_root}" in create_call
     assert f"RepoPath={repo_root}" in create_call
