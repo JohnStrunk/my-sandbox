@@ -164,6 +164,54 @@ def test_lima_shell_uses_gh_auth_token_fallback(
 
 
 @pytest.mark.unit
+def test_lima_shell_forwards_complete_runtime_credential_groups(
+    repo_root: Path,
+    isolated_env: dict[str, str],
+    tmp_path: Path,
+):
+    bin_dir, capture_file, calls_file = _install_lima_mocks(tmp_path)
+    env = isolated_env.copy()
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    env["MOCK_LIMACTL_CAPTURE"] = str(capture_file)
+    env["MOCK_LIMACTL_CALLS"] = str(calls_file)
+    credentials = {
+        "GEMINI_API_KEY": "mock-gemini-token",  # pragma: allowlist secret
+        "GH_TOKEN": "mock-github-token",  # pragma: allowlist secret
+        "CONTEXT7_API_KEY": "mock-context7-token",  # pragma: allowlist secret
+        "TAVILY_API_KEY": "mock-tavily-token",  # pragma: allowlist secret
+        "IGLOO_MCP_COMMUNITY": "mock-community",
+        "IGLOO_MCP_COMMUNITY_KEY": "mock-community-key",  # pragma: allowlist secret
+        "IGLOO_MCP_APP_PASS": "mock-app-pass",  # pragma: allowlist secret
+        "IGLOO_MCP_APP_ID": "mock-app-id",
+        "IGLOO_MCP_USERNAME": "mock-username",
+        "IGLOO_MCP_PASSWORD": "mock-password",  # pragma: allowlist secret
+        "OCTO_OPEN_URL": "https://octo.example/v1",
+        "OCTO_OPEN_KEY": "mock-octo-key",  # pragma: allowlist secret
+        "PRICETAG_API_KEY": "mock-pricetag-key",  # pragma: allowlist secret
+        "PRICETAG_ANTHROPIC_URL": "https://pricetag.example/anthropic",
+        "PRICETAG_HOSTED_URL": "https://pricetag.example/hosted",
+        "PRICETAG_OPENAI_URL": "https://pricetag.example/openai",
+        "ANTHROPIC_API_KEY": "mock-anthropic-key",  # pragma: allowlist secret
+        "ANTHROPIC_BASE_URL": "https://anthropic.example/v1",
+        "GOOGLE_CLOUD_PROJECT": "mock-project",
+        "VERTEX_LOCATION": "us-central1",
+        "AWS_SECRET_ACCESS_KEY": "must-not-forward",  # pragma: allowlist secret
+    }
+    env.update(credentials)
+
+    payload = _run_lima_shell(repo_root, env)
+
+    forwarded = payload["provider_env"]
+    for name, value in credentials.items():
+        if name == "AWS_SECRET_ACCESS_KEY":
+            assert name not in forwarded
+        else:
+            assert forwarded[name] == value
+    assert forwarded["GOOGLE_GENERATIVE_AI_API_KEY"] == credentials["GEMINI_API_KEY"]
+    assert forwarded["GITHUB_TOKEN"] == credentials["GH_TOKEN"]
+
+
+@pytest.mark.unit
 def test_direct_lima_shell_starts_stopped_vm_under_lifecycle_lock(
     repo_root: Path,
     isolated_env: dict[str, str],

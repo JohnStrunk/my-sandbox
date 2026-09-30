@@ -316,5 +316,6 @@ probes:
 message: |
   # The devbox VM is ready.
   # Log in with provider env: ~/src/my-sandbox/lima/devbox-shell (on the host)
-  # Agent session:  cd ~/src/my-sandbox && opencode   (inside the VM)
+  # Agent session:  cd ~/src/my-sandbox && devbox opencode   (on the host)
+  # Avoid bare opencode in the VM; it skips generated runtime config.
   # Full docs:      lima/README.md in the my-sandbox repository.

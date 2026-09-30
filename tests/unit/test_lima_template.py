@@ -211,6 +211,14 @@ def test_full_template_keeps_9p_until_direct_virtiofs_validation(
 
 
 @pytest.mark.unit
+def test_readiness_message_uses_runtime_config_launcher(repo_root: Path):
+    message = _template(repo_root)["message"]
+
+    assert "devbox opencode" in message
+    assert "Avoid bare opencode" in message
+
+
+@pytest.mark.unit
 def test_provision_and_probe_scripts_are_referenced_and_valid(
     repo_root: Path,
 ):
