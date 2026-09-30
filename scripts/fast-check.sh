@@ -12,7 +12,7 @@
 # that later runs skip since devbox containers persist across sessions.
 #
 # For the full validation, including container and integration tests, run:
-#   uv run --extra test pytest -m "not e2e_inference and not cold_bootstrap"
+#   uv run --extra test pytest -m "not e2e_inference and not cold_bootstrap and not vm and not recursive and not e2e_kind"
 
 set -e -o pipefail
 

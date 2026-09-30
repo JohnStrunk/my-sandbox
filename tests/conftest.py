@@ -1,19 +1,276 @@
+import getpass
 import hashlib
 import math
 import os
+import pwd
 import shlex
 import shutil
 import signal
+import stat
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
+from scripts.vm_preflight import CapabilityResult, check_vm_capabilities
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_VM_START_TIMEOUT = 3600.0
+VM_START_TIMEOUT_ENV_VAR = "DEVBOX_VM_START_TIMEOUT"
+
+
+def copy_repository_for_vm(source_root: Path, destination: Path) -> None:
+    """Copy tracked and non-ignored checkout files, excluding external symlinks."""
+    root = source_root.resolve()
+    result = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(root),
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "-z",
+        ],
+        capture_output=True,
+        check=True,
+        timeout=30,
+    )
+    destination.mkdir(parents=True, exist_ok=True)
+    for raw_path in result.stdout.split(b"\0"):
+        if not raw_path:
+            continue
+        relative = Path(os.fsdecode(raw_path))
+        if relative.is_absolute() or ".." in relative.parts:
+            raise AssertionError(f"git returned an unsafe repository path: {relative}")
+        source = root / relative
+        try:
+            resolved = source.resolve(strict=False)
+            metadata = source.lstat()
+        except OSError:
+            continue
+        if not resolved.is_relative_to(root):
+            continue
+        target = destination / relative
+        if stat.S_ISLNK(metadata.st_mode):
+            link = os.readlink(source)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.symlink_to(link)
+        elif stat.S_ISDIR(metadata.st_mode):
+            target.mkdir(parents=True, exist_ok=True)
+        elif stat.S_ISREG(metadata.st_mode):
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+
+
+def initialize_local_test_repository(repo_path: Path) -> None:
+    """Create a local credential-free index for later filtered VM copies."""
+    subprocess.run(["git", "init", "--quiet", str(repo_path)], check=True, timeout=30)
+    subprocess.run(
+        ["git", "-C", str(repo_path), "config", "user.name", "VM test"],
+        check=True,
+        timeout=30,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo_path),
+            "config",
+            "user.email",
+            "vm-test@example.invalid",
+        ],
+        check=True,
+        timeout=30,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo_path), "add", "--all"], check=True, timeout=30
+    )
+
+
+@dataclass(frozen=True)
+class LimaVM:
+    """A disposable, provisioned Lima VM owned by this test session."""
+
+    name: str | None
+    env: dict[str, str]
+    repo_path: str
+    guest_home: str
+    guest_runtime_env: dict[str, str] | None = None
+
+    def _lima(
+        self, args: list[str], *, timeout: float = 120.0
+    ) -> subprocess.CompletedProcess[str]:
+        if self.name is None:
+            raise AssertionError("the current guest VM has no external Lima instance")
+        return run_in_process_group(["limactl", *args], timeout=timeout, env=self.env)
+
+    def run(
+        self,
+        command: list[str],
+        *,
+        timeout: float = 120.0,
+        use_guest_runtime: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        if self.name is None:
+            env = self.env
+            if use_guest_runtime and self.guest_runtime_env:
+                env = {**self.env, **self.guest_runtime_env}
+            return run_in_process_group(command, timeout=timeout, env=env)
+        return run_in_process_group(
+            ["limactl", "shell", self.name, "--", *command],
+            timeout=timeout,
+            env=self.env,
+        )
+
+    def snapshot(self, tag: str = "clean", *, timeout: float = 300.0) -> None:
+        result = self._lima(
+            ["snapshot", "create", self.name, "--tag", tag], timeout=timeout
+        )
+        if result.returncode != 0:
+            raise AssertionError(
+                f"Could not snapshot Lima VM {self.name}: {result.stderr.strip()}"
+            )
+
+    def restore_snapshot(self, tag: str = "clean", *, timeout: float = 600.0) -> None:
+        """Restore the named clean-state snapshot and restart the VM."""
+        for operation, args in (
+            ("stop", ["stop", self.name]),
+            ("restore snapshot", ["snapshot", "apply", self.name, "--tag", tag]),
+            ("restart", ["start", self.name]),
+        ):
+            result = self._lima(args, timeout=timeout)
+            if result.returncode != 0:
+                raise AssertionError(
+                    f"Could not {operation} Lima VM {self.name}: "
+                    f"{result.stderr.strip()}"
+                )
+
+    def clone(self, name: str, *, start: bool = True, timeout: float = 600.0) -> str:
+        """Create an independent VM copy for tests needing an isolated state."""
+        args = ["clone", self.name, name]
+        if start:
+            args.append("--start")
+        result = self._lima(args, timeout=timeout)
+        if result.returncode != 0:
+            raise AssertionError(
+                f"Could not clone Lima VM {self.name} as {name}: "
+                f"{result.stderr.strip()}"
+            )
+        return name
+
+
+def vm_start_timeout() -> float:
+    """Resolve the bounded Lima startup timeout in seconds."""
+    raw_value = os.environ.get(VM_START_TIMEOUT_ENV_VAR)
+    if not raw_value:
+        return DEFAULT_VM_START_TIMEOUT
+    try:
+        value = float(raw_value)
+    except ValueError:
+        return DEFAULT_VM_START_TIMEOUT
+    if not math.isfinite(value) or value <= 0:
+        return DEFAULT_VM_START_TIMEOUT
+    return value
+
+
+def vm_test_environment(home: Path) -> dict[str, str]:
+    """Build the non-secret host environment used to control disposable VMs."""
+    runtime_dir = home / "run"
+    temp_dir = home / "tmp"
+    cache_dir = home / "cache"
+    for directory in (runtime_dir, temp_dir, cache_dir):
+        directory.mkdir(mode=0o700, exist_ok=True)
+        directory.chmod(0o700)
+    env = {
+        "PATH": os.environ.get("PATH", os.defpath),
+        "HOME": str(home),
+        "LIMA_HOME": str(home / ".lima"),
+        "TMPDIR": str(temp_dir),
+        "XDG_CONFIG_HOME": str(home / ".config"),
+        "XDG_CACHE_HOME": str(cache_dir),
+        "XDG_RUNTIME_DIR": str(runtime_dir),
+    }
+    for name in ("LANG", "LC_ALL", "LC_CTYPE", "TERM", "CI", VM_START_TIMEOUT_ENV_VAR):
+        if name in os.environ:
+            env[name] = os.environ[name]
+    return env
+
+
+def guest_runtime_environment(runtime_dir: Path | None = None) -> dict[str, str]:
+    """Discover runtime sockets only for tests that explicitly need them."""
+    runtime_dir = runtime_dir or Path(f"/run/user/{os.getuid()}")
+    runtime: dict[str, str] = {}
+    if runtime_dir.is_dir():
+        runtime["XDG_RUNTIME_DIR"] = str(runtime_dir)
+    bus = runtime_dir / "bus"
+    if bus.exists():
+        runtime["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={bus}"
+    return runtime
+
+
+def _private_lima_home() -> Path:
+    root = Path("/tmp/opencode")
+    if not root.is_dir() or not os.access(root, os.W_OK | os.X_OK):
+        root = Path("/tmp")
+    return Path(tempfile.mkdtemp(prefix="lima-", dir=root))
+
+
+def lima_vm_start_command(repo_root: Path, instance: str, timeout: float) -> list[str]:
+    return [
+        "limactl",
+        "start",
+        "--yes",
+        "--name",
+        instance,
+        "--cpus",
+        "4",
+        "--memory",
+        "10",
+        "--timeout",
+        f"{timeout:g}s",
+        "--param",
+        "SrcPath=/workspace/src",
+        "--param",
+        f"RepoPath=/workspace/src/{repo_root.name}",
+        "--param",
+        "KbPath=/workspace/kb",
+        str(repo_root / "lima" / "devbox.yaml"),
+    ]
+
+
+def _cleanup_private_lima_home(env: dict[str, str]) -> list[str]:
+    """Stop and remove every instance under this fixture's private Lima home."""
+    listed = run_in_process_group(["limactl", "list", "-q"], timeout=30, env=env)
+    if listed.returncode != 0:
+        detail = listed.stderr.strip()
+        if not listed.stdout.strip() and "no instance found" in detail.lower():
+            return []
+        return [
+            f"limactl list failed (exit {listed.returncode})"
+            + (f": {detail}" if detail else " without diagnostics")
+        ]
+    errors: list[str] = []
+    for name in listed.stdout.splitlines():
+        name = name.strip()
+        if not name:
+            continue
+        stopped = run_in_process_group(["limactl", "stop", name], timeout=90, env=env)
+        deleted = run_in_process_group(
+            ["limactl", "delete", "--force", name], timeout=90, env=env
+        )
+        for operation, result in (("stop", stopped), ("delete", deleted)):
+            if result.returncode != 0 and "not found" not in result.stderr.lower():
+                errors.append(f"{operation} {name}: {result.stderr.strip()}")
+    return errors
+
 
 # Credential-isolated test runner (issue #81)
 # ---------------------------------------------------------------------------
@@ -471,6 +728,139 @@ def podman_probe_result() -> PodmanProbeResult:
 
 
 @pytest.fixture(scope="session")
+def vm_capability_result() -> CapabilityResult:
+    """Check KVM once so VM tiers can skip as infrastructure-limited."""
+    return check_vm_capabilities()
+
+
+@pytest.fixture(scope="session")
+def devbox_vm(
+    repo_root: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    vm_capability_result: CapabilityResult,
+) -> Iterator[LimaVM]:
+    """Use the current Lima guest or start a disposable provisioned VM.
+
+    The source mount contains only a working-tree copy of this repository. This
+    avoids stacking the host's whole project mount into another 9p mount. Lima
+    and QEMU get a private HOME, so host credentials/configuration are neither
+    needed nor visible to test processes. From inside an existing devbox VM,
+    the fixture uses that guest directly and reserves a private Lima home for
+    recursive L2 instances.
+    """
+    if not vm_capability_result.available:
+        pytest.skip(
+            "VM infrastructure limitation: " + "; ".join(vm_capability_result.reasons)
+        )
+    if not shutil.which("limactl"):
+        pytest.skip("VM infrastructure limitation: limactl is not installed")
+
+    in_guest = (
+        os.environ.get("MY_SANDBOX_VM_TEST_IN_GUEST") == "1"
+        or Path("/etc/devbox/tool-versions.json").is_file()
+    )
+    if in_guest:
+        home = tmp_path_factory.mktemp("my-sandbox-vm-test-home")
+        env = vm_test_environment(home)
+        runtime_env = guest_runtime_environment()
+        guest_home = pwd.getpwuid(os.getuid()).pw_dir
+        env.update(
+            {
+                "TMPDIR": "/tmp",
+                "PATH": ":".join(
+                    (
+                        f"{guest_home}/.local/bin",
+                        f"{guest_home}/.cargo/bin",
+                        "/var/lib/devbox-toolbuilder/.local/bin",
+                        "/var/lib/devbox-toolbuilder/.cargo/bin",
+                        "/usr/local/node/bin",
+                        "/usr/local/go/bin",
+                        "/usr/local/bin",
+                        "/usr/bin",
+                        "/bin",
+                    )
+                ),
+                "CARGO_HOME": f"{guest_home}/.cargo",
+                "RUSTUP_HOME": "/var/lib/devbox-toolbuilder/.rustup",
+                "SEMBLE_BIN": f"{guest_home}/.local/bin/semble-bin",
+            }
+        )
+        lima_home = _private_lima_home()
+        env["LIMA_HOME"] = str(lima_home)
+        try:
+            yield LimaVM(
+                None,
+                env,
+                str(repo_root),
+                guest_home,
+                runtime_env,
+            )
+        finally:
+            cleanup_errors = _cleanup_private_lima_home(env)
+            if cleanup_errors:
+                raise AssertionError(
+                    "Could not clean up nested Lima VM(s): " + "; ".join(cleanup_errors)
+                )
+            shutil.rmtree(lima_home)
+        return
+
+    home = tmp_path_factory.mktemp("my-sandbox-vm-home")
+    source_root = home / "src"
+    source_root.mkdir()
+    staged_repo = source_root / repo_root.name
+    copy_repository_for_vm(repo_root, staged_repo)
+    initialize_local_test_repository(staged_repo)
+    (home / "kb").mkdir()
+    for relative in (
+        ".agents",
+        ".config/opencode",
+        ".local/share/opencode",
+        ".config/gh",
+        ".config/gcloud",
+        ".config/acli",
+        ".config/gws",
+    ):
+        (home / relative).mkdir(parents=True, exist_ok=True)
+    instance = f"my-sandbox-vm-{uuid.uuid4().hex[:10]}"
+    env = vm_test_environment(home)
+    lima_home = _private_lima_home()
+    env["LIMA_HOME"] = str(lima_home)
+
+    start_timeout = vm_start_timeout()
+    start_command = lima_vm_start_command(repo_root, instance, start_timeout)
+    start_result: subprocess.CompletedProcess[str] | None = None
+    try:
+        start_result = run_in_process_group(
+            start_command,
+            timeout=start_timeout,
+            env=env,
+        )
+        if start_result.returncode != 0:
+            pytest.fail(
+                f"Could not start disposable Lima VM {instance} "
+                f"(exit {start_result.returncode}).\n"
+                f"stdout: {start_result.stdout}\nstderr: {start_result.stderr}"
+            )
+        vm = LimaVM(
+            instance,
+            env,
+            f"/workspace/src/{repo_root.name}",
+            f"/home/{getpass.getuser()}.guest",
+        )
+        vm.snapshot()
+        yield vm
+    finally:
+        # This fixture owns its private Lima home; it never sees user-owned VMs.
+        cleanup_errors = _cleanup_private_lima_home(env)
+        if cleanup_errors:
+            details = "; ".join(cleanup_errors)
+            raise AssertionError(
+                f"Could not clean up disposable Lima VM {instance}: {details}"
+            )
+        shutil.rmtree(lima_home)
+
+
+@pytest.fixture(scope="session")
 def is_podman_available(podman_probe_result: PodmanProbeResult) -> bool:
     return podman_probe_result.available
 
@@ -708,6 +1098,22 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     # cannot see that exception, but every runner call is timeout-bounded,
     # so a lingering worker command still dies with its own escalation.
     install_termination_handlers()
+
+
+def pytest_terminal_summary(terminalreporter: pytest.TerminalReporter) -> None:
+    """Separate capability-only skips from product failures in VM tiers."""
+    skips = terminalreporter.stats.get("skipped", [])
+    capability_skips = []
+    for entry in skips:
+        report = entry[0] if isinstance(entry, tuple) else entry
+        if "VM infrastructure limitation:" in str(getattr(report, "longrepr", "")):
+            capability_skips.append(report)
+    if capability_skips:
+        terminalreporter.write_sep(
+            "=",
+            f"VM infrastructure limitations: {len(capability_skips)} test(s) "
+            "skipped because required host capabilities were unavailable",
+        )
 
 
 def _process_group_alive(pgid: int) -> bool:
