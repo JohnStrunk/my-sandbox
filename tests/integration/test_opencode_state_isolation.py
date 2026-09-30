@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from tests.conftest import (
-    run_bash_script,
+    run_container_devbox,
     run_podman_isolated,
     unique_workspace_dir,
 )
@@ -69,7 +69,7 @@ def test_opencode_state_isolated_and_seeded_per_container(
         #    `opencode models` warm start not rewriting model.json (it
         #    only lists the catalog; model.json changes on selection), so
         #    this also proves the seeded state survived the warm start.
-        res = run_bash_script(
+        res = run_container_devbox(
             devbox_path,
             [
                 "bash",
@@ -110,7 +110,7 @@ def test_opencode_state_isolated_and_seeded_per_container(
 
         # 3. Container writes land in the per-container host directory,
         #    never in the host's shared state directory.
-        res = run_bash_script(
+        res = run_container_devbox(
             devbox_path,
             ["bash", "-c", f"touch /sandbox/.local/state/opencode/{marker}"],
             env=isolated_env,
@@ -123,7 +123,7 @@ def test_opencode_state_isolated_and_seeded_per_container(
 
         # 4. The per-container state persists across --recreate and is not
         #    re-seeded from the host.
-        res = run_bash_script(
+        res = run_container_devbox(
             devbox_path,
             [
                 "bash",
@@ -137,7 +137,7 @@ def test_opencode_state_isolated_and_seeded_per_container(
             timeout=120,
         )
         assert res.returncode == 0, f"{res.stdout}\n{res.stderr}"
-        res = run_bash_script(
+        res = run_container_devbox(
             devbox_path,
             [
                 "--recreate",
@@ -160,7 +160,7 @@ def test_opencode_state_isolated_and_seeded_per_container(
         # 5. The per-container state also persists across --remove: the
         #    launcher never deletes it, and a later creation reuses it
         #    without re-seeding.
-        res = run_bash_script(
+        res = run_container_devbox(
             devbox_path,
             ["--remove"],
             env=isolated_env,
@@ -169,7 +169,7 @@ def test_opencode_state_isolated_and_seeded_per_container(
         )
         assert res.returncode == 0, f"{res.stdout}\n{res.stderr}"
         assert (per_container / marker).is_file()
-        res = run_bash_script(
+        res = run_container_devbox(
             devbox_path,
             [
                 "bash",
@@ -239,7 +239,7 @@ def test_two_devboxes_keep_separate_opencode_service_registrations(
 
     try:
         for work_dir in (first_dir, second_dir):
-            res = run_bash_script(
+            res = run_container_devbox(
                 devbox_path,
                 ["cat", "/sandbox/.local/state/opencode/service.json"],
                 env=isolated_env,

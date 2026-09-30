@@ -1,13 +1,16 @@
 # my-sandbox
 
-A secure, rootless containerized development environment tailored for
-AI-assisted coding and modern software development workflows.
+A secure development environment tailored for AI-assisted coding and modern
+software development workflows. `devbox` opens the VM-native Lima environment
+by default; the original rootless container workflow remains available during
+the migration with `devbox --container`.
 
 This repository provides:
 
-- **`devbox`**: A single-command launcher that starts an interactive, fully
-  rootless development container with nested container support
-  (Podman-in-Podman) and automatic credential passthrough.
+- **`devbox`**: A single-command launcher for shells and OpenCode sessions in
+  the Lima VM at the current mounted project directory, with an allowlisted
+  credential environment. Use `devbox --container` for the transitional
+  per-project rootless Podman workflow.
 - **`container/`**: A container image definition bundling modern language
   toolchains, cloud CLIs, code linters, and AI coding assistants like
   [OpenCode](https://opencode.ai).
@@ -19,6 +22,11 @@ This repository provides:
 
 ## Key Features
 
+The detailed rootless Podman, nested-container, and per-container OpenCode
+features below describe the transitional `devbox --container` mode. The default
+Lima VM workflow and its host requirements are described in
+[`lima/README.md`](lima/README.md).
+
 - **Fully Rootless & Secure**: Runs via Podman using `--userns=keep-id` without
   requiring `--privileged` mode or added Linux capabilities. Files created
   inside the container remain owned by the host user.
@@ -26,12 +34,13 @@ This repository provides:
   `devbox` also bind-mounts the repository's git directory at the same host
   path inside the container, so the worktree's `.git` pointer file resolves
   and Git commands keep working from the mounted worktree. Containers
-  created earlier pick this up on the next `devbox --recreate`.
+  created earlier pick this up on the next `devbox --container --recreate`.
 - **Nested Podman-in-Podman**: Build and run containers inside the devbox
   without host root permissions. Uses `fuse-overlayfs` and dynamic subordinate
   UID/GID delegation (`/etc/subuid` and `/etc/subgid`).
 - **Persistent Shared Data**: The knowledge base plus `uv`, pre-commit, and
-  nested Podman/Buildah image storage survive `devbox --recreate`, so
+  nested Podman/Buildah image storage survive
+  `devbox --container --recreate`, so
   recreating a container doesn't lose the knowledge base or repeat downloads
   and image builds whose inputs haven't changed.
 - **Nested Docker-Compatible API**: Every devbox starts a rootless Podman
@@ -59,7 +68,8 @@ This repository provides:
   configuration and session data), and passes supported API credentials
   and endpoints such as Anthropic's directly into the container. OpenCode's
   session data and configuration stay shared with the host (so sessions
-  remain visible outside the devbox and survive `devbox --recreate`), while
+  remain visible outside the devbox and survive
+  `devbox --container --recreate`), while
   its volatile runtime state gets an isolated per-container directory (see
   [OpenCode State Isolation](#opencode-state-isolation)). When a GitHub
   token is available, it also enables the OpenCode GitHub MCP server without
@@ -73,8 +83,11 @@ This repository provides:
 
 ## Prerequisites
 
-- [Podman](https://podman.io) installed on the host machine.
-- Linux host operating system recommended for rootless user namespaces.
+- For the default VM mode, follow the Lima, QEMU/KVM, and nested
+  virtualization requirements in [`lima/README.md`](lima/README.md).
+- [Podman](https://podman.io) on the host is needed only for transitional
+  `devbox --container` usage; rootless Podman is available inside the VM for
+  project development and testing.
 - Optional: Host credentials for cloud services (e.g., `gh auth login`,
   `gcloud auth application-default login`, or OpenCode configuration).
 
@@ -82,14 +95,52 @@ This repository provides:
 
 ## Usage
 
-### Launching a Devbox
+### Launching the VM Devbox
+
+The Lima VM is the default runtime. Create the VM once using the host setup
+instructions in [`lima/README.md`](lima/README.md), then run the launcher from
+the project directory you want to work in:
+
+```shell
+cd ~/src/my-project
+devbox                 # interactive shell in the VM, at ~/src/my-project
+devbox opencode        # start OpenCode in that project
+devbox --stop          # gracefully stop the shared VM
+devbox --reprovision   # restart it and re-run provisioning
+devbox --reset         # factory-reset and reprovision the VM
+```
+
+Project worktrees under `~/src` map to the same absolute paths in the guest.
+The launcher also accepts directories under the other configured Lima mounts;
+outside-mounted paths fail with a message explaining where to move. Enable
+Lima's optional host-login autostart with `limactl autostart enable devbox` to
+avoid a manual VM startup after reboot. See the Lima guide for mount and
+lifecycle details.
+
+### Transitional Podman Container Mode (`--container`)
+
+The container-based launcher remains available during the VM migration. Add
+`--container` before any legacy container flags or commands:
+
+```shell
+cd /path/to/project
+devbox --container
+devbox --container opencode
+devbox --container --recreate
+```
+
+The remaining container-specific usage and feature documentation below applies
+only to this explicit transition mode. The container path will be retired in the
+follow-up migration issue.
+
+#### Container launcher details
 
 `devbox` always bind-mounts the _current working directory_, so `cd` into
 whatever project you want to work on and run it from there:
 
 ```shell
 cd /path/to/project
-/path/to/this/repo/devbox
+/path/to/this/repo/devbox --container
 ```
 
 The container is named after the current directory (`devbox-<dirname>`), so
@@ -112,11 +163,13 @@ image ID, on subsequent runs. If the Dockerfile or another file in
 `container/` changed, the image was rebuilt, or the launcher script changed
 (since bind mounts, injected environment, and exec contracts also live in
 that script), the launcher warns that the existing container is stale and
-prints the `devbox --recreate` command needed to refresh it. Recreating
-removes only the container; the host-backed project directory remains intact.
+prints the `devbox --container --recreate` command needed to refresh it.
+Recreating removes only the container; the host-backed project directory
+remains intact.
 
 For convenience, symlink the script onto your `PATH` so it can be run as
-just `devbox` from any project directory:
+just `devbox` from any project directory (and use `devbox --container` during
+the transition):
 
 ```shell
 ln -s /path/to/this/repo/devbox ~/bin/devbox
@@ -126,15 +179,15 @@ You can also pass a command directly to execute it inside the container instead
 of opening an interactive shell:
 
 ```shell
-devbox opencode
-devbox ls -al
+devbox --container opencode
+devbox --container ls -al
 ```
 
 Additional flags let you manage the container's lifecycle:
 
 ```shell
-devbox --remove    # or -r: stop and remove this directory's container
-devbox --recreate  # or --new: remove then re-create the container
+devbox --container --remove    # or -r: stop and remove this directory's container
+devbox --container --recreate  # or --new: remove then re-create the container
 ```
 
 ### Working Inside the Devbox
@@ -164,8 +217,8 @@ it up from a bind-mounted project. To keep the documented
   container-native environment in it, so host shebangs are never executed.
 - The host `.venv` is only masked, never read or written, and is not created
   for projects that don't already have one.
-- The volume survives `devbox --recreate`; `uv run` re-syncs the environment
-  against the lockfile on every invocation. Clear it with
+- The volume survives `devbox --container --recreate`; `uv` re-syncs the
+  environment against the lockfile on every invocation. Clear it with
   `podman volume rm devbox-venv-<dirname>`.
 - A `.venv` that is a _symlink_ (or any other non-directory) can't be shadowed
   safely; `devbox` warns and leaves it alone. Recreate it inside devbox instead
@@ -175,7 +228,7 @@ it up from a bind-mounted project. To keep the documented
 - The shadow is established at container creation. If entering an older
   container (created before the project had a `.venv`, or before this feature
   existed) whose host project now has one, `devbox` warns that it isn't
-  shadowed; run `devbox --recreate` to pick up the mount.
+  shadowed; run `devbox --container --recreate` to pick up the mount.
 
 ### Go Project Toolchains
 
@@ -198,8 +251,8 @@ accident. If a project file has no explicit version, the doctor reports that
 Go's default selection is being used. Go can download the selected toolchain
 through its normal proxy and checksum flow; downloaded toolchains and the module
 cache are stored in the persistent `devbox-go-cache` volume. Use
-`devbox --recreate` after image changes, but do not need to redownload a
-toolchain already present in that volume.
+`devbox --container --recreate` after image changes, but do not need to
+redownload a toolchain already present in that volume.
 
 `devbox-go run` exports `GOTOOLCHAIN` to a child command that invokes `go`; it
 cannot change the Go runtime embedded in an already-compiled binary. Install
@@ -241,13 +294,13 @@ Git's credential helper when the token is supplied only through
 helper supplies credentials for authenticated clone/fetch/push operations;
 public repository reads can still be anonymous. Without a token, the launcher
 prints a warning with the manual `gh auth login` and `gh auth setup-git` steps.
-Run `devbox --recreate` to apply the URL rewrite to an existing persistent
-container.
+Run `devbox --container --recreate` to apply the URL rewrite to an existing
+persistent container.
 
 ### Persistent Storage
 
 `devbox` backs a few directories with storage that survives
-`devbox --recreate` (and container removal in general). This keeps the
+`devbox --container --recreate` (and container removal in general). This keeps
 knowledge base available to every devbox instance and avoids repeating
 downloads or nested image builds whose inputs haven't changed:
 
@@ -271,7 +324,8 @@ inspected and pruned with ordinary tools (`du -sh`, `rm -rf`) without needing
 The shared cache entries above are shared across _every_ devbox instance, not
 just one project's container, and the per-project `.venv` shadow volume
 likewise survives its container, so all of them persist even across
-`devbox --remove`; only deleting the volume/directory itself clears them:
+`devbox --container --remove`; only deleting the volume/directory itself
+clears them:
 
 ```shell
 # Shared knowledge base
@@ -354,7 +408,7 @@ configuration remains unchanged. The generated config also sets baseline
 searches run without an approval prompt, and native OpenCode v2
 `provider.use` deny policies for the `github-copilot` and `gitlab`
 providers. Since the container
-is persistent, use `devbox --recreate` after adding or changing host
+is persistent, use `devbox --container --recreate` after adding or changing host
 credentials or integration triggers. On creation, the launcher also runs
 `opencode models` inside the container to start OpenCode v2's background service
 and load the model catalog before the first interactive client starts. If the
@@ -410,7 +464,7 @@ semantics:
 
 | Host directory | Container path | Sharing |
 | --- | --- | --- |
-| `~/.local/share/opencode` | `/sandbox/.local/share/opencode` | **Shared** with the host and every devbox: the session database (`opencode*.db` with `session_v2`/`session_message` cost and token rows, plus legacy `storage/session/` files). Sessions stay visible outside the devbox (e.g. for host-side usage trackers like [CodeBurn](https://codeburn.app/)) and survive `devbox --recreate`. |
+| `~/.local/share/opencode` | `/sandbox/.local/share/opencode` | **Shared** with the host and every devbox: the session database (`opencode*.db` with `session_v2`/`session_message` cost and token rows, plus legacy `storage/session/` files). Sessions stay visible outside the devbox (e.g. for host-side usage trackers like [CodeBurn](https://codeburn.app/)) and survive `devbox --container --recreate`. |
 | `~/.config/opencode` | `/sandbox/.config/opencode` | **Shared**: configuration, auth, agents, and the persisted service password, so settings sync continuously between the host and every devbox. |
 | `~/.local/state/devbox/<dirname>` | `/sandbox/.local/state/opencode` | **Per container**: OpenCode's volatile runtime state, isolated so concurrent devboxes cannot conflict. |
 
@@ -425,8 +479,9 @@ TUI view state; real settings live in the shared config directory
 warns and continues with empty state. The host's own state directory is only
 ever read (by that one-time seed), never written by container processes.
 
-The directory survives `devbox --recreate` and `devbox --remove` and is never
-re-seeded while it exists. The trade-off: model picks and prompt history made
+The directory survives `devbox --container --recreate` and
+`devbox --container --remove` and is never re-seeded while it exists. The
+trade-off: model picks and prompt history made
 _inside_ a container stay in that container (the host remains the source of
 truth at seed time) instead of racing last-writer-wins across environments.
 Clear a project's per-container state with:
@@ -452,7 +507,7 @@ modifying their `AGENTS.md`, README, or mounted OpenCode configuration.
 When adding or changing an image capability, recreate persistent containers:
 
 ```shell
-devbox --recreate
+devbox --container --recreate
 ```
 
 For syntax-aware code searches and structural rewrites, use the staged

@@ -1,0 +1,262 @@
+#!/usr/bin/env bash
+# VM-native entry point called by the top-level devbox launcher.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+instance="${DEVBOX_LIMA_INSTANCE:-devbox}"
+action="${1:-run}"
+shift || true
+command=("$@")
+
+if ! command -v limactl >/dev/null 2>&1; then
+  echo "devbox: limactl is not installed or not on PATH" >&2
+  exit 127
+fi
+
+lock_root="${XDG_CACHE_HOME:-$HOME/.cache}/devbox/locks"
+lock_file="$lock_root/lima-runtime.lock"
+lock_fd=""
+
+acquire_lima_lock() {
+  local fd
+  if ! mkdir -p "$lock_root" || ! chmod 700 "$lock_root" \
+    || ! exec {fd}>"$lock_file" || ! chmod 600 "$lock_file"; then
+    echo "devbox: could not create or secure Lima lifecycle lock '$lock_file'" >&2
+    return 1
+  fi
+  if ! flock "$fd"; then
+    echo "devbox: could not acquire Lima lifecycle lock '$lock_file'" >&2
+    exec {fd}>&-
+    return 1
+  fi
+  lock_fd="$fd"
+}
+
+release_lima_lock() {
+  if [[ -n "$lock_fd" ]]; then
+    flock -u "$lock_fd" || true
+    exec {lock_fd}>&-
+    lock_fd=""
+  fi
+}
+
+trap release_lima_lock EXIT
+
+lima_status() {
+  local status
+  if ! status="$(limactl list --format '{{.Status}}' "$instance" 2>/dev/null)"; then
+    echo "devbox: could not inspect Lima instance '$instance'" >&2
+    return 1
+  fi
+  if [[ -z "$status" ]]; then
+    echo "devbox: Lima instance '$instance' does not exist; create it using the instructions in '$HERE/README.md'" >&2
+    return 1
+  fi
+  printf '%s\n' "$status"
+}
+
+ensure_running() {
+  local status="${1:-}"
+  if [[ -z "$status" ]]; then
+    status="$(lima_status)" || return
+  fi
+  if [[ "$status" == Running ]]; then
+    return 0
+  fi
+  if [[ "$status" != Stopped ]]; then
+    echo "devbox: cannot start Lima instance '$instance' while it is '$status'" >&2
+    return 1
+  fi
+  echo "==> Starting Lima VM '$instance'"
+  if ! limactl start "$instance"; then
+    echo "devbox: could not start Lima instance '$instance'; inspect it with 'limactl list' or try 'devbox --reset'" >&2
+    return 1
+  fi
+}
+
+require_no_command() {
+  if [[ ${#command[@]} -ne 0 ]]; then
+    echo "devbox: '$action' does not accept a command" >&2
+    exit 2
+  fi
+}
+
+require_existing_instance() {
+  lima_status >/dev/null
+}
+
+provisioning_fingerprint() {
+  local manifest_sha system_sha user_sha tool_sha assets_sha
+  local asset_hashes
+  local -a sources=(
+    "$HERE/../container/devbox-go"
+    "$HERE/check_toolchain.py"
+    "$HERE/../container/semble"
+  )
+  local -a guest_assets=(
+    /var/lib/devbox-vm/tool-assets/devbox-go
+    /var/lib/devbox-vm/tool-assets/check_toolchain.py
+    /var/lib/devbox-vm/tool-assets/semble
+  )
+
+  sha256_file() {
+    sha256sum "$1" | awk '{print $1}'
+  }
+
+  manifest_sha="$(sha256_file "$HERE/../container/tool-versions.json")"
+  system_sha="$(sha256_file "$HERE/provision-system.sh")"
+  user_sha="$(sha256_file "$HERE/provision-user.sh")"
+  tool_sha="$(sha256_file "$HERE/provision-tools.sh")"
+  asset_hashes=""
+  local index
+  for index in "${!sources[@]}"; do
+    asset_hashes+="$(sha256_file "${sources[$index]}")  ${guest_assets[$index]}"$'\n'
+  done
+  assets_sha="$(printf '%s' "$asset_hashes" | sha256sum | awk '{print $1}')"
+  printf '%s\n%s\n%s\n%s\n%s\n' \
+    "$manifest_sha" "$system_sha" "$user_sha" "$tool_sha" "$assets_sha" \
+    | sha256sum | awk '{print $1}'
+}
+
+warn_stale_provisioning() {
+  local expected actual after_reprovision="${1:-false}"
+  expected="$(provisioning_fingerprint)"
+  if ! actual="$(timeout 15 limactl shell "$instance" sh -lc \
+    'cat ~/.local/share/devbox-toolchain/provisioning.fingerprint' 2>/dev/null)"; then
+    actual=""
+  fi
+  if [[ "$actual" != "$expected" ]]; then
+    echo "devbox: Lima VM '$instance' provisioning is stale or cannot be verified." >&2
+    if [[ "$after_reprovision" == true ]]; then
+      echo "       The running instance's embedded provisioners do not match this checkout." >&2
+      echo "       Recreate it using the instructions in '$HERE/README.md'." >&2
+    else
+      echo "       Run 'devbox --reprovision' to apply current manifest and tool changes." >&2
+      echo "       If the warning remains, recreate the VM so it embeds the checkout's current template/provisioners; see '$HERE/README.md'." >&2
+    fi
+  fi
+}
+
+resolve_guest_workdir() {
+  local current_dir host_root suffix relative index
+  local host_home guest_home src_root
+  current_dir="$(realpath -e "$PWD")" || {
+    echo "devbox: cannot resolve current directory '$PWD'" >&2
+    return 1
+  }
+  host_home="$(realpath -e "$HOME")"
+  guest_home="/home/$(id -un).guest"
+  src_root="$(realpath -e "$HOME/src" 2>/dev/null || true)"
+
+  local -a host_roots=() guest_roots=()
+  if [[ -n "$src_root" && -d "$src_root" ]]; then
+    host_roots+=("$src_root")
+    guest_roots+=("$src_root")
+  fi
+  for relative in \
+    kb \
+    .config/opencode \
+    .config/gh \
+    .config/gcloud \
+    .config/acli \
+    .config/gws \
+    .local/share/opencode; do
+    host_root="$host_home/$relative"
+    if [[ -d "$host_root" ]]; then
+      host_root="$(realpath -e "$host_root")"
+      host_roots+=("$host_root")
+      guest_roots+=("$guest_home/$relative")
+    fi
+  done
+  host_root="$host_home/.agents"
+  if [[ -d "$host_root" ]]; then
+    host_roots+=("$(realpath -e "$host_root")")
+    guest_roots+=("$guest_home/.host-config/agents")
+  fi
+
+  for index in "${!host_roots[@]}"; do
+    host_root="${host_roots[$index]}"
+    case "$current_dir" in
+      "$host_root")
+        printf '%s\n' "${guest_roots[$index]}"
+        return 0
+        ;;
+      "$host_root"/*)
+        suffix="${current_dir#"$host_root"}"
+        printf '%s\n' "${guest_roots[$index]}$suffix"
+        return 0
+        ;;
+    esac
+  done
+
+  echo "devbox: '$current_dir' is outside the paths mounted in Lima." >&2
+  echo "       Move to a directory under ~/src (or another mounted directory) and retry." >&2
+  echo "       Host mount configuration is documented in '$HERE/README.md'." >&2
+  return 1
+}
+
+run_launcher() {
+  local initial_status guest_workdir
+  guest_workdir="$(resolve_guest_workdir)" || return 1
+  initial_status="$(lima_status)" || return 1
+  ensure_running "$initial_status" || return 1
+
+  # Provisioning runs on VM startup. Compare the stamp before leaving this
+  # serialized section when the VM was already up; a stopped VM applies the
+  # current manifest as part of its start sequence.
+  if [[ "$initial_status" == Running ]]; then
+    warn_stale_provisioning
+  fi
+  release_lima_lock
+  # The VM is already running under the lifecycle lock. Do not ask the shell
+  # helper to start it again after unlocking: a concurrent --stop must win.
+  exec "$HERE/devbox-shell" --no-start --workdir "$guest_workdir" "${command[@]}"
+}
+
+if ! acquire_lima_lock; then
+  exit 1
+fi
+
+case "$action" in
+  stop)
+    require_no_command
+    status="$(lima_status)" || exit 1
+    if [[ "$status" == Running ]]; then
+      echo "==> Stopping Lima VM '$instance'"
+      limactl stop "$instance"
+    elif [[ "$status" == Stopped ]]; then
+      echo "==> Lima VM '$instance' is already stopped"
+    else
+      echo "devbox: cannot stop Lima instance '$instance' while it is '$status'" >&2
+      exit 1
+    fi
+    ;;
+  reset)
+    require_no_command
+    require_existing_instance || exit 1
+    echo "==> Factory-resetting Lima VM '$instance'"
+    limactl factory-reset "$instance" --yes
+    ensure_running
+    ;;
+  reprovision)
+    require_no_command
+    status="$(lima_status)" || exit 1
+    if [[ "$status" == Running ]]; then
+      echo "==> Stopping Lima VM '$instance' so provisioning can rerun"
+      limactl stop "$instance"
+    elif [[ "$status" != Stopped ]]; then
+      echo "devbox: cannot reprovision Lima instance '$instance' while it is '$status'" >&2
+      exit 1
+    fi
+    echo "==> Starting Lima VM '$instance' and rerunning provisioning"
+    limactl start "$instance"
+    warn_stale_provisioning true
+    ;;
+  run)
+    run_launcher
+    ;;
+  *)
+    echo "devbox: internal error: unknown action '$action'" >&2
+    exit 2
+    ;;
+esac

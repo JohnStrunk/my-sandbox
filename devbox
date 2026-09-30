@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Single-command launcher: OpenShell replacement for devcontainer launch.
 #
-# Runs as a fully rootless Podman container: the main process keeps the
+# By default, opens a shell in the shared Lima VM at the current project
+# directory. The transitional --container mode runs the legacy Podman devbox.
+#
+# The container mode runs as a fully rootless Podman container: the main process keeps the
 # image's built-in "sandbox" account (via `--userns=keep-id`), so files
 # created in the container land on the host owned by the invoking user,
 # with no runtime UID/GID remapping or ownership fix-up required. The image
@@ -36,21 +39,23 @@ export XDG_DATA_HOME=
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") [-r|--remove] [--recreate|--new] [-h|--help] [--] [command [arg ...]]
+Usage: $(basename "$0") [--container] [--stop|--reset|--reprovision] [-h|--help] [--] [command [arg ...]]
 
-Bind-mounts the current directory ($BIND_DIR) into a devbox container
-named '$NAME': creating it if it doesn't exist, or exec'ing a command/shell
-into it if it does.
+Opens a shell in the devbox Lima VM in the current directory. Use
+--container to run the transitional per-project Podman devbox instead.
 
 Options:
-  -r, --remove        Stop and remove the container for this directory
+      --container     Use the transitional per-project Podman devbox
+      --stop          Gracefully stop the shared Lima VM
+      --reset         Factory-reset and reprovision the Lima VM
+      --reprovision   Restart the Lima VM and rerun provisioning
+  -r, --remove        (with --container) Remove this directory's container
       --recreate,
-      --new           Remove the container (if it exists) and create a
-                       fresh one
+      --new           (with --container) Recreate this directory's container
   -h, --help          Show this help message
 
 Arguments:
-  command [arg ...]   Command to run in the container (default: /bin/bash)
+  command [arg ...]   Command to run in the selected environment (default: shell)
 EOF
 }
 
@@ -138,9 +143,26 @@ warn_stale_container() {
 }
 
 ACTION="run"
+MODE="lima"
 COMMAND=()
 while [ $# -gt 0 ]; do
   case "$1" in
+    --container)
+      MODE="container"
+      shift
+      ;;
+    --stop)
+      ACTION="stop"
+      shift
+      ;;
+    --reset)
+      ACTION="reset"
+      shift
+      ;;
+    --reprovision)
+      ACTION="reprovision"
+      shift
+      ;;
     -r | --remove)
       ACTION="remove"
       shift
@@ -169,6 +191,23 @@ while [ $# -gt 0 ]; do
       ;;
   esac
 done
+
+if [[ "$MODE" == "lima" ]]; then
+  case "$ACTION" in
+    remove | recreate)
+      echo "==> '$ACTION' is a container operation; use 'devbox --container --$ACTION'" >&2
+      exit 2
+      ;;
+  esac
+  exec "$HERE/lima/devbox" "$ACTION" "${COMMAND[@]}"
+fi
+
+case "$ACTION" in
+  stop | reset | reprovision)
+    echo "==> '$ACTION' manages the Lima VM; omit --container" >&2
+    exit 2
+    ;;
+esac
 
 container_exists() {
   local status

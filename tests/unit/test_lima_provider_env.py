@@ -29,15 +29,24 @@ def _lima_provider_env_names(repo_root: Path) -> set[str]:
     return set(names)
 
 
-def _install_lima_mocks(tmp_path: Path) -> tuple[Path, Path]:
+def _install_lima_mocks(tmp_path: Path) -> tuple[Path, Path, Path]:
     bin_dir = tmp_path / "mock-bin"
     bin_dir.mkdir()
     capture_file = tmp_path / "limactl-call.json"
+    calls_file = tmp_path / "limactl-calls.log"
 
     limactl = bin_dir / "limactl"
     limactl.write_text(
         """#!/usr/bin/env bash
 set -euo pipefail
+if [[ "${1:-}" == list ]]; then
+  printf '%s\\n' "${MOCK_LIMA_STATUS:-Running}"
+  exit 0
+fi
+if [[ "${1:-}" == start ]]; then
+  printf '%s\\n' "$*" >>"$MOCK_LIMACTL_CALLS"
+  exit 0
+fi
 python3 - "$MOCK_LIMACTL_CAPTURE" "$@" <<'PY'
 import json
 import os
@@ -70,7 +79,7 @@ fi
     )
     gh.chmod(gh.stat().st_mode | stat.S_IEXEC)
 
-    return bin_dir, capture_file
+    return bin_dir, capture_file, calls_file
 
 
 def _run_lima_shell(repo_root: Path, env: dict[str, str]) -> dict:
@@ -96,10 +105,11 @@ def test_lima_shell_forwards_container_env_with_matching_aliases_and_gates(
     isolated_env: dict[str, str],
     tmp_path: Path,
 ):
-    bin_dir, capture_file = _install_lima_mocks(tmp_path)
+    bin_dir, capture_file, calls_file = _install_lima_mocks(tmp_path)
     env = isolated_env.copy()
     env["PATH"] = f"{bin_dir}:{env['PATH']}"
     env["MOCK_LIMACTL_CAPTURE"] = str(capture_file)
+    env["MOCK_LIMACTL_CALLS"] = str(calls_file)
     env.update(
         {
             "GEMINI_API_KEY": "mock-gemini-token",  # pragma: allowlist secret
@@ -118,7 +128,7 @@ def test_lima_shell_forwards_container_env_with_matching_aliases_and_gates(
 
     payload = _run_lima_shell(repo_root, env)
 
-    assert payload["args"] == ["shell", "--start", "--preserve-env", "devbox"]
+    assert payload["args"] == ["shell", "--preserve-env", "devbox"]
     assert payload["block"] == "*"
     assert set(payload["allow"]) == _container_provider_env_names(repo_root)
     assert payload["provider_env"] == {
@@ -138,10 +148,11 @@ def test_lima_shell_uses_gh_auth_token_fallback(
     isolated_env: dict[str, str],
     tmp_path: Path,
 ):
-    bin_dir, capture_file = _install_lima_mocks(tmp_path)
+    bin_dir, capture_file, calls_file = _install_lima_mocks(tmp_path)
     env = isolated_env.copy()
     env["PATH"] = f"{bin_dir}:{env['PATH']}"
     env["MOCK_LIMACTL_CAPTURE"] = str(capture_file)
+    env["MOCK_LIMACTL_CALLS"] = str(calls_file)
     env["MOCK_GH_AUTH_TOKEN"] = "mock-gh-auth-token"  # pragma: allowlist secret
 
     payload = _run_lima_shell(repo_root, env)
@@ -150,6 +161,34 @@ def test_lima_shell_uses_gh_auth_token_fallback(
         "GH_TOKEN": "mock-gh-auth-token",
         "GITHUB_TOKEN": "mock-gh-auth-token",
     }
+
+
+@pytest.mark.unit
+def test_direct_lima_shell_starts_stopped_vm_under_lifecycle_lock(
+    repo_root: Path,
+    isolated_env: dict[str, str],
+    tmp_path: Path,
+):
+    bin_dir, capture_file, calls_file = _install_lima_mocks(tmp_path)
+    env = isolated_env.copy()
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    env["MOCK_LIMACTL_CAPTURE"] = str(capture_file)
+    env["MOCK_LIMACTL_CALLS"] = str(calls_file)
+    env["MOCK_LIMA_STATUS"] = "Stopped"
+
+    result = run_bash_script(
+        repo_root / "lima" / "devbox-shell",
+        env=env,
+        cwd=repo_root,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert calls_file.read_text().splitlines() == ["start devbox"]
+    payload = json.loads(capture_file.read_text())
+    assert payload["args"] == ["shell", "--preserve-env", "devbox"]
+    lock_file = Path(env["XDG_CACHE_HOME"]) / "devbox/locks/lima-runtime.lock"
+    assert lock_file.exists()
+    assert lock_file.stat().st_mode & 0o777 == 0o600
 
 
 @pytest.mark.unit

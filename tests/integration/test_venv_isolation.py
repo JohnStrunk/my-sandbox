@@ -5,7 +5,7 @@ import pytest
 
 from tests.conftest import (
     PODMAN_CLEANUP_RETRIES,
-    run_bash_script,
+    run_container_devbox,
     run_podman_isolated,
 )
 
@@ -38,7 +38,7 @@ def test_host_venv_is_shadowed_inside_devbox(
     volume_name = f"devbox-venv-{test_dir.name}"
 
     try:
-        res = run_bash_script(
+        res = run_container_devbox(
             devbox_path,
             ["--recreate", "bash", "-c", "echo entries=$(ls -A .venv | wc -l)"],
             env=isolated_env,
@@ -49,7 +49,7 @@ def test_host_venv_is_shadowed_inside_devbox(
         assert "Shadowing host .venv" in res.stdout
         assert "entries=0" in res.stdout
 
-        uv_run = run_bash_script(
+        uv_run = run_container_devbox(
             devbox_path,
             ["uv", "run", "python", "-c", "print('uv-run-ok')"],
             env=isolated_env,
@@ -61,7 +61,7 @@ def test_host_venv_is_shadowed_inside_devbox(
 
         # The exact reported symptom: uv must be able to spawn `pytest`
         # rather than reusing the host .venv's broken shebang.
-        pytest_run = run_bash_script(
+        pytest_run = run_container_devbox(
             devbox_path,
             ["uv", "run", "--with", "pytest", "pytest", "--version"],
             env=isolated_env,

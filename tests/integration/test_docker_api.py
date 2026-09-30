@@ -6,7 +6,7 @@ import pytest
 from tests.conftest import (
     devbox_container_name,
     remove_devbox,
-    run_bash_script,
+    run_container_devbox,
     run_in_process_group,
     unique_workspace_dir,
 )
@@ -149,7 +149,7 @@ def _bridge_preflight_unavailable(result: subprocess.CompletedProcess[str]) -> b
 def _install_testcontainers(
     devbox_path: Path, test_dir: Path, env: dict[str, str]
 ) -> None:
-    result = run_bash_script(
+    result = run_container_devbox(
         devbox_path,
         [
             "npm",
@@ -175,7 +175,7 @@ def _run_node_smoke(
     script_name: str,
     env: dict[str, str],
 ) -> subprocess.CompletedProcess[str]:
-    return run_bash_script(
+    return run_container_devbox(
         devbox_path,
         [
             "env",
@@ -213,7 +213,7 @@ def nested_podman_available(
 ):
     probe_dir = unique_workspace_dir(tmp_path, "docker_api_probe")
     try:
-        probe = run_bash_script(
+        probe = run_container_devbox(
             devbox_path,
             ["podman", "run", "--rm", ALPINE_IMAGE, "true"],
             env=isolated_env,
@@ -249,7 +249,7 @@ def test_docker_api_published_port(
     _prepare_testcontainers_project(test_dir, HTTP_SMOKE_SCRIPT, "http-smoke.cjs")
 
     try:
-        check = run_bash_script(
+        check = run_container_devbox(
             devbox_path,
             ["devbox-docker-api-check"],
             env=isolated_env,
@@ -261,7 +261,7 @@ def test_docker_api_published_port(
         )
         assert "Docker API ready" in check.stdout
 
-        rootless = run_bash_script(
+        rootless = run_container_devbox(
             devbox_path,
             ["podman", "info", "--format", "{{.Host.Security.Rootless}}"],
             env=isolated_env,
@@ -271,7 +271,7 @@ def test_docker_api_published_port(
         assert rootless.returncode == 0, rootless.stderr
         assert rootless.stdout.strip().splitlines()[-1] == "true"
 
-        ping = run_bash_script(
+        ping = run_container_devbox(
             devbox_path,
             [
                 "curl",
@@ -316,7 +316,7 @@ def test_docker_api_user_defined_network_aliases(
     _prepare_testcontainers_project(test_dir, NETWORK_SMOKE_SCRIPT, "network-smoke.cjs")
 
     try:
-        check = run_bash_script(
+        check = run_container_devbox(
             devbox_path,
             ["devbox-docker-api-check", "--require-user-networks"],
             env=isolated_env,
