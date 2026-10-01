@@ -79,6 +79,76 @@ def test_project_utility_commands_are_discoverable(devbox_vm: LimaVM):
 
 
 @pytest.mark.vm
+def test_guest_can_use_private_opencode_task_scratch(devbox_vm: LimaVM):
+    command = r"""
+set -euo pipefail
+scratch=/tmp/opencode
+current_user="$(id -un)"
+if [[ -L "$scratch" || ! -d "$scratch" ]]; then
+  echo "$scratch is not a real directory for guest user '$current_user'" >&2
+  exit 1
+fi
+metadata="$(stat -c '%u:%g:%a' -- "$scratch")"
+if [[ "$metadata" != 0:0:1777 ]]; then
+  echo "$scratch is $metadata, expected root:root mode 01777 for '$current_user'" >&2
+  exit 1
+fi
+mount_check_status=0
+/usr/bin/python3 -I -S - "$scratch" \
+  >/dev/null 2>&1 <<'PY' || mount_check_status=$?
+import sys
+
+target = sys.argv[1]
+try:
+    with open("/proc/self/mountinfo", encoding="utf-8") as mountinfo:
+        for line in mountinfo:
+            fields = line.split()
+            if len(fields) < 5:
+                raise SystemExit(2)
+            if fields[4] == target:
+                raise SystemExit(0)
+except UnicodeError:
+    raise SystemExit(2)
+except OSError:
+    raise SystemExit(2)
+raise SystemExit(1)
+PY
+case "$mount_check_status" in
+  0) echo "$scratch is unexpectedly a mountpoint" >&2; exit 1 ;;
+  1) ;;
+  *)
+    echo "cannot inspect mount status for $scratch" >&2
+    echo "(exit $mount_check_status)" >&2
+    exit 1
+    ;;
+esac
+
+task_dir="$(mktemp -d "$scratch/issue-298.XXXXXXXX")"
+cleanup_task_dir() {
+  rm -f -- "$task_dir/sentinel"
+  rmdir -- "$task_dir"
+}
+trap cleanup_task_dir EXIT
+task_metadata="$(stat -c '%u:%g:%a' -- "$task_dir")"
+expected_task_metadata="$(id -u):$(id -g):700"
+if [[ "$task_metadata" != "$expected_task_metadata" ]]; then
+  echo "task directory is $task_metadata, expected $expected_task_metadata" >&2
+  exit 1
+fi
+printf '%s\n' 'issue-298 scratch round trip' >"$task_dir/sentinel"
+read -r actual <"$task_dir/sentinel"
+[[ "$actual" == 'issue-298 scratch round trip' ]]
+"""
+    result = devbox_vm.run(["bash", "-ceu", command], timeout=30)
+
+    assert result.returncode == 0, (
+        "The guest cannot use private task scratch beneath /tmp/opencode, or "
+        "the root-owned sticky parent has unexpected permissions.\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+
+
+@pytest.mark.vm
 def test_agent_guidance_and_skills_are_visible_in_vm(devbox_vm: LimaVM):
     if devbox_vm.name is None and os.environ.get("MY_SANDBOX_VM_TEST_FRESH") != "1":
         source = Path(devbox_vm.repo_path) / "lima/agent-skills/devbox-tools/SKILL.md"

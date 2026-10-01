@@ -1,3 +1,4 @@
+import os
 import subprocess
 from pathlib import Path
 from subprocess import CompletedProcess
@@ -10,6 +11,8 @@ from tests.conftest import (
     VM_START_TIMEOUT_ENV_VAR,
     LimaVM,
     _cleanup_private_lima_home,
+    _guest_opencode_scratch_problem,
+    _private_lima_home,
     copy_repository_for_vm,
     guest_runtime_environment,
     lima_vm_start_command,
@@ -40,6 +43,146 @@ def test_vm_test_environment_contains_only_runtime_allowlist(
     assert "ANTHROPIC_API_KEY" not in env
     assert "UNRELATED_HOST_SETTING" not in env
     assert (tmp_path / "run").stat().st_mode & 0o777 == 0o700
+
+
+@pytest.mark.unit
+def test_private_lima_home_is_created_under_opencode_scratch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    root = tmp_path / "opencode"
+    root.mkdir()
+    monkeypatch.setattr("tests.conftest._PRIVATE_LIMA_ROOT", root)
+    monkeypatch.setattr(
+        "tests.conftest._guest_opencode_scratch_problem", lambda path: None
+    )
+
+    lima_home = _private_lima_home(in_guest=True)
+
+    assert lima_home.parent == root
+    assert lima_home.name.startswith("lima-")
+    assert lima_home.stat().st_mode & 0o777 == 0o700
+
+
+@pytest.mark.unit
+def test_private_lima_home_fails_instead_of_falling_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    missing_root = tmp_path / "unavailable-opencode"
+    monkeypatch.setattr("tests.conftest._PRIVATE_LIMA_ROOT", missing_root)
+    calls: list[dict[str, object]] = []
+
+    def record_mkdtemp(*, prefix: str, dir: Path) -> str:
+        calls.append({"prefix": prefix, "dir": dir})
+        raise AssertionError("mkdtemp must not be called without the scratch root")
+
+    monkeypatch.setattr("tests.conftest.tempfile.mkdtemp", record_mkdtemp)
+
+    with pytest.raises(RuntimeError) as error:
+        _private_lima_home(in_guest=True)
+
+    assert str(missing_root) in str(error.value)
+    assert "current user" in str(error.value)
+    assert "recreate the VM" in str(error.value)
+    assert calls == []
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("mode", "expected_problem"),
+    [
+        (0o777, "expected 01777"),
+        pytest.param(
+            0o1777,
+            "expected root:root",
+            marks=pytest.mark.skipif(
+                os.getuid() == 0,
+                reason="a root-owned scratch directory satisfies the owner check",
+            ),
+        ),
+    ],
+)
+def test_private_lima_home_rejects_writable_untrusted_guest_scratch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: int,
+    expected_problem: str,
+):
+    root = tmp_path / "untrusted-opencode"
+    root.mkdir(mode=mode)
+    root.chmod(mode)
+    monkeypatch.setattr("tests.conftest._PRIVATE_LIMA_ROOT", root)
+    calls: list[dict[str, object]] = []
+
+    def record_mkdtemp(*, prefix: str, dir: Path) -> str:
+        calls.append({"prefix": prefix, "dir": dir})
+        raise AssertionError("mkdtemp must not use an invalid scratch root")
+
+    monkeypatch.setattr("tests.conftest.tempfile.mkdtemp", record_mkdtemp)
+
+    with pytest.raises(RuntimeError) as error:
+        _private_lima_home(in_guest=True)
+
+    assert expected_problem in str(error.value)
+    assert "current user" in str(error.value)
+    assert calls == []
+
+
+@pytest.mark.unit
+def test_private_lima_home_rejects_mountpoint(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr("tests.conftest._PRIVATE_LIMA_ROOT", Path("/proc"))
+    calls: list[dict[str, object]] = []
+
+    def record_mkdtemp(*, prefix: str, dir: Path) -> str:
+        calls.append({"prefix": prefix, "dir": dir})
+        raise AssertionError("mkdtemp must not use a mountpoint")
+
+    monkeypatch.setattr("tests.conftest.tempfile.mkdtemp", record_mkdtemp)
+
+    with pytest.raises(RuntimeError) as error:
+        _private_lima_home(in_guest=True)
+
+    assert "is a mountpoint" in str(error.value)
+    assert calls == []
+
+
+@pytest.mark.unit
+def test_guest_scratch_rejects_invalid_mountinfo_encoding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    root = tmp_path / "opencode"
+    root.mkdir(mode=0o1777)
+    root.chmod(0o1777)
+    original_open = Path.open
+
+    def invalid_mountinfo(self: Path, *args, **kwargs):
+        if self == Path("/proc/self/mountinfo"):
+            raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid byte")
+        return original_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", invalid_mountinfo)
+
+    problem = _guest_opencode_scratch_problem(root)
+
+    assert problem == "cannot decode /proc/self/mountinfo"
+
+
+@pytest.mark.unit
+def test_private_lima_home_uses_host_temp_outside_guest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    host_tmp = tmp_path / "host-tmp"
+    host_tmp.mkdir()
+    missing_guest_root = tmp_path / "unavailable-opencode"
+    monkeypatch.setattr("tests.conftest._PRIVATE_LIMA_ROOT", missing_guest_root)
+    monkeypatch.setattr("tests.conftest.tempfile.gettempdir", lambda: str(host_tmp))
+
+    lima_home = _private_lima_home(in_guest=False)
+
+    assert lima_home.parent == host_tmp
+    assert lima_home.name.startswith("lima-")
+    assert lima_home.stat().st_mode & 0o777 == 0o700
 
 
 @pytest.mark.unit

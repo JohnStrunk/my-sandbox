@@ -20,6 +20,94 @@ export PLAYWRIGHT_MCP_BROWSER=chromium
 DOCKER_HOST="unix:///run/user/$(id -u)/podman/podman.sock"
 export DOCKER_HOST
 
+OPENCODE_TMP=/tmp/opencode
+OPENCODE_TMP_PROBE_DIR=""
+cleanup_opencode_tmp_probe() {
+  if [[ -n "$OPENCODE_TMP_PROBE_DIR" ]]; then
+    rm -f -- "$OPENCODE_TMP_PROBE_DIR/sentinel" 2>/dev/null || true
+    rmdir -- "$OPENCODE_TMP_PROBE_DIR" 2>/dev/null || true
+  fi
+}
+trap cleanup_opencode_tmp_probe EXIT
+
+verify_opencode_tmp() {
+  local current_user metadata task_dir sentinel expected actual
+  current_user="$(id -un)"
+  if [[ -L "$OPENCODE_TMP" || ! -d "$OPENCODE_TMP" ]]; then
+    fail "$OPENCODE_TMP is not a directory for '$current_user'; "\
+      "recreate the VM from the current template"
+  fi
+  local mount_check_status=0
+  /usr/bin/python3 -I -S - "$OPENCODE_TMP" \
+    >/dev/null 2>&1 <<'PY' || mount_check_status=$?
+import sys
+
+target = sys.argv[1]
+try:
+    with open("/proc/self/mountinfo", encoding="utf-8") as mountinfo:
+        for line in mountinfo:
+            fields = line.split()
+            if len(fields) < 5:
+                raise SystemExit(2)
+            if fields[4] == target:
+                raise SystemExit(0)
+except UnicodeError:
+    raise SystemExit(2)
+except OSError:
+    raise SystemExit(2)
+raise SystemExit(1)
+PY
+  case "$mount_check_status" in
+    0)
+      fail "$OPENCODE_TMP is a mountpoint for '$current_user'; "\
+        "recreate the VM from the current template"
+      ;;
+    1) ;;
+    *)
+      fail "cannot inspect mount status for $OPENCODE_TMP "\
+        "(exit $mount_check_status)"
+      ;;
+  esac
+  if ! metadata="$(
+    stat -c '%u:%g:%a' -- "$OPENCODE_TMP" 2>/dev/null
+  )"; then
+    fail "cannot inspect $OPENCODE_TMP for '$current_user'; "\
+      "recreate the VM from the current template"
+  fi
+  if [[ "$metadata" != "0:0:1777" ]]; then
+    fail "$OPENCODE_TMP has $metadata; expected root:root mode 01777 "\
+      "for '$current_user'; recreate the VM from the current template"
+  fi
+
+  if ! task_dir="$(
+    mktemp -d "$OPENCODE_TMP/readiness.XXXXXXXX" 2>/dev/null
+  )"; then
+    fail "user '$current_user' cannot create a private task dir under "\
+      "$OPENCODE_TMP; recreate the VM from the current template"
+  fi
+  OPENCODE_TMP_PROBE_DIR="$task_dir"
+  if [[ "$(stat -c '%a' -- "$task_dir" 2>/dev/null)" != 700 ]]; then
+    fail "user '$current_user' did not get a private mode-0700 task "\
+      "directory under $OPENCODE_TMP"
+  fi
+
+  sentinel="$task_dir/sentinel"
+  expected="devbox-readiness-$RANDOM-$$"
+  if ! printf '%s\n' "$expected" >"$sentinel" 2>/dev/null; then
+    fail "user '$current_user' cannot write to $OPENCODE_TMP"
+  fi
+  if ! read -r actual <"$sentinel" || [[ "$actual" != "$expected" ]]; then
+    fail "user '$current_user' cannot read from $OPENCODE_TMP"
+  fi
+  if ! rm -f -- "$sentinel" 2>/dev/null \
+    || ! rmdir -- "$task_dir" 2>/dev/null; then
+    fail "user '$current_user' cannot clean up its task dir under "\
+      "$OPENCODE_TMP"
+  fi
+  OPENCODE_TMP_PROBE_DIR=""
+}
+verify_opencode_tmp
+
 for cert in redhat-ipa-ca.crt redhat-rhcsv2-ca.crt redhat-root-ca.crt; do
   test -s "/etc/pki/ca-trust/source/anchors/$cert" \
     || fail "Red Hat CA trust anchor $cert is missing"

@@ -17,6 +17,38 @@ The devbox VM has two separate contracts for every agent-facing capability:
 Installing a binary proves runtime availability only. Do not assume that an
 agent knows about a command because it is on `PATH`.
 
+## Temporary task scratch
+
+- Guest-local scratch path: `/tmp/opencode`. Use it for disposable intermediate
+  files when a task needs a writable directory outside the shared project tree.
+- Create one private directory per task; `mktemp -d` creates it with mode
+  `0700`, and the explicit `chmod` keeps that contract clear:
+
+  ```shell
+  task_dir="$(mktemp -d /tmp/opencode/task.XXXXXXXX)"
+  chmod 0700 "$task_dir"
+  ```
+
+- The parent is root-owned mode `01777`; its sticky bit prevents the guest user
+  and isolated toolbuilder from removing or renaming each other's entries.
+  Provisioning normalizes the parent owner and mode without changing existing
+  children.
+- Entry names are visible to local accounts. Mode `0700` protects contents
+  from other UIDs, but does not isolate concurrent processes running as the
+  same guest user; keep sensitive data out of names and do not treat task dirs
+  as a cross-session security boundary.
+- `/tmp/opencode` is not host-mounted or persistent. Treat its contents as
+  disposable; do not store project files, caches, or other data that must
+  survive VM cleanup, reset, or recreation. Keep persistent data in its normal
+  project or VM-state location instead.
+- The directory contract is provisioned by the Lima system script and
+  readiness probe embedded when the VM is created. An older VM may receive this
+  skill on restart without the scratch setup; recreate it from the current
+  template before relying on `/tmp/opencode`. Follow the “Recreating the VM”
+  procedure in `lima/README.md` in the my-sandbox checkout. If readiness or
+  a test reports that the path is unavailable, do not silently fall back to
+  `/tmp`.
+
 ## Registration Requirements
 
 When adding a VM capability, complete all applicable parts together:

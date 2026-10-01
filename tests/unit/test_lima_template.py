@@ -2,6 +2,7 @@
 
 import os
 import re
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -193,6 +194,34 @@ def test_readiness_uses_builder_check_stamp_not_guest_tool_execution(
 
 
 @pytest.mark.unit
+def test_readiness_checks_private_guest_task_scratch(repo_root: Path):
+    probe = _script(repo_root, "probe-readiness.sh")
+
+    assert "OPENCODE_TMP=/tmp/opencode" in probe
+    assert "stat -c '%u:%g:%a' -- \"$OPENCODE_TMP\"" in probe
+    assert '"$metadata" != "0:0:1777"' in probe
+    assert 'mktemp -d "$OPENCODE_TMP/readiness.XXXXXXXX"' in probe
+    assert "stat -c '%a' -- \"$task_dir\"" in probe
+    assert 'printf \'%s\\n\' "$expected" >"$sentinel"' in probe
+    assert 'read -r actual <"$sentinel"' in probe
+    assert 'current_user="$(id -un)"' in probe
+    assert "'$current_user'" in probe
+    assert 'open("/proc/self/mountinfo", encoding="utf-8")' in probe
+    assert "except UnicodeError:" in probe
+    assert "raise SystemExit(2)" in probe
+
+
+@pytest.mark.unit
+def test_vm_skill_documents_private_ephemeral_task_scratch(repo_root: Path):
+    skill = (repo_root / LIMA_DIR / "agent-skills/devbox-tools/SKILL.md").read_text()
+
+    assert "Guest-local scratch path: `/tmp/opencode`" in skill
+    assert 'task_dir="$(mktemp -d /tmp/opencode/task.XXXXXXXX)"' in skill
+    assert 'chmod 0700 "$task_dir"' in skill
+    assert "not host-mounted or persistent" in skill
+
+
+@pytest.mark.unit
 def test_probe_checks_readonly_host_agent_mount(repo_root: Path):
     probe = _script(repo_root, "probe-readiness.sh")
 
@@ -367,6 +396,90 @@ def test_root_manifest_path_is_canonical_and_snapshotted(repo_root: Path):
     assert 'copy_repo_file lima/tool-versions.json "$MANIFEST"' in system_script
     assert "os.O_NOFOLLOW" in system_script
     assert "copy_repo_file lima/provision-tools.sh" in system_script
+
+
+@pytest.mark.unit
+def test_system_provisions_opencode_tmp_without_following_or_recursing(
+    repo_root: Path, tmp_path: Path
+):
+    system_script = _script(repo_root, "provision-system.sh")
+    match = re.search(
+        r"/usr/bin/python3 -I -S - /tmp opencode 0 0 <<'PY'\n(.*?)\nPY",
+        system_script,
+        re.DOTALL,
+    )
+    assert match, "descriptor-safe /tmp/opencode provisioning helper is missing"
+    setup_program = match.group(1)
+    assert "os.O_NOFOLLOW" in setup_program
+    assert "mnt_id:" in setup_program
+    assert "mount_id(directory_fd) != parent_mount_id" in setup_program
+    assert "os.fchown(directory_fd, owner_uid, owner_gid)" in setup_program
+    assert "os.fchmod(directory_fd, 0o1777)" in setup_program
+    assert setup_program.index("mount_id(directory_fd) != parent_mount_id") < (
+        setup_program.index("os.fchown(directory_fd, owner_uid, owner_gid)")
+    )
+    setup_position = system_script.index("/usr/bin/python3 -I -S - /tmp opencode 0 0")
+    builder_install_position = system_script.index(
+        'as_toolbuilder /bin/bash "$tool_script_snapshot"'
+    )
+    assert setup_position < builder_install_position
+
+    parent = tmp_path / "parent"
+    parent.mkdir()
+
+    def setup() -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                sys.executable,
+                "-I",
+                "-S",
+                "-",
+                str(parent),
+                "opencode",
+                str(os.getuid()),
+                str(os.getgid()),
+            ],
+            input=setup_program,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+
+    target = parent / "opencode"
+    created = setup()
+    assert created.returncode == 0, created.stderr
+    created_stat = target.stat()
+    assert created_stat.st_uid == os.getuid()
+    assert created_stat.st_gid == os.getgid()
+    assert stat.S_IMODE(created_stat.st_mode) == 0o1777
+
+    preserved = target / "existing-content"
+    preserved.write_text("leave existing entries untouched\n")
+    target.chmod(0o700)
+    repaired = setup()
+    assert repaired.returncode == 0, repaired.stderr
+    assert stat.S_IMODE(target.stat().st_mode) == 0o1777
+    assert preserved.read_text() == "leave existing entries untouched\n"
+
+    preserved.unlink()
+    target.rmdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    marker = outside / "marker"
+    marker.write_text("must not be changed\n")
+    target.symlink_to(outside, target_is_directory=True)
+    symlinked = setup()
+    assert symlinked.returncode != 0
+    assert "symlink" in symlinked.stderr
+    assert marker.read_text() == "must not be changed\n"
+
+    target.unlink()
+    target.write_text("not a directory\n")
+    non_directory = setup()
+    assert non_directory.returncode != 0
+    assert "not a directory" in non_directory.stderr
+    assert target.read_text() == "not a directory\n"
 
 
 @pytest.mark.unit
