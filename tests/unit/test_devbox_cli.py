@@ -15,6 +15,8 @@ def test_devbox_help_describes_only_the_vm_workflow(devbox_path: Path):
     assert "--stop" in result.stdout
     assert "--reset" in result.stdout
     assert "--reprovision" in result.stdout
+    assert "-d, --delete" in result.stdout
+    assert "Explicitly unprotect and delete" in result.stdout
     assert "--container" not in result.stdout
     assert "--remove" not in result.stdout
 
@@ -43,3 +45,20 @@ def test_devbox_rejects_unknown_options(devbox_path: Path):
         assert result.returncode == 2
         assert f"Unknown option: {option}" in result.stderr
         assert "Usage: devbox" in result.stderr
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--delete", "--reset"],
+        ["--reset", "--reprovision"],
+        ["--delete", "-d"],
+    ],
+)
+def test_devbox_rejects_multiple_lifecycle_options(devbox_path: Path, args: list[str]):
+    result = run_bash_script(devbox_path, args)
+
+    assert result.returncode == 2
+    assert "cannot be combined" in result.stderr
+    assert "Usage: devbox" in result.stderr

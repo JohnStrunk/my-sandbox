@@ -21,13 +21,25 @@ devbox opencode        # start OpenCode in this project
 devbox --stop          # gracefully stop the shared VM
 devbox --reprovision   # restart and apply current tool/provisioning changes
 devbox --reset         # factory-reset VM-local state and reprovision
+devbox --reset -- git status       # run a command after the reset
+devbox --reprovision -- opencode  # run a command after reprovisioning
+devbox --delete        # remove the VM without starting or recreating it
 ```
 
 The first invocation creates the VM from this checkout's Lima template. The
 launcher starts it on demand, maps the current project path into the guest, and
-rejects paths outside configured mounts. `devbox --reset` removes VM-local
-state, but leaves host-mounted projects and configuration intact. See the Lima
-guide for optional login autostart and VM recreation requirements.
+rejects paths outside configured mounts. For `--reset` and `--reprovision`, an
+optional command runs only after the lifecycle action succeeds, in the mapped
+current directory, with the normal filtered environment; its exit status is
+returned by `devbox`. Without a command, the launcher performs only the
+lifecycle action and does not open the default interactive shell. Use `--`
+before a command that starts with an option.
+
+`devbox --reset` loses guest-local state but preserves host-mounted projects,
+configuration, and OpenCode L1 state. `devbox --delete` removes the configured
+Lima instance and its guest-local state without starting or recreating it; this
+explicitly removes Lima's protection before deletion. Host-mounted files remain
+intact. See the Lima guide for details and VM recreation requirements.
 
 ## Worktrees and Python environments
 

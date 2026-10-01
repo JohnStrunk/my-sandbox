@@ -9,36 +9,62 @@ export XDG_DATA_HOME=
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") [--stop|--reset|--reprovision] [-h|--help] [--] [command [arg ...]]
+Usage: $(basename "$0") [--stop|--reset|--reprovision|-d|--delete] [-h|--help]
+       [--] [command [arg ...]]
 
 Open a shell or run a command in the shared Lima VM at the current project
 directory. On first use, the VM is created from this checkout's Lima template.
 
 Options:
-      --stop          Gracefully stop the shared Lima VM
-      --reset         Factory-reset and reprovision the Lima VM
-      --reprovision   Restart the Lima VM and rerun provisioning
+      --stop          Gracefully stop the shared Lima VM (no command)
+      --reset         Factory-reset and reprovision, then optionally run a command
+      --reprovision   Restart and reprovision, then optionally run a command
+      -d, --delete    Explicitly unprotect and delete the VM; do not recreate it
   -h, --help          Show this help message
 
 Arguments:
-  command [arg ...]   Command to run in the VM (default: shell)
+  command [arg ...]   Command to run in the VM (default shell for normal use)
+
+For --reset and --reprovision, an optional command runs only after the lifecycle
+action succeeds. Without a command, lifecycle handling runs without opening the
+default interactive shell.
+Use -- before a command that starts with an option. --stop and --delete accept
+no command, and lifecycle options cannot be combined.
 EOF
 }
 
 action=run
+action_option=""
 command=()
+
+set_lifecycle_action() {
+  local option="$1"
+  local selected_action="$2"
+  if [[ -n "$action_option" ]]; then
+    echo "devbox: '$option' cannot be combined with '$action_option'" >&2
+    usage >&2
+    exit 2
+  fi
+  action="$selected_action"
+  action_option="$option"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --stop)
-      action=stop
+      set_lifecycle_action "$1" stop
       shift
       ;;
     --reset)
-      action=reset
+      set_lifecycle_action "$1" reset
       shift
       ;;
     --reprovision)
-      action=reprovision
+      set_lifecycle_action "$1" reprovision
+      shift
+      ;;
+    -d | --delete)
+      set_lifecycle_action "$1" delete
       shift
       ;;
     --container)

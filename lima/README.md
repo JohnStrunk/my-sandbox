@@ -219,6 +219,9 @@ devbox --stop          # graceful stop
 devbox                 # start on demand, then enter the current directory
 devbox --reprovision   # stop/start and re-run the embedded provisioners
 devbox --reset         # factory-reset, then start and provision again
+devbox --reset -- git status       # run a command after the reset
+devbox --reprovision -- opencode  # run a command after reprovisioning
+devbox --delete        # unprotect and remove the VM; do not recreate it
 ```
 
 VM-local state (the guest home, VM-local caches, and nested Podman storage)
@@ -231,6 +234,18 @@ alias points into the protected mount tree. Provisioning verifies these
 boundaries directly and refuses to protect a `SrcPath` parent inside the guest
 home.
 
+When `--reset` or `--reprovision` is followed by a command, `devbox` validates
+that the caller's current directory is mounted before changing the VM, completes
+the lifecycle action under the shared lock, then runs the exact command argv in
+the VM from that mapped directory. It uses the ordinary `devbox` command path,
+including its filtered host environment and OpenCode runtime configuration,
+and returns the command's exit status. If no command is supplied, only the
+lifecycle handling runs; `devbox` does not open the default interactive shell
+(the reprovision fingerprint check still runs). Put `--` before a command whose
+first argument begins with an option.
+After the lock is released, a concurrent lifecycle action may win, so the
+follow-on command can fail rather than restarting the VM.
+
 `devbox` compares a running VM's provisioning fingerprint with the current
 checkout and warns when they differ; use `devbox --reprovision` to apply the
 current manifest and update the stamp. A stopped VM re-runs provisioning as it
@@ -239,6 +254,14 @@ projects, configuration, and the dedicated OpenCode L1 state. Edits to
 `lima/devbox.yaml` or embedded
 provisioning scripts still require the recreation procedure below; reset and
 reprovision operate on the existing instance's embedded template.
+
+`devbox -d` / `devbox --delete` removes the configured Lima instance without
+starting or recreating it; running it again when the instance is absent is
+successful. This explicit destructive option also removes Lima's protection
+before deleting. The VM disk and all guest-local state are lost, but files on
+host-mounted paths (including `~/src`, `~/kb`, host configuration, and the
+dedicated OpenCode L1 state) survive. A later ordinary `devbox` invocation can
+create a fresh instance from the current checkout's template.
 
 ### Tool-version updates and drift
 
@@ -284,7 +307,13 @@ After the VM is known-good, protect it against accidental deletion:
 limactl protect devbox
 ```
 
-(`limactl delete` then requires `--force`.)
+`limactl delete --force devbox` alone does not remove this protection; first
+run `limactl unprotect devbox`. The explicit `devbox --delete` operation does
+both. `devbox --reset` does not remove protection either; with pinned Lima 2.2,
+manually run `limactl unprotect <instance>` before resetting a protected VM,
+then run `limactl protect <instance>` again after reset if the instance still
+exists. Unlike `--reset`, `--delete` checks the original state and attempts to
+restore protection if deletion fails.
 
 ## Recreating the VM
 
@@ -312,14 +341,15 @@ limactl shell devbox -- opencode service stop
 
 Skip this migration when the VM has no state to preserve. The destination
 `~/.local/state/devbox-opencode` is private to this L1 and persists across
-`devbox --reset` as well as recreation.
+`devbox --reset`, `devbox --delete`, and manual recreation.
 
 ```shell
 cd /path/to/my-sandbox
 src_path="$(readlink -f "$HOME/src")"
 repo_path="$(pwd -P)"
 kb_path="$(readlink -f "$HOME/kb")"
-limactl delete --force devbox     # --force is needed when protected
+limactl unprotect devbox          # remove protection before deleting
+limactl delete --force devbox
 limactl start "$repo_path/lima/devbox.yaml" \
   --param "SrcPath=$src_path" \
   --param "RepoPath=$repo_path" \
@@ -327,6 +357,9 @@ limactl start "$repo_path/lima/devbox.yaml" \
   --param "GitUserName=$(git config --global user.name)" \
   --param "GitUserEmail=$(git config --global user.email)"
 ```
+
+After the new instance boots and passes readiness checks, restore deletion
+protection with `limactl protect devbox` if you use that safeguard.
 
 ## Shared vs VM-local state
 
