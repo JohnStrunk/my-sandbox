@@ -210,6 +210,140 @@ if any(
     raise SystemExit("devbox: tool manifest has an invalid CA trust-anchor digest")
 PY
 
+# Give the guest and isolated package builder a shared scratch parent before
+# any builder package provisioning, without letting either account remove or
+# rename the other's task directories. Use a /tmp directory descriptor and
+# change only the target directory's metadata; never recursively touch entries.
+/usr/bin/python3 -I -S - /tmp opencode 0 0 <<'PY'
+import os
+import stat
+import sys
+
+
+parent_path, child_name, owner_text, group_text = sys.argv[1:]
+target = f"{parent_path.rstrip('/')}/{child_name}"
+
+
+def refuse(reason):
+    raise SystemExit(f"devbox: refusing {target}: {reason}")
+
+
+if not os.path.isabs(parent_path) or os.path.normpath(parent_path) != parent_path:
+    refuse("parent path must be canonical and absolute")
+if not child_name or child_name in {".", ".."} or "/" in child_name:
+    refuse("target name must be a single path component")
+try:
+    owner_uid = int(owner_text)
+    owner_gid = int(group_text)
+except ValueError:
+    refuse("target owner and group must be numeric")
+
+directory_flags = (
+    os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
+)
+try:
+    parent_fd = os.open(parent_path, directory_flags)
+except OSError as error:
+    refuse(f"cannot safely open parent {parent_path}: {error.strerror}")
+
+
+def describe_open_error(error):
+    try:
+        entry = os.stat(child_name, dir_fd=parent_fd, follow_symlinks=False)
+    except OSError:
+        entry = None
+    if entry is not None:
+        if stat.S_ISLNK(entry.st_mode):
+            refuse("path is a symlink")
+        if not stat.S_ISDIR(entry.st_mode):
+            refuse("path is not a directory")
+    refuse(f"cannot safely open directory ({error.strerror})")
+
+
+def open_target(*, create):
+    try:
+        return os.open(child_name, directory_flags, dir_fd=parent_fd)
+    except FileNotFoundError as error:
+        if not create:
+            describe_open_error(error)
+        try:
+            os.mkdir(child_name, 0o1777, dir_fd=parent_fd)
+        except FileExistsError:
+            pass
+        except OSError as mkdir_error:
+            describe_open_error(mkdir_error)
+        try:
+            return os.open(child_name, directory_flags, dir_fd=parent_fd)
+        except OSError as open_error:
+            describe_open_error(open_error)
+    except OSError as error:
+        describe_open_error(error)
+
+
+def mount_id(fd):
+    # Descriptor mount IDs catch regular and bind mountpoints without a
+    # path-based check/modify window.
+    try:
+        with open(f"/proc/self/fdinfo/{fd}", encoding="ascii") as info:
+            for line in info:
+                if line.startswith("mnt_id:"):
+                    return int(line.split(":", 1)[1])
+    except (OSError, ValueError) as error:
+        refuse(f"cannot safely verify mount identity ({error})")
+    refuse("kernel did not report a mount identity for the directory")
+
+
+try:
+    parent_mount_id = mount_id(parent_fd)
+    directory_fd = open_target(create=True)
+    try:
+        directory_stat = os.fstat(directory_fd)
+        if not stat.S_ISDIR(directory_stat.st_mode):
+            refuse("path is not a directory")
+        if mount_id(directory_fd) != parent_mount_id:
+            refuse("path is a mountpoint")
+
+        try:
+            if (directory_stat.st_uid, directory_stat.st_gid) != (
+                owner_uid,
+                owner_gid,
+            ):
+                os.fchown(directory_fd, owner_uid, owner_gid)
+            if stat.S_IMODE(os.fstat(directory_fd).st_mode) != 0o1777:
+                os.fchmod(directory_fd, 0o1777)
+        except OSError as error:
+            refuse(f"cannot set expected ownership and mode ({error.strerror})")
+
+        expected = os.fstat(directory_fd)
+        if (expected.st_uid, expected.st_gid) != (owner_uid, owner_gid) or (
+            stat.S_IMODE(expected.st_mode) != 0o1777
+        ):
+            refuse("ownership or mode did not remain root:root 01777")
+
+        # Confirm that the pathname still names this exact directory after the
+        # descriptor-based changes. A replacement or a newly mounted path fails.
+        verify_fd = open_target(create=False)
+        try:
+            current = os.fstat(verify_fd)
+            if (current.st_dev, current.st_ino) != (
+                expected.st_dev,
+                expected.st_ino,
+            ):
+                refuse("path changed during provisioning")
+            if mount_id(verify_fd) != parent_mount_id:
+                refuse("path became a mountpoint during provisioning")
+            if (current.st_uid, current.st_gid) != (owner_uid, owner_gid) or (
+                stat.S_IMODE(current.st_mode) != 0o1777
+            ):
+                refuse("ownership or mode changed during provisioning")
+        finally:
+            os.close(verify_fd)
+    finally:
+        os.close(directory_fd)
+finally:
+    os.close(parent_fd)
+PY
+
 # Keep root-owned stamps outside the guest user's writable home and shared tree.
 if [[ -L /var/lib/devbox-vm ]]; then
   echo "devbox: refusing symlinked /var/lib/devbox-vm state directory" >&2

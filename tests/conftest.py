@@ -260,11 +260,69 @@ def guest_runtime_environment(runtime_dir: Path | None = None) -> dict[str, str]
     return runtime
 
 
-def _private_lima_home() -> Path:
-    root = Path("/tmp/opencode")
-    if not root.is_dir() or not os.access(root, os.W_OK | os.X_OK):
-        root = Path("/tmp")
-    return Path(tempfile.mkdtemp(prefix="lima-", dir=root))
+_PRIVATE_LIMA_ROOT = Path("/tmp/opencode")
+
+
+def _guest_opencode_scratch_problem(root: Path) -> str | None:
+    try:
+        metadata = root.lstat()
+    except OSError as error:
+        return f"cannot inspect path: {error}"
+    if stat.S_ISLNK(metadata.st_mode):
+        return "is a symlink"
+    if not stat.S_ISDIR(metadata.st_mode):
+        return "is not a directory"
+
+    try:
+        with Path("/proc/self/mountinfo").open(encoding="utf-8") as mountinfo:
+            for line in mountinfo:
+                fields = line.split()
+                if len(fields) < 5:
+                    return "cannot parse /proc/self/mountinfo"
+                # The checked paths are fixed names without mountinfo escapes.
+                if fields[4] == str(root):
+                    return "is a mountpoint"
+    except UnicodeError:
+        return "cannot decode /proc/self/mountinfo"
+    except OSError as error:
+        return f"cannot inspect /proc/self/mountinfo: {error}"
+
+    mode = stat.S_IMODE(metadata.st_mode)
+    if mode != 0o1777:
+        return f"has mode {mode:04o}; expected 01777"
+    if metadata.st_uid != 0 or metadata.st_gid != 0:
+        return f"is owned by {metadata.st_uid}:{metadata.st_gid}; expected root:root"
+    if not os.access(root, os.W_OK | os.X_OK):
+        return "is not writable/searchable"
+    return None
+
+
+def _private_lima_home(*, in_guest: bool) -> Path:
+    root = _PRIVATE_LIMA_ROOT if in_guest else Path(tempfile.gettempdir())
+    user = getpass.getuser()
+    if in_guest:
+        # The root-owned entry beneath sticky /tmp cannot be swapped by either
+        # unprivileged account between this check and mkdtemp below.
+        problem = _guest_opencode_scratch_problem(root)
+        if problem:
+            raise RuntimeError(
+                f"Lima VM tests require writable guest scratch at {root} for current "
+                f"user '{user}' (expected root:root mode 01777): {problem}; "
+                "recreate the VM from the current template and provisioner"
+            )
+    try:
+        return Path(tempfile.mkdtemp(prefix="lima-", dir=root))
+    except OSError as error:
+        if in_guest:
+            raise RuntimeError(
+                f"Lima VM tests could not create scratch under {root} for current "
+                f"user '{user}' (expected root:root mode 01777); recreate the VM "
+                "from the current template and provisioner"
+            ) from error
+        raise RuntimeError(
+            f"Lima VM tests could not create a private home under host temporary "
+            f"directory {root} for current user '{user}': {error}"
+        ) from error
 
 
 def lima_vm_start_command(repo_root: Path, instance: str, timeout: float) -> list[str]:
@@ -543,7 +601,7 @@ def devbox_vm(
                 "SEMBLE_BIN": f"{guest_home}/.local/bin/semble-bin",
             }
         )
-        lima_home = _private_lima_home()
+        lima_home = _private_lima_home(in_guest=True)
         env["LIMA_HOME"] = str(lima_home)
         try:
             yield LimaVM(
@@ -583,7 +641,7 @@ def devbox_vm(
         (home / relative).mkdir(parents=True, exist_ok=True)
     instance = f"my-sandbox-vm-{uuid.uuid4().hex[:10]}"
     env = vm_test_environment(home)
-    lima_home = _private_lima_home()
+    lima_home = _private_lima_home(in_guest=False)
     env["LIMA_HOME"] = str(lima_home)
 
     start_timeout = vm_start_timeout()

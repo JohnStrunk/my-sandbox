@@ -390,6 +390,28 @@ checkout-relative `knowledge-base/` symlink.
 | `~/.local/state/devbox-toolchain` | VM-local | The Source MCP server virtualenv |
 | `~/.local/share/devbox-toolchain` | VM-local | Provisioning metadata and fingerprints |
 | `~/.gitconfig` | VM-local | Git identity, HTTPS rewrite |
+| `/tmp/opencode` | VM-local | `root:root` `01777` scratch; tasks `0700` |
+
+### Temporary task scratch
+
+`/tmp/opencode` is a guest-local, disposable scratch parent. Its root-owned
+`01777` mode lets the guest and isolated toolbuilder create separate entries;
+the sticky bit prevents one account from removing or renaming entries owned by
+the other. Provisioning normalizes the parent directory's owner and mode without
+changing existing children. Keep each task directory private:
+
+```shell
+task_dir="$(mktemp -d /tmp/opencode/task.XXXXXXXX)"
+chmod 0700 "$task_dir"
+```
+
+Entry names are visible to local accounts, and mode `0700` does not isolate
+concurrent processes running as the same guest user. Keep sensitive data out of
+directory names and do not treat task directories as a cross-session boundary.
+
+This path is not host-mounted or persistent. Treat its contents as temporary;
+do not put project files, caches, or other data there that must survive VM
+cleanup, reset, or recreation.
 
 OpenCode's state directory combines TUI/model/history data with the
 single-owner service registration, so those files cannot be mounted
