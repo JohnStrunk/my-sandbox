@@ -70,16 +70,23 @@ when intentionally resetting the L1's persisted OpenCode preferences/history.
   alias. A missing or unreadable KB mount is a readiness failure.
 - The fresh-VM CI tier checks that a sentinel in the host's disposable
   OpenCode data directory is readable in L1 and that an L1 write is visible
-  back on the host. It never touches production session data.
+  back on the host. Before the VM test suite, it runs bounded concurrent
+  SQLite writers on the host and fresh L1 against a uniquely named, test-only
+  WAL database in that disposable directory. L1 checks the mounted database
+  first; CI then stops L1, snapshots the database and optional WAL into a
+  private host-only directory, and checks exact rows plus
+  `PRAGMA integrity_check` from both sides. The probe never touches production
+  session data.
 - The recursive test mounts only a read-only OpenCode executable into each
   disposable L2. It starts two L2 VMs concurrently, starts a managed OpenCode
   service in each, checks distinct and stable registrations over a 15-second
   soak, and verifies their state files are on each L2's local block filesystem
   rather than a shared host/L1 mount.
 - The shared session-data mount is retained for host visibility and CodeBurn.
-  Guest-to-guest SQLite and session visibility have prior coverage (#269), and
-  CodeBurn's provider reads `~/.local/share/opencode`; this VM-only test
-  environment cannot launch the host CodeBurn process or verify its end-to-end
-  session parsing. The disposable host/L1 test checks file-level mount
-  visibility, not concurrent host/VM SQLite integrity. Do not interpret this
-  as evidence that concurrent host/VM SQLite writers are safe.
+  Guest-to-guest SQLite and session visibility have prior coverage (#269).
+  John manually reported that physical-host CodeBurn displayed the current L1
+  session, confirming basic session visibility.
+  CI exercises only disposable cross-boundary SQLite concurrency: it does not
+  establish production database integrity, automate CodeBurn session parsing,
+  or validate other mount types. Do not generalize this probe to production
+  session data or other filesystems/mount configurations.

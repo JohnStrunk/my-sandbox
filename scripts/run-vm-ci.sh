@@ -25,13 +25,17 @@ test_root="$(mktemp -d "$runner_temp/my-sandbox-vm-test.XXXXXX")"
 host_home="$test_root/home"
 lima_home="$test_root/lima"
 repo_copy="$host_home/src/my-sandbox"
+host_sqlite_helper="$test_root/validate_host_sqlite_mount.py"
 
 export HOME="$host_home"
 export LIMA_HOME="$lima_home"
+export RUNNER_TEMP="$runner_temp"
+preserve_test_root=false
+sqlite_helper_started=false
 
 cleanup() {
   local status=$? delete_status cleanup_status=0 delete_output
-  trap - EXIT
+  trap - EXIT INT TERM HUP QUIT
   set +e
   limactl stop devbox >/dev/null 2>&1
   delete_output="$(limactl delete --force devbox 2>&1)"
@@ -40,6 +44,12 @@ cleanup() {
     && ! grep -Eqi 'no instance found|not found|does not exist' <<<"$delete_output"; then
     printf 'run-vm-ci: failed to delete the test VM; preserving %s\n%s\n' \
       "$test_root" "$delete_output" >&2
+    cleanup_status=1
+  elif [[ "$preserve_test_root" == true ]] \
+    || [[ -e "$test_root/.preserve-live-sqlite-worker" ]] \
+    || { [[ "$sqlite_helper_started" == true ]] && [[ "$status" -ge 128 ]]; }; then
+    printf 'run-vm-ci: preserving %s after SQLite probe interruption or cleanup uncertainty\n' \
+      "$test_root" >&2
     cleanup_status=1
   elif ! rm -rf -- "$test_root"; then
     printf 'run-vm-ci: failed to remove temporary test directory %s\n' \
@@ -51,7 +61,18 @@ cleanup() {
   fi
   exit "$cleanup_status"
 }
+
+signal_exit() {
+  local signal_name="$1" exit_status="$2"
+  printf 'run-vm-ci: received SIG%s; running cleanup\n' "$signal_name" >&2
+  exit "$exit_status"
+}
+
 trap cleanup EXIT
+trap 'signal_exit INT 130' INT
+trap 'signal_exit TERM 143' TERM
+trap 'signal_exit HUP 129' HUP
+trap 'signal_exit QUIT 131' QUIT
 
 mkdir -p \
   "$repo_copy" \
@@ -70,6 +91,16 @@ printf 'host-to-L1\n' >"$host_home/.local/share/opencode/issue-287-mount-inbound
 # Copy committed files only: neither local ignored secrets nor the runner's
 # .git/config credentials should be present in the guest-visible source mount.
 git -C "$workspace" archive --format=tar HEAD | tar -xf - -C "$repo_copy"
+if [[ "$tier" == vm ]] \
+  && [[ ! -r "$repo_copy/scripts/validate_host_sqlite_mount.py" ]]; then
+  printf 'run-vm-ci: SQLite mount helper is missing from the committed source archive\n' >&2
+  exit 1
+fi
+if [[ "$tier" == vm ]]; then
+  # The host coordinator is not on any guest mount; only its guest worker is.
+  install -m 0600 \
+    "$repo_copy/scripts/validate_host_sqlite_mount.py" "$host_sqlite_helper"
+fi
 # Reinitialize a credential-free, local-only index so recursive fixture copies
 # can use the same tracked/non-ignored file filter as local worktrees.
 git -C "$repo_copy" init --quiet
@@ -77,6 +108,30 @@ git -C "$repo_copy" config user.name CI
 git -C "$repo_copy" config user.email ci-test@example.invalid
 git -C "$repo_copy" add --all
 chmod 700 "$host_home"
+
+if [[ "$tier" == vm ]]; then
+  # Prepare the test database before any L1 guest code can access the mount.
+  mkdir -p "$lima_home"
+  chmod 700 "$lima_home"
+  if sqlite_scratch_name="$(timeout --signal=TERM --kill-after=5s 30s \
+    python3 -I "$host_sqlite_helper" --prepare)"; then
+    :
+  else
+    prepare_status=$?
+    if [[ "$prepare_status" -eq 75 \
+      || "$prepare_status" -eq 124 \
+      || "$prepare_status" -ge 128 ]]; then
+      preserve_test_root=true
+    fi
+    printf 'run-vm-ci: SQLite scratch preparation failed with status %s\n' \
+      "$prepare_status" >&2
+    exit "$prepare_status"
+  fi
+  if [[ ! "$sqlite_scratch_name" =~ ^issue-287-test-only-[0-9a-f]{32}$ ]]; then
+    printf 'run-vm-ci: host SQLite helper returned an invalid scratch name\n' >&2
+    exit 1
+  fi
+fi
 
 limactl start \
   --yes \
@@ -90,6 +145,36 @@ limactl start \
   --param GitUserName=CI \
   --param GitUserEmail=ci-test@example.invalid \
   "$repo_root/lima/devbox.yaml"
+
+if [[ "$tier" == vm ]]; then
+  # Run the host coordinator from the protected temp-root copy before any guest
+  # test code has run. The probe stops L1 after its guest verification.
+  sqlite_helper_started=true
+  if timeout --signal=TERM --kill-after=15s 120s \
+    python3 -I "$host_sqlite_helper" --scratch-name "$sqlite_scratch_name"; then
+    sqlite_helper_started=false
+  else
+    helper_status=$?
+    if [[ "$helper_status" -eq 75 \
+      || "$helper_status" -eq 124 \
+      || "$helper_status" -ge 128 ]]; then
+      preserve_test_root=true
+    fi
+    if [[ "$helper_status" -eq 75 ]]; then
+      printf 'run-vm-ci: SQLite worker may still be active; preserving the temporary test root\n' >&2
+    elif [[ "$helper_status" -eq 124 ]]; then
+      printf 'run-vm-ci: SQLite mount helper exceeded its 120-second timeout\n' >&2
+    elif [[ "$helper_status" -ge 128 ]]; then
+      printf 'run-vm-ci: SQLite mount helper exited on signal (status %s); preserving the temporary test root\n' \
+        "$helper_status" >&2
+    fi
+    exit "$helper_status"
+  fi
+
+  # The SQLite probe stopped this disposable instance; restart the existing
+  # instance before entering the ordinary VM test tier.
+  limactl start --yes --timeout 60m devbox
+fi
 
 # Run the test wrapper directly in the guest. The host environment is not
 # preserved; only explicit non-secret test controls enter through `env`.
