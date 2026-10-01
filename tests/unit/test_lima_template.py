@@ -19,14 +19,20 @@ EXPECTED_MOUNT_LOCATIONS = {
     "~/.config/gws",
     "~/.config/opencode",
     "~/.local/share/opencode",
+    "~/.local/state/devbox-opencode",
+    "~/.local/state/opencode",
     "~/kb",
     "~/src",
 }
 
+EXPECTED_READ_ONLY_MOUNTS = {"~/.agents", "~/.local/state/opencode"}
+
+# Skills stay guest-local; the persistent state mount is linked at
+# ~/.local/state/opencode rather than its host source name.
 EXPECTED_SHARED_RELS = sorted(
     location.removeprefix("~/")
     for location in EXPECTED_MOUNT_LOCATIONS
-    if location != "~/.agents"
+    if location not in {"~/.agents", "~/.local/state/devbox-opencode"}
 )
 
 _SCRIPTS = (
@@ -116,11 +122,24 @@ def test_template_mounts_are_the_expected_same_path_set(repo_root: Path):
             assert mount["writable"] is True
         else:
             assert mount["mountPoint"].startswith("{{.Home}}/.host-config/")
-            assert mount["writable"] is (mount["location"] != "~/.agents")
+            assert mount["writable"] is (
+                mount["location"] not in EXPECTED_READ_ONLY_MOUNTS
+            )
         # Never mount all of $HOME.
         assert mount["location"] != "~"
-    # OpenCode's volatile state stays VM-local.
-    assert "~/.local/state/opencode" not in locations
+    # OpenCode's host state is only a read-only seed; the L1 service writes to
+    # a separate persistent host directory.
+    mounts_by_location = {mount["location"]: mount for mount in mounts}
+    assert mounts_by_location["~/.local/state/opencode"]["writable"] is False
+    assert mounts_by_location["~/.local/state/devbox-opencode"]["writable"] is True
+    assert (
+        mounts_by_location["~/.local/state/opencode"]["mountPoint"]
+        == "{{.Home}}/.host-config/local/state/opencode-seed"
+    )
+    assert (
+        mounts_by_location["~/.local/state/devbox-opencode"]["mountPoint"]
+        == "{{.Home}}/.host-config/local/state/devbox-opencode"
+    )
 
 
 @pytest.mark.unit
@@ -283,6 +302,9 @@ def test_user_script_links_exactly_the_mounted_paths(repo_root: Path):
     assert _shared_rels_from_loop(user_script) == EXPECTED_SHARED_RELS
     assert 'DEVBOX_SRC_ROOT="${PARAM_SrcPath:-}"' in user_script
     assert 'src) target="$DEVBOX_SRC_ROOT" ;;' in user_script
+    assert ".local/state/opencode)" in user_script
+    assert 'target="$HOME/.host-config/local/state/devbox-opencode"' in user_script
+    assert "seed-opencode-state.py" in user_script
 
 
 @pytest.mark.unit
@@ -291,6 +313,10 @@ def test_probe_checks_exactly_the_mounted_paths(repo_root: Path):
 
     assert _shared_rels_from_loop(probe) == EXPECTED_SHARED_RELS
     assert 'src) target="${PARAM_SrcPath:-}" ;;' in probe
+    assert (
+        'state_seed_options="$(findmnt -rn -M "$state_seed_mount" -o OPTIONS)"' in probe
+    )
+    assert "knowledge base is not readable via canonical path" in probe
 
 
 @pytest.mark.unit

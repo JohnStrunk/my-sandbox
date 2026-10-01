@@ -113,6 +113,46 @@ test -r {shlex.quote(outline_path)}
 
 
 @pytest.mark.vm
+def test_knowledge_base_mount_is_readable_by_path_tools(devbox_vm: LimaVM):
+    sentinel = Path(devbox_vm.guest_home) / "kb" / "kbase.py"
+    result = devbox_vm.run(
+        [
+            "python3",
+            "-c",
+            "from pathlib import Path; import sys; p = Path(sys.argv[1]); "
+            "assert p.is_file(); assert p.read_bytes()",
+            str(sentinel),
+        ],
+        timeout=30,
+    )
+
+    assert result.returncode == 0, (
+        "The canonical ~/kb mount is not searchable/readable by filesystem tools.\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+
+
+@pytest.mark.vm
+def test_opencode_data_mount_is_visible_from_host_and_l1(devbox_vm: LimaVM):
+    if os.environ.get("MY_SANDBOX_VM_TEST_FRESH") != "1":
+        pytest.skip(
+            "bidirectional mount probe is limited to the disposable CI host home"
+        )
+
+    data_dir = Path(devbox_vm.guest_home) / ".local/share/opencode"
+    inbound = data_dir / "issue-287-mount-inbound"
+    outbound = data_dir / "issue-287-mount-outbound"
+    try:
+        inbound_content = inbound.read_text()
+    except OSError as error:
+        pytest.fail(
+            f"The host-visible OpenCode data seed cannot be read in L1: {error}"
+        )
+    assert inbound_content == "host-to-L1\n"
+    outbound.write_text("L1-to-host\n")
+
+
+@pytest.mark.vm
 def test_host_credential_environment_is_not_forwarded_to_vm_processes(
     devbox_vm: LimaVM, monkeypatch: pytest.MonkeyPatch
 ):

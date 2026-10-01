@@ -144,6 +144,7 @@ for rel in \
   .config/gws \
   .config/opencode \
   .local/share/opencode \
+  .local/state/opencode \
   kb \
   src
 do
@@ -153,6 +154,9 @@ do
     .config/*) target="$HOME/.host-config/config/${rel#.config/}" ;;
     .local/share/opencode)
       target="$HOME/.host-config/local/share/opencode"
+      ;;
+    .local/state/opencode)
+      target="$HOME/.host-config/local/state/devbox-opencode"
       ;;
     kb) target="$HOME/.host-config/kb" ;;
   esac
@@ -173,6 +177,9 @@ kb_alias="${PARAM_KbPath:-}"
 kb_alias_target="$(readlink "$kb_alias" 2>/dev/null || true)"
 [[ -L "$kb_alias" && "$kb_alias_target" == "$HOME/.host-config/kb" ]] \
   || fail "KB worktree path alias is incorrect"
+[[ -r "$HOME/kb/kbase.py" ]] \
+  || fail "knowledge base is not readable via canonical path '~/kb'; "\
+    "verify the ~/kb host mount"
 
 findmnt -rn -t 9p,virtiofs -o TARGET \
   | grep -Fxq -- "$HOME/.host-config/agents" \
@@ -180,9 +187,24 @@ findmnt -rn -t 9p,virtiofs -o TARGET \
 [[ -d "$HOME/.agents" && ! -L "$HOME/.agents" ]] \
   || fail "$HOME/.agents is not the guest-local skill overlay"
 
-# OpenCode's volatile state remains VM-local (single service owner).
-if [[ -L "$HOME/.local/state/opencode" ]]; then
-  fail "OpenCode state dir (.local/state/opencode) must not be a symlink"
-fi
+# The host seed is read-only; persistent state is unique to the L1 VM and
+# protected from the toolbuilder by the root-owned .host-config parent.
+state_seed_mount="$HOME/.host-config/local/state/opencode-seed"
+findmnt -rn -M "$state_seed_mount" -t 9p,virtiofs >/dev/null \
+  || fail "read-only OpenCode state seed mount is missing"
+state_seed_options="$(findmnt -rn -M "$state_seed_mount" -o OPTIONS)" \
+  || fail "could not inspect OpenCode state seed mount"
+case ",$state_seed_options," in
+  *,ro,*) ;;
+  *) fail "OpenCode host-state seed mount is not read-only" ;;
+esac
+state_target="$HOME/.host-config/local/state/devbox-opencode"
+findmnt -rn -M "$state_target" -t 9p,virtiofs >/dev/null \
+  || fail "persistent L1 OpenCode state mount is missing"
+[[ -L "$HOME/.local/state/opencode" \
+  && "$(readlink "$HOME/.local/state/opencode")" == "$state_target" ]] \
+  || fail "OpenCode state does not point to the persistent L1-only mount"
+[[ "$(stat -c %a "$state_target")" == 700 ]] \
+  || fail "persistent OpenCode state mount must be mode 0700"
 
 echo "devbox readiness: full toolchain and operator profile are ready"

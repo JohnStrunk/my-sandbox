@@ -62,6 +62,9 @@ link_shared() {
     src) target="$DEVBOX_SRC_ROOT" ;;
     .config/*) target="$HOME/.host-config/config/${rel#.config/}" ;;
     .local/share/opencode) target="$HOME/.host-config/local/share/opencode" ;;
+    .local/state/opencode)
+      target="$HOME/.host-config/local/state/devbox-opencode"
+      ;;
     kb) target="$HOME/.host-config/kb" ;;
     *) echo "devbox: unsupported shared path '~/${rel}'" >&2; return 1 ;;
   esac
@@ -92,11 +95,31 @@ for rel in \
   .config/gws \
   .config/opencode \
   .local/share/opencode \
+  .local/state/opencode \
   kb \
   src
 do
   link_shared "$rel"
 done
+if [[ ! -L "$HOME/.local/state/opencode" ]] \
+  || [[ "$(readlink "$HOME/.local/state/opencode")" \
+    != "$HOME/.host-config/local/state/devbox-opencode" ]]; then
+  echo "devbox: OpenCode state path must link to its persistent L1-only mount; recreate the VM" >&2
+  exit 1
+fi
+
+# Keep the OpenCode state persistent across VM recreation without sharing its
+# single-owner registration with the host's OpenCode process. The host state
+# mount is read-only and only seeds the dedicated L1 state mount once.
+opencode_state_seed="$HOME/.host-config/local/state/opencode-seed"
+opencode_state="$HOME/.host-config/local/state/devbox-opencode"
+for mount_target in "$opencode_state_seed" "$opencode_state"; do
+  findmnt -rn -t 9p,virtiofs -o TARGET | grep -Fxq -- "$mount_target" \
+    || { echo "devbox: required OpenCode state mount is missing at '$mount_target'" >&2; exit 1; }
+done
+chmod 700 "$opencode_state"
+python3 "$DEVBOX_REPO/lima/seed-opencode-state.py" \
+  "$opencode_state_seed" "$opencode_state"
 
 # Keep ~/.agents guest-local. A symlink left by the minimal bootstrap points
 # into the host mount; remove only that symlink, never its target contents.
@@ -116,11 +139,13 @@ mkdir -p \
 # Fingerprint the exact manifest and provisioners used during this start.
 system_script_sha256="$(cat /var/lib/devbox-vm/system-provision.sha256)"
 user_script_sha256="$(sha256sum "$0" | awk '{print $1}')"
+state_seed_script_sha256="$(sha256sum "$DEVBOX_REPO/lima/seed-opencode-state.py" | awk '{print $1}')"
 manifest_sha256="$(sha256sum "$MANIFEST" | awk '{print $1}')"
 tool_script_sha256="$(cat /var/lib/devbox-vm/tool-provision.sha256)"
 tool_assets_sha256="$(cat /var/lib/devbox-vm/tool-assets.sha256)"
-fingerprint="$(printf '%s\n%s\n%s\n%s\n%s\n' \
+fingerprint="$(printf '%s\n%s\n%s\n%s\n%s\n%s\n' \
   "$manifest_sha256" "$system_script_sha256" "$user_script_sha256" \
+  "$state_seed_script_sha256" \
   "$tool_script_sha256" "$tool_assets_sha256" \
   | sha256sum | awk '{print $1}')"
 fingerprint_file="$HOME/.local/share/devbox-toolchain/provisioning.fingerprint"

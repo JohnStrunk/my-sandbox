@@ -221,20 +221,22 @@ devbox --reprovision   # stop/start and re-run the embedded provisioners
 devbox --reset         # factory-reset, then start and provision again
 ```
 
-Everything persists: VM-local state (the guest home, VM-local caches,
-nested Podman storage, OpenCode state) lives on the VM disk, and the
-shared paths are host directories. Provisioning re-runs on every start and is
-idempotent. Package installs and automatic version checks use the isolated
-`devbox-toolbuilder` account; it cannot traverse the root-owned `~/.host-config`
-parent or the protected parent of `~/src`. The KB alias points into the
-protected mount tree. Provisioning verifies these boundaries directly and
-refuses to protect a `SrcPath` parent inside the guest home.
+VM-local state (the guest home, VM-local caches, and nested Podman storage)
+lives on the VM disk; scoped host mounts, including the dedicated OpenCode L1
+state directory, persist independently. Provisioning re-runs on every start
+and is idempotent. Third-party package installs and automatic version checks
+run as the isolated `devbox-toolbuilder` account; it cannot traverse the
+root-owned `~/.host-config` parent or the protected parent of `~/src`. The KB
+alias points into the protected mount tree. Provisioning verifies these
+boundaries directly and refuses to protect a `SrcPath` parent inside the guest
+home.
 
 `devbox` compares a running VM's provisioning fingerprint with the current
 checkout and warns when they differ; use `devbox --reprovision` to apply the
 current manifest and update the stamp. A stopped VM re-runs provisioning as it
 starts. `--reset` is destructive to VM-local state but preserves host-mounted
-projects and configuration. Edits to `lima/devbox.yaml` or embedded
+projects, configuration, and the dedicated OpenCode L1 state. Edits to
+`lima/devbox.yaml` or embedded
 provisioning scripts still require the recreation procedure below; reset and
 reprovision operate on the existing instance's embedded template.
 
@@ -289,9 +291,28 @@ limactl protect devbox
 To pick up template or provisioning-script changes, recreate the instance.
 Version-only tool pin changes do not require a recreate; use the
 [drift/re-provision procedure](#tool-version-updates-and-drift). Host-side
-data (`~/src`, `~/kb`, and the
-other mounts) is untouched; only VM-local state (guest home, VM-local
-caches, nested Podman storage, OpenCode state) is lost:
+data (`~/src`, `~/kb`, and the other mounts) is untouched; only VM-local state
+(guest home, VM-local caches, nested Podman storage, and other guest-local
+files) is lost. OpenCode's dedicated `~/.local/state/devbox-opencode` host
+directory survives recreation. The host's default `~/.local/state/opencode`
+is only a read-only, one-time import source:
+
+If the existing VM has OpenCode preferences or prompt history that were
+created only in its VM-local state directory, preserve them before deleting
+the VM. Stop the OpenCode service, then run this from the checkout on the
+host; it copies only safe preference/history files into the dedicated host
+directory and excludes registrations, locks, temporary files, and symlinks.
+The helper refuses to copy while the managed service is running. Existing L1
+files take precedence over the host's initial seed:
+
+```shell
+limactl shell devbox -- opencode service stop
+./lima/migrate-opencode-state.sh devbox
+```
+
+Skip this migration when the VM has no state to preserve. The destination
+`~/.local/state/devbox-opencode` is private to this L1 and persists across
+`devbox --reset` as well as recreation.
 
 ```shell
 cd /path/to/my-sandbox
@@ -309,6 +330,11 @@ limactl start "$repo_path/lima/devbox.yaml" \
 
 ## Shared vs VM-local state
 
+The [mount decision matrix](mount-policy.md) records each mount's consumers,
+access mode, and L1/L2 policy. Use `~/kb` as the canonical knowledge-base path
+in guest shells and file searches; the repository does not provide a
+checkout-relative `knowledge-base/` symlink.
+
 | Path | Shared? | Notes |
 | --- | --- | --- |
 | `~/src` | 9p, RW (virtiofs after host validation) | Same-path projects root and worktrees; its guest-side parent is accessible only to the guest UID |
@@ -317,17 +343,37 @@ limactl start "$repo_path/lima/devbox.yaml" \
 | Host `~/.agents` → guest `~/.host-config/agents` | 9p, RO | Root-owned parent grants traversal only to guest UID; VM-owned skills win in guest-local `~/.agents` |
 | `~/.config/opencode` | 9p, RW (virtiofs after host validation) | Mounted under `~/.host-config/config/opencode`, linked into guest config |
 | `~/.local/share/opencode` | 9p, RW (virtiofs after host validation) | Mounted under `~/.host-config/local/share/opencode` |
+| Host `~/.local/state/opencode` | 9p, RO | Trusted L1 can read the source; only allowlisted preferences/history are copied. Registrations, locks, temp files, symlinks, and unknown files are not imported |
+| Host `~/.local/state/devbox-opencode` → guest `~/.local/state/opencode` | 9p, RW | Dedicated L1 state, mode `0700`; preserves model favorites, TUI settings/history, and the L1 service registration across recreation without sharing the host's active registration |
 | `~/.config/gh` | 9p, RW (virtiofs after host validation) | Host credentials, protected from package builder |
 | `~/.config/gcloud` | 9p, RW (virtiofs after host validation) | gcloud ADC/config, protected from package builder |
 | `~/.config/acli` | 9p, RW (virtiofs after host validation) | Atlassian CLI config, protected from package builder |
 | `~/.config/gws` | 9p, RW (virtiofs after host validation) | Google Workspace CLI config, protected from package builder |
-| `~/.local/state/opencode` | VM-local | Single service owner |
 | `/var/lib/devbox-toolbuilder` | VM-local | npm/uv/Rust installs, Playwright browser, Semble model; guest can use installed binaries but cannot modify packages |
 | `~/.cache/{go,uv,semble/index}` | VM-local | Guest-writable Go, uv, and Semble index caches |
 | `/usr/local/node` | VM-local | Manifest-pinned Node.js and npm runtime |
 | `~/.cargo` | VM-local | Guest-local Cargo cache; Rust toolchain is read from builder install |
 | `~/.local/share/kubebuilder-envtest` | VM-local | `setup-envtest` default asset store |
+| `~/.local/state/devbox-toolchain` | VM-local | The Source MCP server virtualenv |
+| `~/.local/share/devbox-toolchain` | VM-local | Provisioning metadata and fingerprints |
 | `~/.gitconfig` | VM-local | Git identity, HTTPS rewrite |
+
+OpenCode's state directory combines TUI/model/history data with the
+single-owner service registration, so those files cannot be mounted
+independently. Provisioning seeds the dedicated L1 host directory once from
+an explicit allowlist of preference/history files in the read-only host state
+mount and never overwrites existing L1 data. The trusted L1 user can read the
+source mount, including the host's live service registration, but that file is
+not copied. The seed is one-way; later host preference changes do not flow
+into L1, and L1 state is not shared with nested L2s. Remove
+`~/.local/state/devbox-opencode` only when intentionally resetting that
+persistent L1 OpenCode state. The complete policy and validation limits are in
+[`mount-policy.md`](mount-policy.md).
+
+The default deployment uses one L1 per host home. `DEVBOX_LIMA_INSTANCE`
+changes the Lima instance name but does not namespace the persistent state
+directory; do not run multiple L1 instances concurrently from the same host
+home.
 
 The template remains on 9p because Lima's `virtiofsd` exited before guest
 startup during the direct host-to-VM attempt in this environment. The #268
@@ -380,10 +426,12 @@ database passed `PRAGMA integrity_check` with no SQLite lock/corruption or
 service-registration replacement errors. No production session data was used.
 
 This is guest-to-guest evidence only; it does **not** prove host-to-VM
-filesystem coherency for OpenCode's SQLite data. The host OpenCode process and
-CodeBurn could not be exercised from
-the guest, so keep host-shared session data provisional until a host writer
-and host CodeBurn read are verified. The full template now provisions Semble
+filesystem coherency for OpenCode's SQLite data. The issue #287 fresh-VM test
+adds a bidirectional file-visibility smoke on a disposable host data directory,
+but does not test SQLite. The host CodeBurn process could not be exercised
+from the guest, so its end-to-end session parsing remains unverified. Keep the
+session data mount unchanged and do not infer that concurrent host/VM SQLite
+writers are safe. The full template now provisions Semble
 and its VM-local model cache. GitHub MCP is intentionally not installed: the
 decision in #275 makes the `gh` CLI canonical. TUI session-switching UX and
 model-backed conversation resume remain to be validated in the later
