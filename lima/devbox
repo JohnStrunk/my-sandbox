@@ -139,7 +139,7 @@ require_existing_instance() {
 }
 
 provisioning_fingerprint() {
-  local manifest_sha system_sha user_sha tool_sha assets_sha guest_user
+  local manifest_sha system_sha user_sha state_seed_sha tool_sha assets_sha guest_user
   local asset_hashes
   local -a sources=(
     "$HERE/devbox-go"
@@ -164,6 +164,7 @@ provisioning_fingerprint() {
   system_sha="$(sed "s|{{\\.User}}|$escaped_guest_user|g" "$HERE/provision-system.sh" \
     | sha256sum | awk '{print $1}')"
   user_sha="$(sha256_file "$HERE/provision-user.sh")"
+  state_seed_sha="$(sha256_file "$HERE/seed-opencode-state.py")"
   tool_sha="$(sha256_file "$HERE/provision-tools.sh")"
   asset_hashes=""
   local index
@@ -171,8 +172,9 @@ provisioning_fingerprint() {
     asset_hashes+="$(sha256_file "${sources[$index]}")  ${guest_assets[$index]}"$'\n'
   done
   assets_sha="$(printf '%s' "$asset_hashes" | sha256sum | awk '{print $1}')"
-  printf '%s\n%s\n%s\n%s\n%s\n' \
-    "$manifest_sha" "$system_sha" "$user_sha" "$tool_sha" "$assets_sha" \
+  printf '%s\n%s\n%s\n%s\n%s\n%s\n' \
+    "$manifest_sha" "$system_sha" "$user_sha" "$state_seed_sha" \
+    "$tool_sha" "$assets_sha" \
     | sha256sum | awk '{print $1}'
 }
 
@@ -218,12 +220,22 @@ resolve_guest_workdir() {
     .config/gcloud \
     .config/acli \
     .config/gws \
-    .local/share/opencode; do
+    .local/share/opencode \
+    .local/state/opencode \
+    .local/state/devbox-opencode; do
     host_root="$host_home/$relative"
     if [[ -d "$host_root" ]]; then
       host_root="$(realpath -e "$host_root")"
       host_roots+=("$host_root")
-      guest_roots+=("$guest_home/$relative")
+      case "$relative" in
+        .local/state/opencode)
+          guest_roots+=("$guest_home/.host-config/local/state/opencode-seed")
+          ;;
+        .local/state/devbox-opencode)
+          guest_roots+=("$guest_home/.host-config/local/state/devbox-opencode")
+          ;;
+        *) guest_roots+=("$guest_home/$relative") ;;
+      esac
     fi
   done
   host_root="$host_home/.agents"

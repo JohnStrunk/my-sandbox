@@ -62,7 +62,11 @@ mkdir -p \
   "$host_home/.config/gcloud" \
   "$host_home/.config/acli" \
   "$host_home/.config/gws" \
-  "$host_home/.local/share/opencode"
+  "$host_home/.local/share/opencode" \
+  "$host_home/.local/state/opencode" \
+  "$host_home/.local/state/devbox-opencode"
+printf '# VM-test mount sentinel\n' >"$host_home/kb/kbase.py"
+printf 'host-to-L1\n' >"$host_home/.local/share/opencode/issue-287-mount-inbound"
 # Copy committed files only: neither local ignored secrets nor the runner's
 # .git/config credentials should be present in the guest-visible source mount.
 git -C "$workspace" archive --format=tar HEAD | tar -xf - -C "$repo_copy"
@@ -96,3 +100,11 @@ limactl shell --workdir /workspace/src/my-sandbox devbox bash -c '
       UV_PROJECT_ENVIRONMENT="$HOME/.cache/my-sandbox-test-venv" \
       uv run --extra test pytest -m "$1"
 ' run-vm-ci "$markers"
+
+if [[ "$tier" == vm ]]; then
+  if ! grep -qx 'L1-to-host' \
+    "$host_home/.local/share/opencode/issue-287-mount-outbound"; then
+    printf 'run-vm-ci: OpenCode data mount did not expose the L1 write to the host\n' >&2
+    exit 1
+  fi
+fi

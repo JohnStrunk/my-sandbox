@@ -342,6 +342,42 @@ def test_agents_mount_maps_to_its_read_only_guest_mount(
 
 @pytest.mark.unit
 @pytest.mark.parametrize(
+    ("host_relative", "guest_relative"),
+    (
+        (
+            ".local/state/opencode",
+            ".host-config/local/state/opencode-seed",
+        ),
+        (
+            ".local/state/devbox-opencode",
+            ".host-config/local/state/devbox-opencode",
+        ),
+    ),
+)
+def test_opencode_state_mounts_map_to_their_guest_mounts(
+    devbox_path: Path,
+    isolated_env: dict[str, str],
+    tmp_path: Path,
+    host_relative: str,
+    guest_relative: str,
+):
+    host_mount = Path(isolated_env["HOME"]) / host_relative
+    workdir = host_mount / "workdir"
+    workdir.mkdir(parents=True)
+    calls, _ = _install_lima_shim(tmp_path, isolated_env)
+
+    result = run_bash_script(devbox_path, ["true"], cwd=workdir, env=isolated_env)
+
+    assert result.returncode == 0, result.stderr
+    shell_call = next(
+        call for call in calls.read_text().splitlines() if "--workdir" in call
+    )
+    expected_guest_path = f"/home/{getpass.getuser()}.guest/{guest_relative}/workdir"
+    assert expected_guest_path in shell_call
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
     ("args", "expected_calls"),
     [
         (["--stop"], ("list", "stop")),

@@ -59,6 +59,7 @@ def expected_lima_provisioning_fingerprint(
         sha(repo_root / "lima" / "tool-versions.json"),
         expected_lima_system_script_sha256(repo_root, guest_user),
         sha(repo_root / "lima" / "provision-user.sh"),
+        sha(repo_root / "lima" / "seed-opencode-state.py"),
         sha(repo_root / "lima" / "provision-tools.sh"),
         hashlib.sha256(asset_manifest.encode()).hexdigest(),
     )
@@ -229,6 +230,9 @@ def vm_test_environment(home: Path) -> dict[str, str]:
     for directory in (runtime_dir, temp_dir, cache_dir):
         directory.mkdir(mode=0o700, exist_ok=True)
         directory.chmod(0o700)
+    kb_root = home / "kb"
+    (kb_root / "notes").mkdir(parents=True, exist_ok=True)
+    (kb_root / "kbase.py").write_text("# VM-test mount sentinel\n")
     env = {
         "PATH": os.environ.get("PATH", os.defpath),
         "HOME": str(home),
@@ -569,6 +573,8 @@ def devbox_vm(
         ".agents",
         ".config/opencode",
         ".local/share/opencode",
+        ".local/state/opencode",
+        ".local/state/devbox-opencode",
         ".config/gh",
         ".config/gcloud",
         ".config/acli",

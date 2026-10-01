@@ -8,9 +8,10 @@
 #
 # Design notes:
 # - Project files are mounted at their host paths so linked-worktree .git
-#   pointers resolve unchanged. The project mount's parent, plus credential
-#   and agent mounts under .host-config, are root-protected for the guest UID.
-#   The knowledge-base path gets a same-path alias for its worktrees.
+#   pointers resolve unchanged. The project mount's parent, plus credential,
+#   OpenCode state, and agent mounts under .host-config, are root-protected for
+#   the guest UID. The knowledge-base path gets a same-path alias for its
+#   worktrees.
 # - The guest user mirrors the host user (same name and uid, Lima's
 #   default on Linux hosts), so files written through the mounts are
 #   owned by the host user.
@@ -55,8 +56,9 @@ mountType: "9p"
 
 # Never mount all of $HOME: only the paths the devbox shares with the host.
 # Host mounts are protected from the isolated package builder by a
-# guest-root-owned parent ACL. Agent files are read-only; other mounts are
-# writable.
+# guest-root-owned parent ACL. Agent files and the one-time OpenCode state
+# seed are read-only; project, config, data, credentials, and persistent L1
+# state are writable.
 mounts:
   # Projects root (worktrees live under ~/src/my-sandbox/.worktrees/)
   - location: "~/src"
@@ -71,13 +73,23 @@ mounts:
   - location: "~/.agents"
     mountPoint: "{{.Home}}/.host-config/agents"
     writable: false
-  # OpenCode config and session data are shared with the host; volatile
-  # state (~/.local/state/opencode) stays VM-local (single service owner).
+  # Keep OpenCode config and session data host-visible for host settings,
+  # session resume, and CodeBurn. The separate read-only state mount seeds
+  # durable preferences into an L1-only persistent state directory below.
   - location: "~/.config/opencode"
     mountPoint: "{{.Home}}/.host-config/config/opencode"
     writable: true
   - location: "~/.local/share/opencode"
     mountPoint: "{{.Home}}/.host-config/local/share/opencode"
+    writable: true
+  # OpenCode keeps preferences and the single-owner service registration in
+  # one XDG state directory. Seed preferences once, but never share the host's
+  # service registration with L1 or nested L2 services.
+  - location: "~/.local/state/opencode"
+    mountPoint: "{{.Home}}/.host-config/local/state/opencode-seed"
+    writable: false
+  - location: "~/.local/state/devbox-opencode"
+    mountPoint: "{{.Home}}/.host-config/local/state/devbox-opencode"
     writable: true
   # Credential/config passthrough.
   - location: "~/.config/gh"
@@ -278,6 +290,7 @@ probes:
         .config/gws \
         .config/opencode \
         .local/share/opencode \
+        .local/state/opencode \
         kb \
         src
       do
@@ -287,6 +300,9 @@ probes:
           .config/*) target="$HOME/.host-config/config/${rel#.config/}" ;;
           .local/share/opencode)
             target="$HOME/.host-config/local/share/opencode"
+            ;;
+          .local/state/opencode)
+            target="$HOME/.host-config/local/state/devbox-opencode"
             ;;
           kb) target="$HOME/.host-config/kb" ;;
         esac
@@ -307,6 +323,9 @@ probes:
       kb_alias_target="$(readlink "$kb_alias" 2>/dev/null || true)"
       [[ -L "$kb_alias" && "$kb_alias_target" == "$HOME/.host-config/kb" ]] \
         || fail "KB worktree path alias is incorrect"
+      [[ -r "$HOME/kb/kbase.py" ]] \
+        || fail "knowledge base is not readable via canonical path '~/kb'; "\
+          "verify the ~/kb host mount"
 
       findmnt -rn -t 9p,virtiofs -o TARGET \
         | grep -Fxq -- "$HOME/.host-config/agents" \
@@ -314,10 +333,25 @@ probes:
       [[ -d "$HOME/.agents" && ! -L "$HOME/.agents" ]] \
         || fail "$HOME/.agents is not the guest-local skill overlay"
 
-      # OpenCode's volatile state remains VM-local (single service owner).
-      if [[ -L "$HOME/.local/state/opencode" ]]; then
-        fail "OpenCode state dir (.local/state/opencode) must not be a symlink"
-      fi
+      # The host seed is read-only; persistent state is unique to the L1 VM and
+      # protected from the toolbuilder by the root-owned .host-config parent.
+      state_seed_mount="$HOME/.host-config/local/state/opencode-seed"
+      findmnt -rn -M "$state_seed_mount" -t 9p,virtiofs >/dev/null \
+        || fail "read-only OpenCode state seed mount is missing"
+      state_seed_options="$(findmnt -rn -M "$state_seed_mount" -o OPTIONS)" \
+        || fail "could not inspect OpenCode state seed mount"
+      case ",$state_seed_options," in
+        *,ro,*) ;;
+        *) fail "OpenCode host-state seed mount is not read-only" ;;
+      esac
+      state_target="$HOME/.host-config/local/state/devbox-opencode"
+      findmnt -rn -M "$state_target" -t 9p,virtiofs >/dev/null \
+        || fail "persistent L1 OpenCode state mount is missing"
+      [[ -L "$HOME/.local/state/opencode" \
+        && "$(readlink "$HOME/.local/state/opencode")" == "$state_target" ]] \
+        || fail "OpenCode state does not point to the persistent L1-only mount"
+      [[ "$(stat -c %a "$state_target")" == 700 ]] \
+        || fail "persistent OpenCode state mount must be mode 0700"
 
       echo "devbox readiness: full toolchain and operator profile are ready"
 message: |
