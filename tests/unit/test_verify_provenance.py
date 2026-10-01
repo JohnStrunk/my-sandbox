@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 
 import scripts.verify_provenance as vp
 from scripts.verify_provenance import (
@@ -146,6 +147,54 @@ def test_update_provenance_no_op_when_current(tmp_path: Path):
 
 
 @pytest.mark.unit
+def test_node_version_bump_requires_both_arch_checksums_to_refresh(
+    repo_root: Path, tmp_path: Path
+):
+    manifest_data = json.loads((repo_root / "lima" / "tool-versions.json").read_text())
+    node = manifest_data["tools"]["node"]
+    old_checksums = node["checksums"].copy()
+    node["version"] = "99.0.0"
+    assert node["checksums"] == old_checksums
+
+    manifest = tmp_path / "tool-versions.json"
+    manifest.write_text(json.dumps({"tools": {"node": node}}, indent=2) + "\n")
+
+    # Repeated hex digests are deliberate offline test data, not release hashes.
+    new_checksums = {"amd64": "12" * 32, "arm64": "34" * 32}
+    templates = node["provenance"]["url_templates"]
+    assert set(templates) == {"checksums.amd64", "checksums.arm64"}
+    fetch = _fake_fetch(
+        {
+            _render_url(template, node): new_checksums[field.removeprefix("checksums.")]
+            for field, template in templates.items()
+        }
+    )
+
+    errors = verify_provenance(manifest, fetch=fetch)
+
+    assert len(errors) == 2
+    assert all(
+        "node:" in error and "is stale for this version" in error for error in errors
+    )
+    assert {
+        field
+        for field in ("checksums.amd64", "checksums.arm64")
+        if any(f"{field} is stale" in error for error in errors)
+    } == {"checksums.amd64", "checksums.arm64"}
+
+    changes = update_provenance(manifest, fetch=fetch)
+
+    assert set(changes) == {
+        ("node", f"checksums.{arch}", old_checksums[arch], new_checksums[arch])
+        for arch in ("amd64", "arm64")
+    }
+    updated_node = json.loads(manifest.read_text())["tools"]["node"]
+    assert updated_node["version"] == "99.0.0"
+    assert updated_node["checksums"] == new_checksums
+    assert verify_provenance(manifest, fetch=fetch) == []
+
+
+@pytest.mark.unit
 def test_update_provenance_refuses_ambiguous_digest(tmp_path: Path):
     # Both arch checksums carry the same stored value, so a single stored
     # digest appears twice and an in-place rewrite would be ambiguous.
@@ -244,3 +293,80 @@ def test_main_update_exit_code_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr(vp, "update_provenance", fake_update)
     assert vp.main(["--update", "--manifest", str(manifest)]) == 0
+
+
+@pytest.mark.unit
+def test_ci_and_merge_queue_gate_on_release_provenance(repo_root: Path):
+    workflow = yaml.safe_load(
+        (repo_root / ".github" / "workflows" / "ci-workflow.yaml").read_text()
+    )
+    jobs = workflow["jobs"]
+    job = workflow["jobs"]["pre-commit"]
+    steps = [
+        step
+        for step in job["steps"]
+        if step.get("name") == "Verify release provenance checksums"
+    ]
+
+    assert len(steps) == 1
+    assert "if" not in job
+    assert "if" not in steps[0]
+    assert "continue-on-error" not in job
+    assert "continue-on-error" not in steps[0]
+    success_job = jobs["ci-success"]
+    assert success_job["if"] == "always()"
+    assert set(success_job["needs"]) == set(jobs) - {"ci-success"}
+    assert "pre-commit" in success_job["needs"]
+    success_steps = [
+        step for step in success_job["steps"] if step.get("name") == "Check all jobs"
+    ]
+    assert len(success_steps) == 1
+    assert success_steps[0]["env"]["RESULTS"] == "${{ join(needs.*.result, ' ') }}"
+    assert 'if [[ "$r" != "success" ]]; then' in success_steps[0]["run"]
+    assert not any("--update" in str(step.get("run", "")) for step in job["steps"])
+    assert steps[0]["run"] == "python3 scripts/verify_provenance.py"
+
+    mergify = yaml.safe_load((repo_root / ".github" / "mergify.yml").read_text())
+    queue_conditions = mergify["queue_rules"][0]["queue_conditions"]
+    assert 'check-success="CI Workflow - Success"' in queue_conditions
+
+
+def _renovate_group_rule(config: str, group_name: str) -> str:
+    lines = config.splitlines()
+    marker = f'"groupName": "{group_name}",'
+    matches = [index for index, line in enumerate(lines) if line.strip() == marker]
+    assert len(matches) == 1
+    group_index = matches[0]
+    start = next(
+        index for index in range(group_index - 1, -1, -1) if lines[index].strip() == "{"
+    )
+    end = next(
+        index
+        for index in range(group_index + 1, len(lines))
+        if lines[index].strip() == "},"
+    )
+    return "\n".join(lines[start : end + 1])
+
+
+@pytest.mark.unit
+def test_renovate_checksum_groups_keep_conditional_refresh(repo_root: Path):
+    config = (repo_root / ".github" / "renovate.json5").read_text()
+    refresh_suffix = "scripts/verify_provenance.py --update"
+
+    for group_name in ("golang version", "devbox tool versions"):
+        group_rule = _renovate_group_rule(config, group_name)
+        assert refresh_suffix in group_rule
+        assert "if a provenance-pinned tool changes" in group_rule
+
+    release_rule_index = config.index(
+        '"description": "Release binary version bumps must refresh manifest checksums"'
+    )
+    golang_group_index = config.index('"groupName": "golang version"')
+    devbox_group_index = config.index('"groupName": "devbox tool versions"')
+    assert release_rule_index < golang_group_index
+    for description in (
+        '"description": "ast-grep version bumps must refresh release checksums',
+        '"description": "limactl version bumps must refresh release checksums"',
+        '"description": "Release binary version bumps must refresh manifest checksums"',
+    ):
+        assert config.index(description) < devbox_group_index

@@ -43,13 +43,22 @@ def test_tool_version_validator_reports_pre_commit_drift(
     _copy_validator_inputs(repo_root, copy_root)
 
     pre_commit_path = copy_root / ".pre-commit-config.yaml"
+    manifest = json.loads((copy_root / "lima" / "tool-versions.json").read_text())
+    markdownlint_version = manifest["tools"]["markdownlint_cli2"]["version"]
+    current_revision = f"v{markdownlint_version.removeprefix('v')}"
+    drift_revision = f"{current_revision}-stale"
+    pre_commit_text = pre_commit_path.read_text()
+    current_rev_line = f'rev: "{current_revision}"'
+    assert current_rev_line in pre_commit_text
     pre_commit_path.write_text(
-        pre_commit_path.read_text().replace('rev: "v0.23.2"', 'rev: "v0.23.1"', 1)
+        pre_commit_text.replace(current_rev_line, f'rev: "{drift_revision}"', 1)
     )
 
     errors = validate_tool_versions(copy_root)
 
-    assert any("markdownlint_cli2" in error and "0.23.1" in error for error in errors)
+    assert any(
+        "markdownlint_cli2" in error and drift_revision in error for error in errors
+    )
 
 
 @pytest.mark.unit

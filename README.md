@@ -148,12 +148,17 @@ python3 scripts/validate_tool_versions.py
 python3 scripts/verify_provenance.py
 ```
 
-The first command checks manifest/consumer consistency; the second verifies
-release checksums and agent-skill pins. Use
-`python3 scripts/verify_provenance.py --update` to refresh provenance after an
-intentional version change. Manifest-only updates are applied by
-`devbox --reprovision`; edits to embedded Lima provisioning or template files
-require recreating the VM.
+For the manifest, Renovate updates only each tool's `version` field; it cannot
+derive architecture-specific checksums or agent-skill hashes. A version-only
+update to a checksum-backed tool is incomplete until provenance is refreshed
+with `python3 scripts/verify_provenance.py --update`. CI runs the verifier
+without `--update` and blocks changes with stale hashes. The first command
+checks manifest/consumer consistency; the second verifies release checksums and
+agent-skill pins. Before refreshing a PR you did not author, review its
+`provenance.url_templates` against the base branch; they define the assets
+whose hashes are trusted and should not change for a version-only update.
+Manifest-only updates are applied by `devbox --reprovision`; edits to embedded
+Lima provisioning or template files require recreating the VM.
 
 ## Repository map
 
