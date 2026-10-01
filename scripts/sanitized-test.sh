@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Run a command with host credentials and configuration discovery disabled.
-# Podman calls use a separate, explicit runtime-only environment.
+# Run tests with host credentials and configuration discovery disabled.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -10,52 +9,31 @@ usage() {
 Usage: sanitized-test.sh [options] -- command [arg ...]
 
 Run a command with a temporary HOME/XDG tree and a small non-secret
-environment allowlist. When Podman is available, calls made by the command
-use a shim that restores only the host settings required by rootless Podman.
+environment allowlist.
 
 Options:
-  --require-podman  Run a rootless Podman preflight before the command. A
-                     missing or unusable runtime is reported as infrastructure
-                     failure and the command is not started.
-  --podman-probe-image IMAGE
-                      Image used by the real-container preflight. Pre-pull a
-                      local image and pass its tag to avoid registry access.
   --resource-preflight
                       Report cgroup resource limits and block constrained
                       parallel test commands before they start.
   --resource-cgroup-root DIR
-                      Cgroup hierarchy to inspect (defaults to
-                      /sys/fs/cgroup; useful for diagnostics and tests).
+                      Cgroup hierarchy to inspect (defaults to /sys/fs/cgroup).
   --require-vm        Require accessible /dev/kvm before starting the command.
   --require-recursive-vm
                       Also require host KVM nested virtualization to be enabled.
-  --guest-vm          Run inside the existing devbox guest. Keep test processes
-                      isolated; the Podman shim alone can use runtime sockets.
-  -h, --help        Show this help text.
+  --guest-vm          Run in the current guest with a scrubbed environment.
+                      Same-UID mounted host files remain readable; use only
+                      with trusted source (CI uses an empty-config guest).
+  -h, --help          Show this help text.
 EOF
 }
 
-require_podman=false
 resource_preflight_enabled=false
 require_vm=false
 require_recursive_vm=false
 guest_vm=false
 resource_cgroup_root="/sys/fs/cgroup"
-podman_probe_image="docker.io/library/alpine:3.22"
 while (($# > 0)); do
   case "$1" in
-    --require-podman)
-      require_podman=true
-      shift
-      ;;
-    --podman-probe-image)
-      if (($# < 2)) || [[ -z "$2" || "$2" == -* ]]; then
-        printf 'sanitized-test: --podman-probe-image requires an image name\n' >&2
-        exit 2
-      fi
-      podman_probe_image="$2"
-      shift 2
-      ;;
     --resource-preflight)
       resource_preflight_enabled=true
       shift
@@ -106,8 +84,8 @@ if (($# == 0)); then
   exit 2
 fi
 
+host_path="${PATH:-/usr/local/bin:/usr/bin:/bin}"
 if [[ "$require_vm" == true ]]; then
-  vm_preflight_path="${PATH:-/usr/local/bin:/usr/bin:/bin}"
   if ! command -v python3 >/dev/null 2>&1; then
     printf '%s\n' \
       'sanitized-test: python3 is required for the VM capability preflight.' \
@@ -118,7 +96,7 @@ if [[ "$require_vm" == true ]]; then
   if [[ "$require_recursive_vm" == true ]]; then
     vm_preflight_args+=(--recursive)
   fi
-  if env -i "PATH=$vm_preflight_path" python3 -I \
+  if env -i "PATH=$host_path" python3 -I \
     "$SCRIPT_DIR/vm_preflight.py" "${vm_preflight_args[@]}"; then
     :
   else
@@ -127,75 +105,21 @@ if [[ "$require_vm" == true ]]; then
   fi
 fi
 
-host_path="${PATH:-/usr/local/bin:/usr/bin:/bin}"
-host_home="${HOME-}"
-host_xdg_config_home="${XDG_CONFIG_HOME-}"
-host_xdg_data_home="${XDG_DATA_HOME-}"
-host_xdg_runtime_dir="${XDG_RUNTIME_DIR-}"
-host_xdg_cache_home="${XDG_CACHE_HOME-}"
-host_dbus_session_bus_address="${DBUS_SESSION_BUS_ADDRESS-}"
-if [[ -z "$host_xdg_config_home" && -n "$host_home" ]]; then
-  host_xdg_config_home="$host_home/.config"
-fi
-if [[ -z "$host_xdg_data_home" && -n "$host_home" ]]; then
-  host_xdg_data_home="$host_home/.local/share"
-fi
-if [[ -z "$host_xdg_cache_home" && -n "$host_home" ]]; then
-  host_xdg_cache_home="$host_home/.cache"
-fi
-host_graphroot=""
-if [[ -n "$host_xdg_data_home" ]]; then
-  host_graphroot="$host_xdg_data_home/containers/storage"
-fi
-host_runroot=""
-if [[ -n "$host_xdg_runtime_dir" ]]; then
-  host_runroot="$host_xdg_runtime_dir/containers"
-fi
-host_containers_config_dir=""
-if [[ -n "$host_xdg_config_home" ]]; then
-  host_containers_config_dir="$host_xdg_config_home/containers"
-fi
-podman_runtime_lock_file=""
-podman_runtime_lock_fd=""
-podman_probe_container=""
-podman_path="$(command -v podman || true)"
-
 runtime_root="$(mktemp -d "${TMPDIR:-/tmp}/my-sandbox-sanitized.XXXXXX")" || {
-  printf 'sanitized-test: could not create a temporary isolation directory\n' >&2
+  printf '%s\n' \
+    'sanitized-test: could not create a temporary isolation directory.' \
+    'sanitized-test: this is an infrastructure/runtime configuration failure, not a product test failure.' >&2
   exit 125
 }
-# The cleanup function is invoked by the EXIT trap rather than directly.
+
+# Invoked indirectly by the EXIT trap.
 # shellcheck disable=SC2329
 cleanup() {
-  local exit_status=$? exists_status
-  if [[ -n "${podman_probe_container:-}" \
-    && -n "${podman_wrapper:-}" \
-    && -x "${podman_wrapper:-}" ]] \
-    && declare -p safe_env &>/dev/null; then
-    if ! env -i -- "${safe_env[@]}" timeout 30 "$podman_wrapper" \
-      rm -f "$podman_probe_container" >/dev/null 2>&1; then
-      if env -i -- "${safe_env[@]}" timeout 30 "$podman_wrapper" \
-        container exists "$podman_probe_container" >/dev/null 2>&1; then
-        printf 'sanitized-test: WARNING: could not remove Podman probe container %s\n' \
-          "$podman_probe_container" >&2
-      else
-        exists_status=$?
-        if [[ "$exists_status" -ne 1 ]]; then
-          printf 'sanitized-test: WARNING: could not confirm removal of Podman probe container %s (container exists check exited %s)\n' \
-            "$podman_probe_container" "$exists_status" >&2
-        fi
-      fi
-    fi
+  local exit_status=$?
+  if ! rm -rf -- "$runtime_root" 2>/dev/null; then
+    printf 'sanitized-test: warning: could not remove temporary directory %s\n' \
+      "$runtime_root" >&2
   fi
-  if rm -rf -- "$runtime_root" 2>/dev/null; then
-    return "$exit_status"
-  fi
-  if [[ -n "${podman_wrapper:-}" && -x "${podman_wrapper:-}" ]] \
-    && declare -p safe_env &>/dev/null; then
-    env -i -- "${safe_env[@]}" timeout 120 "$podman_wrapper" unshare \
-      rm -rf -- "$runtime_root" >/dev/null 2>&1 || true
-  fi
-  rm -rf -- "$runtime_root" 2>/dev/null || true
   return "$exit_status"
 }
 trap cleanup EXIT
@@ -207,12 +131,6 @@ isolated_xdg_state_home="$runtime_root/xdg/state"
 isolated_xdg_cache_home="$runtime_root/xdg/cache"
 isolated_xdg_runtime_dir="$runtime_root/xdg/runtime"
 isolated_tmp="$runtime_root/tmp"
-isolated_bin="$runtime_root/bin"
-podman_home="$runtime_root/podman-home"
-podman_config_home="$runtime_root/podman-config"
-podman_config_containers_dir="$podman_config_home/containers"
-isolated_docker_config="$runtime_root/docker-config"
-registry_auth_file="$runtime_root/registry-auth.json"
 if ! mkdir -p \
   "$isolated_home" \
   "$isolated_xdg_config_home" \
@@ -220,11 +138,7 @@ if ! mkdir -p \
   "$isolated_xdg_state_home" \
   "$isolated_xdg_cache_home" \
   "$isolated_xdg_runtime_dir" \
-  "$isolated_tmp" \
-  "$isolated_bin" \
-  "$podman_home" \
-  "$podman_config_containers_dir" \
-  "$isolated_docker_config"; then
+  "$isolated_tmp"; then
   printf '%s\n' \
     'sanitized-test: could not create the temporary isolation directories.' \
     'sanitized-test: this is an infrastructure/runtime configuration failure, not a product test failure.' >&2
@@ -232,8 +146,6 @@ if ! mkdir -p \
 fi
 if ! chmod 700 \
   "$isolated_home" \
-  "$podman_home" \
-  "$isolated_docker_config" \
   "$isolated_xdg_runtime_dir" \
   "$isolated_tmp"; then
   printf '%s\n' \
@@ -241,108 +153,10 @@ if ! chmod 700 \
     'sanitized-test: this is an infrastructure/runtime configuration failure, not a product test failure.' >&2
   exit 125
 fi
-if ! printf '{}\n' > "$registry_auth_file" \
-  || ! chmod 600 "$registry_auth_file"; then
-  printf '%s\n' \
-    'sanitized-test: could not create the isolated registry auth file.' \
-    'sanitized-test: this is an infrastructure/runtime configuration failure, not a product test failure.' >&2
-  exit 125
-fi
-
-safe_path="$host_path"
-podman_wrapper="$isolated_bin/podman"
-podman_info_stdout="$runtime_root/podman-info.stdout"
-podman_info_stderr="$runtime_root/podman-info.stderr"
-podman_probe_stdout="$runtime_root/podman-probe.stdout"
-podman_probe_stderr="$runtime_root/podman-probe.stderr"
-podman_runtime_dir="$isolated_xdg_runtime_dir"
-if [[ "$guest_vm" == true && "$host_xdg_runtime_dir" == /* ]]; then
-  podman_runtime_dir="$host_xdg_runtime_dir"
-fi
-podman_global_args=()
-if [[ -n "$podman_path" ]]; then
-  if [[ -n "$host_containers_config_dir" ]]; then
-    for config_name in containers.conf storage.conf registries.conf policy.json; do
-      config_source="$host_containers_config_dir/$config_name"
-      if [[ -f "$config_source" ]] \
-        && ! cp -- "$config_source" "$podman_config_containers_dir/"; then
-        printf 'sanitized-test: could not copy Podman runtime config %s.\n' \
-          "$config_source" >&2
-        printf '%s\n' \
-          'sanitized-test: this is an infrastructure/runtime configuration failure, not a product test failure.' >&2
-        exit 125
-      fi
-    done
-    config_dropins="$host_containers_config_dir/containers.conf.d"
-    if [[ -d "$config_dropins" ]] \
-      && ! cp -R -- "$config_dropins" "$podman_config_containers_dir/"; then
-      printf 'sanitized-test: could not copy Podman config drop-ins %s.\n' \
-        "$config_dropins" >&2
-      printf '%s\n' \
-        'sanitized-test: this is an infrastructure/runtime configuration failure, not a product test failure.' >&2
-      exit 125
-    fi
-  fi
-  if [[ -n "$host_graphroot" ]]; then
-    podman_global_args+=(--root "$host_graphroot")
-  fi
-  if [[ -n "$host_runroot" ]]; then
-    podman_global_args+=(--runroot "$host_runroot")
-  fi
-  if ! {
-    printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail'
-    printf 'export PATH=%q\n' "$host_path"
-    printf 'export HOME=%q\n' "$podman_home"
-    printf 'export XDG_CONFIG_HOME=%q\n' "$podman_config_home"
-    printf 'export XDG_DATA_HOME=%q\n' "$isolated_xdg_data_home"
-    printf 'export XDG_RUNTIME_DIR=%q\n' "$podman_runtime_dir"
-    printf 'export TMPDIR=%q\n' "$isolated_tmp"
-    printf 'export REGISTRY_AUTH_FILE=%q\n' "$registry_auth_file"
-    if [[ "$guest_vm" == true && "$host_dbus_session_bus_address" == unix:* ]]; then
-      printf 'export DBUS_SESSION_BUS_ADDRESS=%q\n' \
-        "$host_dbus_session_bus_address"
-    fi
-    printf '%s\n' \
-      'unset AWS_CONFIG_FILE AWS_SHARED_CREDENTIALS_FILE AZURE_CONFIG_DIR CLOUDSDK_CONFIG' \
-      'unset CONTAINERS_CONF CONTAINERS_REGISTRIES_CONF CONTAINERS_STORAGE_CONF' \
-      'unset DOCKER_CONFIG DOCKER_AUTH_CONFIG GH_CONFIG_DIR GIT_CONFIG_GLOBAL' \
-      'unset GIT_CONFIG_SYSTEM GIT_SSH_COMMAND GOOGLE_APPLICATION_CREDENTIALS' \
-      'unset GLAB_CONFIG_DIR KUBECONFIG NETRC NPM_CONFIG_USERCONFIG' \
-      'unset OPENCODE_CONFIG OPENCODE_CONFIG_DIR PIP_CONFIG_FILE SSH_AUTH_SOCK' \
-      'unset GH_TOKEN GITHUB_TOKEN GEMINI_API_KEY GOOGLE_GENERATIVE_AI_API_KEY' \
-      'unset CONTEXT7_API_KEY TAVILY_API_KEY IGLOO_MCP_COMMUNITY' \
-      'unset IGLOO_MCP_COMMUNITY_KEY' \
-      'unset IGLOO_MCP_APP_PASS IGLOO_MCP_APP_ID IGLOO_MCP_USERNAME' \
-      'unset IGLOO_MCP_PASSWORD GITLAB_HOST GITLAB_TOKEN LITEMAAS_API_KEY' \
-      'unset OPENAI_API_KEY ANTHROPIC_API_KEY ANTHROPIC_BASE_URL OCTO_OPEN_URL' \
-      'unset OCTO_OPEN_KEY PRICETAG_ANTHROPIC_URL PRICETAG_HOSTED_URL' \
-      'unset PRICETAG_OPENAI_URL PRICETAG_API_KEY OPENROUTER_API_KEY' \
-      'unset GOOGLE_CLOUD_PROJECT VERTEX_LOCATION'
-    printf 'export DOCKER_CONFIG=%q\n' "$isolated_docker_config"
-    printf 'exec %q' "$podman_path"
-    for argument in "${podman_global_args[@]}"; do
-      printf ' %q' "$argument"
-    done
-    printf ' "$@"\n'
-  } > "$podman_wrapper"; then
-    printf '%s\n' \
-      'sanitized-test: could not write the Podman runtime shim.' \
-      'sanitized-test: this is an infrastructure/runtime configuration failure, not a product test failure.' >&2
-    exit 125
-  fi
-  if ! chmod 700 "$podman_wrapper"; then
-    printf '%s\n' \
-      'sanitized-test: could not secure the Podman runtime shim.' \
-      'sanitized-test: this is an infrastructure/runtime configuration failure, not a product test failure.' >&2
-    exit 125
-  fi
-  safe_path="$isolated_bin:$host_path"
-fi
 
 safe_env=(
   "HOME=$isolated_home"
-  "PATH=$safe_path"
-  "MY_SANDBOX_SANITIZED_TEST_WRAPPER_ACTIVE=1"
+  "PATH=$host_path"
   "TMPDIR=$isolated_tmp"
   "XDG_CONFIG_HOME=$isolated_xdg_config_home"
   "XDG_DATA_HOME=$isolated_xdg_data_home"
@@ -353,23 +167,8 @@ safe_env=(
 if [[ "$guest_vm" == true ]]; then
   safe_env+=("MY_SANDBOX_VM_TEST_IN_GUEST=1")
 fi
-if [[ "$require_podman" == true ]]; then
-  if [[ -z "$host_xdg_cache_home" ]]; then
-    printf '%s\n' \
-      'sanitized-test: a host cache directory is needed for the shared Podman runtime lock.' \
-      'sanitized-test: this is an infrastructure/runtime configuration failure, not a product test failure.' >&2
-    exit 125
-  fi
-  podman_runtime_lock_file="$host_xdg_cache_home/devbox/locks/podman-runtime.lock"
-  safe_env+=(
-    "MY_SANDBOX_PODMAN_RUNTIME_LOCK_FILE=$podman_runtime_lock_file"
-    "MY_SANDBOX_PODMAN_RUNTIME_LOCK_HELD=1"
-  )
-fi
-# Non-secret suite tuning knobs: the documented suite runs through this
-# wrapper's env allowlist, so a knob that cannot pass through is a no-op in
-# exactly the environments that need it (issue #252).
-for name in LANG LC_ALL LC_CTYPE TERM CI DEVBOX_IMAGE_BUILD_TIMEOUT DEVBOX_PODMAN_PROBE_TIMEOUT DEVBOX_VM_START_TIMEOUT; do
+for name in LANG LC_ALL LC_CTYPE TERM CI DEVBOX_VM_START_TIMEOUT \
+  MY_SANDBOX_VM_TEST_FRESH; do
   if [[ -n "${!name-}" ]]; then
     safe_env+=("$name=${!name}")
   fi
@@ -388,76 +187,8 @@ resource_preflight() {
       'sanitized-test: this is an infrastructure/runtime configuration failure, not a product test failure.' >&2
     return 125
   fi
-  env -i -- "${safe_env[@]}" python3 "$SCRIPT_DIR/resource_preflight.py" \
+  env -i -- "${safe_env[@]}" python3 -I "$SCRIPT_DIR/resource_preflight.py" \
     --cgroup-root "$resource_cgroup_root" --fail-on-constrained
-}
-
-podman_preflight() {
-  local info_error info_output probe_error probe_output rootless_status status
-  if [[ -z "$podman_path" ]]; then
-    printf '%s\n' \
-      'sanitized-test: Podman preflight failed; test command was not run.' \
-      'sanitized-test: this is an infrastructure/runtime configuration failure, not a product test failure.' \
-      'sanitized-test: podman is not available on PATH.' >&2
-    return 125
-  fi
-
-  if ! : > "$podman_info_stdout" \
-    || ! : > "$podman_info_stderr" \
-    || ! : > "$podman_probe_stdout" \
-    || ! : > "$podman_probe_stderr"; then
-    printf '%s\n' \
-      'sanitized-test: could not create Podman preflight diagnostic files.' \
-      'sanitized-test: this is an infrastructure/runtime configuration failure, not a product test failure.' >&2
-    return 125
-  fi
-
-  if env -i -- "${safe_env[@]}" timeout 60 "$podman_wrapper" info \
-    --format '{{.Host.Security.Rootless}}' >"$podman_info_stdout" \
-    2>"$podman_info_stderr"; then
-    status=0
-  else
-    status=$?
-  fi
-  info_output="$(<"$podman_info_stdout")"
-  info_error="$(<"$podman_info_stderr")"
-  rootless_status="${info_output##*$'\n'}"
-  if [[ "$status" -ne 0 || "$rootless_status" != "true" ]]; then
-    printf '%s\n' \
-      'sanitized-test: Podman preflight failed; test command was not run.' \
-      'sanitized-test: this is an infrastructure/runtime configuration failure, not a product test failure.' \
-      'sanitized-test: only the documented Podman runtime allowlist was restored.' \
-      'sanitized-test: expected rootless Podman info to report true.' >&2
-    if [[ -n "$info_output" ]]; then
-      printf 'sanitized-test: podman info stdout:\n%s\n' "$info_output" >&2
-    fi
-    if [[ -n "$info_error" ]]; then
-      printf 'sanitized-test: podman info stderr:\n%s\n' "$info_error" >&2
-    fi
-    return 125
-  fi
-
-  podman_probe_container="my-sandbox-podman-probe-${BASHPID:-$$}-${RANDOM}"
-  if env -i -- "${safe_env[@]}" timeout 120 "$podman_wrapper" run \
-    --rm --name "$podman_probe_container" --pull=missing "$podman_probe_image" true >"$podman_probe_stdout" \
-    2>"$podman_probe_stderr"; then
-    podman_probe_container=""
-    return 0
-  fi
-  probe_output="$(<"$podman_probe_stdout")"
-  probe_error="$(<"$podman_probe_stderr")"
-  printf '%s\n' \
-    'sanitized-test: Podman container preflight failed; test command was not run.' \
-    'sanitized-test: rootless Podman info passed, but the probe image could not run.' \
-    'sanitized-test: this is an infrastructure or registry configuration failure, not a product test failure.' \
-    "sanitized-test: probe image: $podman_probe_image" >&2
-  if [[ -n "$probe_output" ]]; then
-    printf 'sanitized-test: podman run stdout:\n%s\n' "$probe_output" >&2
-  fi
-  if [[ -n "$probe_error" ]]; then
-    printf 'sanitized-test: podman run stderr:\n%s\n' "$probe_error" >&2
-  fi
-  return 125
 }
 
 if [[ "$resource_preflight_enabled" == true ]]; then
@@ -469,68 +200,19 @@ if [[ "$resource_preflight_enabled" == true ]]; then
   fi
 fi
 
-if [[ "$require_podman" == true ]]; then
-  lock_root="${podman_runtime_lock_file%/*}"
-  if ! mkdir -p "$lock_root" || ! chmod 700 "$lock_root" \
-    || ! exec {podman_runtime_lock_fd}>"$podman_runtime_lock_file" \
-    || ! chmod 600 "$podman_runtime_lock_file"; then
-    printf 'sanitized-test: could not create the shared Podman runtime lock %s.\n' \
-      "$podman_runtime_lock_file" >&2
-    exit 125
-  fi
-  printf '%s\n' 'sanitized-test: waiting for the shared Podman runtime lock.' >&2
-  if ! flock "$podman_runtime_lock_fd"; then
-    printf 'sanitized-test: could not acquire the shared Podman runtime lock %s.\n' \
-      "$podman_runtime_lock_file" >&2
-    exit 125
-  fi
-  if podman_preflight; then
-    :
-  else
-    preflight_status=$?
-    exit "$preflight_status"
-  fi
-fi
-
-# Bounded interruption forwarding (issue #252)
-# ---------------------------------------------------------------------------
-# The wrapped command runs in its own process group (job control), and the
-# wrapper forwards TERM/INT/HUP it receives to that whole group, escalating
-# to SIGKILL after a bounded grace. Without this, interrupting or timing out
-# the wrapper orphaned the command tree: a wedged nested `podman build`
-# (fuse-overlayfs spin) ignores SIGTERM and kept burning CPU after the
-# wrapper was gone.
-#
-# SIGINT caveat: signals already ignored when the wrapper starts cannot be
-# trapped (POSIX), and a non-interactive parent that launches the wrapper as
-# an asynchronous command makes it inherit SIG_IGN for SIGINT. Started
-# normally (foreground, CI step, Popen), the wrapper's SIGINT handling
-# works; SIGTERM/SIGHUP always do.
+# Bounded interruption forwarding: terminate the whole test command tree and
+# escalate to SIGKILL if a child ignores the initial signal.
 TERM_GRACE_SECONDS=10
 KILL_GRACE_SECONDS=10
-# The test suite's runner (tests/conftest.py) uses 2s/2s for the same two
-# constants: it bounds single leaf commands (builds), while this wrapper
-# forwards interruption to whole test commands (pytest plus its fixtures),
-# which legitimately need longer to unwind. Keep the values in sync
-# deliberately, not accidentally.
 command_pid=""
 
-# These helpers are invoked from the signal traps (and each other) rather
-# than directly, so shellcheck cannot trace their usage.
+# These helpers are invoked from signal traps rather than directly.
 # shellcheck disable=SC2329
 command_group_alive() {
-  # True while any non-zombie member of the command's process group remains.
-  # kill(1) with signal 0 answers for zombies too, so once the cheap check
-  # succeeds, /proc (mirroring tests/conftest.py's _process_group_alive)
-  # distinguishes reaping-lag zombies -- which burn no CPU -- from live
-  # members. /proc is optional: without it, kill(1) semantics apply.
   kill -0 -- "-$command_pid" 2>/dev/null || return 1
   [[ -r /proc/1/stat ]] || return 0
   local entry line rest state _ppid pgrp _rest
   for entry in /proc/[0-9]*; do
-    # stderr is silenced before the input redirect: processes exit between
-    # the glob and the read, and bash reports the failed redirect on the
-    # stderr that is current when the open fails.
     IFS= read -r line 2>/dev/null < "$entry/stat" || continue
     rest="${line##*)}"
     read -r state _ppid pgrp _rest <<<"$rest"
@@ -543,9 +225,6 @@ command_group_alive() {
 
 # shellcheck disable=SC2329
 wait_command_group_gone() {
-  # Poll group liveness for $1 tenths of a second (10 = 1s). Returns
-  # success (0) only once the group is gone: `command_group_alive` uses
-  # shell semantics (0 = alive), so the final check is inverted.
   local i
   for ((i = 0; i < $1; i++)); do
     command_group_alive || return 0
@@ -556,9 +235,6 @@ wait_command_group_gone() {
 
 # shellcheck disable=SC2329
 terminate_command_group() {
-  # Forward the received signal ($1, e.g. TERM) to the command's process
-  # group, then escalate to SIGKILL so a wedged, SIGTERM-ignoring build
-  # cannot outlive the interrupted run.
   local forwarded="$1"
   kill -"$forwarded" -- "-$command_pid" 2>/dev/null || true
   if ! wait_command_group_gone $((TERM_GRACE_SECONDS * 10)); then
@@ -569,15 +245,12 @@ terminate_command_group() {
       return 1
     fi
   fi
-  # Reap the job quietly: otherwise job control reports the signal death
-  # ("... Killed env -i ...") on stderr when the interrupted run exits.
   wait "$command_pid" 2>/dev/null || true
   return 0
 }
 
 # shellcheck disable=SC2329
 forward_signal_to_command() {
-  # Signal names arrive from the trap dispatch ($1), e.g. TERM.
   local received="$1"
   printf 'sanitized-test: received SIG%s; terminating the command process group.\n' \
     "$received" >&2
@@ -592,8 +265,6 @@ trap 'forward_signal_to_command INT' INT
 trap 'forward_signal_to_command HUP' HUP
 
 set +e
-# Job control puts the command in its own process group ($! is its pgid) so
-# the whole tree can be terminated together on interruption.
 set -m
 env -i -- "${safe_env[@]}" "$@" &
 command_pid=$!

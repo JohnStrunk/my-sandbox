@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sys
@@ -17,13 +18,21 @@ _VERSION_LITERAL_PATTERN = re.compile(
     r"(?<![A-Za-z0-9_.-])v?\d+\.\d+(?:\.\d+)*(?:-[A-Za-z0-9.-]+)?"
     r"(?![A-Za-z0-9_.-])"
 )
+_TRUST_ANCHOR_PIN_PATTERN = re.compile(
+    r'^\s*\["(?P<name>[a-z0-9-]+\.crt)"\]="(?P<digest>[0-9a-f]{64})"$',
+    re.MULTILINE,
+)
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 _GIT_COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}")
-_PROVENANCE_REFERENCE_PATTERN = re.compile(
-    r"\.tools\.([a-z][a-z0-9_]*)\.(checksums|agent_skill)\.([a-z][a-z0-9_]*)"
-)
 _PROVENANCE_PLACEHOLDER_PATTERN = re.compile(r"\{([a-z][a-z0-9_.]*)\}")
 _SUPPORTED_ARCHES = frozenset({"amd64", "arm64"})
+_EXPECTED_TRUST_ANCHORS = frozenset(
+    {
+        "redhat-ipa-ca.crt",
+        "redhat-rhcsv2-ca.crt",
+        "redhat-root-ca.crt",
+    }
+)
 _ALLOWED_AGENT_SKILL_FIELDS = frozenset({"commit", "sha256"})
 _ALLOWED_PROVENANCE_PLACEHOLDERS = frozenset({"version", "agent_skill.commit"})
 _ALLOWED_TOOL_FIELDS = frozenset(
@@ -93,7 +102,6 @@ def _load_manifest(path: Path, errors: list[str]) -> dict[str, dict[str, object]
             continue
 
         unknown_consumers = set(consumers) - {
-            "docker",
             "ci",
             "pre-commit",
             "pyproject",
@@ -106,7 +114,7 @@ def _load_manifest(path: Path, errors: list[str]) -> dict[str, dict[str, object]
                 + ", ".join(sorted(unknown_consumers))
             )
 
-        for consumer in ("docker", "ci", "lima"):
+        for consumer in ("ci", "lima"):
             if consumer in consumers and not isinstance(consumers[consumer], bool):
                 errors.append(
                     f"{path}: tool '{name}' consumer '{consumer}' must be boolean"
@@ -402,8 +410,8 @@ def _check_lima_consumers(
 ) -> None:
     """Require Lima provisioning to read each declared tool from the manifest.
 
-    Unlike the container image, the VM's manifest is on a live host-shared
-    mount. Reading it at each start lets a version bump be applied by
+    The VM's manifest is on a live host-shared mount. Reading it at each start
+    lets a version bump be applied by
     restarting the VM without recreating it.
     """
 
@@ -484,29 +492,6 @@ def _check_lima_consumers(
             )
 
 
-def _provenance_references(text: str) -> dict[tuple[str, str], set[str]]:
-    """Group ``.tools.<tool>.<kind>.<field>`` reads by (tool, kind)."""
-
-    refs: dict[tuple[str, str], set[str]] = {}
-    for tool, kind, field in _PROVENANCE_REFERENCE_PATTERN.findall(_active_lines(text)):
-        refs.setdefault((tool, kind), set()).add(field)
-    return refs
-
-
-def _declared_provenance_fields(
-    tools: dict[str, dict[str, object]],
-) -> dict[tuple[str, str], set[str]]:
-    declared: dict[tuple[str, str], set[str]] = {}
-    for name, spec in tools.items():
-        checksums = spec.get("checksums")
-        if isinstance(checksums, dict):
-            declared[(name, "checksums")] = set(checksums)
-        agent_skill = spec.get("agent_skill")
-        if isinstance(agent_skill, dict):
-            declared[(name, "agent_skill")] = set(agent_skill)
-    return declared
-
-
 def _declared_checksummed_fields(
     spec: dict[str, object],
 ) -> set[str]:
@@ -522,6 +507,57 @@ def _declared_checksummed_fields(
 
 def _is_sha256(value: object) -> bool:
     return isinstance(value, str) and bool(_SHA256_PATTERN.fullmatch(value))
+
+
+def _check_trust_anchors(repo_root: Path, errors: list[str]) -> None:
+    """Verify the internal CA files against their manifest-pinned digests."""
+
+    manifest_path = repo_root / "lima" / "tool-versions.json"
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        errors.append(f"Unable to load trust anchors from {manifest_path}: {exc}")
+        return
+    anchors = manifest.get("trust_anchors") if isinstance(manifest, dict) else None
+    if not isinstance(anchors, dict):
+        errors.append(f"{manifest_path} must contain a 'trust_anchors' object")
+        return
+
+    missing = _EXPECTED_TRUST_ANCHORS - anchors.keys()
+    extra = anchors.keys() - _EXPECTED_TRUST_ANCHORS
+    if missing:
+        errors.append(
+            "tool manifest is missing CA trust anchors: " + ", ".join(sorted(missing))
+        )
+    if extra:
+        errors.append(
+            "tool manifest has unknown CA trust anchors: " + ", ".join(sorted(extra))
+        )
+
+    system_script_path = repo_root / "lima" / "provision-system.sh"
+    system_script = _read_text(system_script_path, errors)
+    embedded_pins = dict(_TRUST_ANCHOR_PIN_PATTERN.findall(system_script))
+    if embedded_pins != anchors:
+        errors.append(
+            "lima/provision-system.sh embedded CA trust-anchor pins must match "
+            "lima/tool-versions.json"
+        )
+
+    for name in sorted(_EXPECTED_TRUST_ANCHORS & anchors.keys()):
+        expected = anchors[name]
+        if not _is_sha256(expected):
+            errors.append(f"trust anchor '{name}' must have a SHA-256 digest")
+            continue
+        path = repo_root / "lima" / "certs" / name
+        try:
+            actual = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError as exc:
+            errors.append(f"Unable to read CA trust anchor {path}: {exc}")
+            continue
+        if actual != expected:
+            errors.append(
+                f"CA trust anchor '{name}' does not match its manifest SHA-256"
+            )
 
 
 def _check_checksums(name: str, checksums: object, errors: list[str]) -> None:
@@ -605,8 +641,6 @@ def _check_provenance_block(
 
 def _check_provenance(
     tools: dict[str, dict[str, object]],
-    dockerfile_name: str,
-    dockerfile_text: str,
     errors: list[str],
 ) -> None:
     for name, spec in tools.items():
@@ -622,68 +656,24 @@ def _check_provenance(
                 "has no 'provenance.url_templates' to verify it"
             )
 
-    _check_provenance_dockerfile_coherence(
-        tools, dockerfile_name, dockerfile_text, errors
-    )
-
-
-def _check_provenance_dockerfile_coherence(
-    tools: dict[str, dict[str, object]],
-    dockerfile_name: str,
-    dockerfile_text: str,
-    errors: list[str],
-) -> None:
-    """Ensure every Dockerfile checksum/skill read has a manifest entry."""
-
-    reads = _provenance_references(dockerfile_text)
-    declared = _declared_provenance_fields(tools)
-
-    for tool in sorted({tool for tool, _kind in reads}):
-        if tool not in tools:
-            errors.append(
-                f"{dockerfile_name} references unknown tool '{tool}' provenance"
-            )
-
-    for (tool, kind), read_fields in sorted(reads.items()):
-        declared_fields = declared.get((tool, kind), set())
-        for missing in sorted(read_fields - declared_fields):
-            errors.append(
-                f"{dockerfile_name} reads '{tool}' {kind}['{missing}'] but the "
-                "manifest does not declare it"
-            )
-    for (tool, kind), declared_fields in sorted(declared.items()):
-        # Only tools the Dockerfile itself installs must be read there.
-        # Other consumers verify the same metadata on their side -- the
-        # Lima provisioning scripts read and verify their declared assets --
-        # so requiring a Dockerfile read for them would be a false positive.
-        spec = tools.get(tool, {})
-        consumers = spec.get("consumers")
-        if not isinstance(consumers, dict) or consumers.get("docker") is not True:
-            continue
-        read_fields = reads.get((tool, kind), set())
-        for unused in sorted(declared_fields - read_fields):
-            errors.append(
-                f"the manifest declares '{tool}' {kind}['{unused}'] but "
-                f"{dockerfile_name} never reads it"
-            )
-
 
 def validate_tool_versions(repo_root: Path) -> list[str]:
     """Return all manifest/consumer consistency errors for ``repo_root``."""
 
     errors: list[str] = []
-    manifest_path = repo_root / "container" / "tool-versions.json"
+    manifest_path = repo_root / "lima" / "tool-versions.json"
     tools = _load_manifest(manifest_path, errors)
     if errors:
         return errors
+    _check_trust_anchors(repo_root, errors)
+    if errors:
+        return errors
 
-    dockerfile_path = repo_root / "container" / "Dockerfile"
     workflow_path = repo_root / ".github" / "workflows" / "ci-workflow.yaml"
     pre_commit_path = repo_root / ".pre-commit-config.yaml"
     pyproject_path = repo_root / "pyproject.toml"
     lockfile_path = repo_root / "uv.lock"
 
-    dockerfile = _read_text(dockerfile_path, errors)
     workflow = _read_text(workflow_path, errors)
     pre_commit = _read_text(pre_commit_path, errors)
     pyproject = _read_text(pyproject_path, errors)
@@ -691,36 +681,9 @@ def validate_tool_versions(repo_root: Path) -> list[str]:
     if errors:
         return errors
 
-    if "COPY tool-versions.json /tmp/devbox-tool-versions.json" not in dockerfile:
+    if "lima/tool-versions.json" not in workflow:
         errors.append(
-            "container/Dockerfile must copy container/tool-versions.json into the build"
-        )
-    if "rm -f /tmp/devbox-tool-versions.json" not in dockerfile:
-        errors.append(
-            "container/Dockerfile must remove the manifest from the final image"
-        )
-    if re.search(r"^\s*ARG\s+[A-Z0-9_]+_VERSION\s*=", dockerfile, re.MULTILINE):
-        errors.append(
-            "container/Dockerfile still declares a *_VERSION build argument; "
-            "read it from tool-versions.json instead"
-        )
-
-    _check_consumer_references(
-        "container/Dockerfile", tools, dockerfile, "docker", errors
-    )
-    _check_no_hardcoded_versions(
-        "container/Dockerfile", tools, dockerfile, "docker", errors
-    )
-    _check_provenance(tools, "container/Dockerfile", dockerfile, errors)
-
-    if "container/tool-versions.json" not in workflow:
-        errors.append(
-            ".github/workflows/ci-workflow.yaml must read container/tool-versions.json"
-        )
-    if "ARG PRE_COMMIT_VERSION" in workflow or "awk -F=" in workflow:
-        errors.append(
-            ".github/workflows/ci-workflow.yaml must not parse version arguments "
-            "from container/Dockerfile"
+            ".github/workflows/ci-workflow.yaml must read lima/tool-versions.json"
         )
     _check_consumer_references(
         ".github/workflows/ci-workflow.yaml", tools, workflow, "ci", errors
@@ -728,6 +691,7 @@ def validate_tool_versions(repo_root: Path) -> list[str]:
     _check_no_hardcoded_versions(
         ".github/workflows/ci-workflow.yaml", tools, workflow, "ci", errors
     )
+    _check_provenance(tools, errors)
     _check_pre_commit_consumers(tools, pre_commit, errors)
     _check_pyproject_consumers(tools, pyproject, errors)
     _check_lockfile_consumers(tools, lockfile, errors)

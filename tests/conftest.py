@@ -3,7 +3,6 @@ import hashlib
 import math
 import os
 import pwd
-import shlex
 import shutil
 import signal
 import stat
@@ -23,6 +22,47 @@ from scripts.vm_preflight import CapabilityResult, check_vm_capabilities
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_VM_START_TIMEOUT = 3600.0
 VM_START_TIMEOUT_ENV_VAR = "DEVBOX_VM_START_TIMEOUT"
+
+
+def expected_lima_system_script_sha256(
+    repo_root: Path, guest_user: str | None = None
+) -> str:
+    """Hash the system provisioner after Lima's single ``{{.User}}`` render."""
+    guest_user = guest_user or pwd.getpwuid(os.getuid()).pw_name
+    script = (repo_root / "lima" / "provision-system.sh").read_text()
+    if script.count("{{.User}}") != 1:
+        raise AssertionError("expected one Lima user template in provision-system.sh")
+    rendered = script.replace("{{.User}}", guest_user)
+    return hashlib.sha256(rendered.encode()).hexdigest()
+
+
+def expected_lima_provisioning_fingerprint(
+    repo_root: Path, guest_user: str | None = None
+) -> str:
+    """Mirror the host/guest provisioning fingerprint for regression tests."""
+
+    def sha(path: Path) -> str:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    assets = (
+        (repo_root / "lima" / "devbox-go", "/var/lib/devbox-vm/tool-assets/devbox-go"),
+        (
+            repo_root / "lima" / "check_toolchain.py",
+            "/var/lib/devbox-vm/tool-assets/check_toolchain.py",
+        ),
+        (repo_root / "lima" / "semble", "/var/lib/devbox-vm/tool-assets/semble"),
+    )
+    asset_manifest = "".join(
+        f"{sha(source)}  {guest_path}\n" for source, guest_path in assets
+    )
+    components = (
+        sha(repo_root / "lima" / "tool-versions.json"),
+        expected_lima_system_script_sha256(repo_root, guest_user),
+        sha(repo_root / "lima" / "provision-user.sh"),
+        sha(repo_root / "lima" / "provision-tools.sh"),
+        hashlib.sha256(asset_manifest.encode()).hexdigest(),
+    )
+    return hashlib.sha256(("\n".join(components) + "\n").encode()).hexdigest()
 
 
 def copy_repository_for_vm(source_root: Path, destination: Path) -> None:
@@ -279,9 +319,8 @@ def _cleanup_private_lima_home(env: dict[str, str]) -> list[str]:
 # credential values. `CREDENTIAL_ENV_VARS` is the maintained scrub list of
 # provider/integration environment variables that `devbox` and its supporting
 # scripts read. The `_isolated_test_environment` autouse fixture below
-# removes these from `os.environ` for every test by default, so unit,
-# container, and integration tests are deterministic whether or not the host
-# happens to have any of these set.
+# removes these from `os.environ` for every test by default, so unit and VM
+# tests are deterministic whether or not the host happens to have any set.
 #
 # Tests that need to exercise credential passthrough behavior opt in
 # explicitly (e.g. via `monkeypatch.setenv(...)`, or the `host_credentials`
@@ -349,13 +388,6 @@ HOST_CONFIG_ENV_VARS = (
 )
 
 ISOLATION_ENV_VARS = CREDENTIAL_ENV_VARS + HOST_CONFIG_ENV_VARS
-PODMAN_RUNTIME_CONFIG_FILES = (
-    "containers.conf",
-    "storage.conf",
-    "registries.conf",
-    "policy.json",
-)
-SANITIZED_TEST_WRAPPER_ACTIVE = "MY_SANDBOX_SANITIZED_TEST_WRAPPER_ACTIVE"
 SAFE_TEST_ENV_VARS = (
     "PATH",
     "LANG",
@@ -363,8 +395,6 @@ SAFE_TEST_ENV_VARS = (
     "LC_CTYPE",
     "TERM",
     "CI",
-    "MY_SANDBOX_PODMAN_RUNTIME_LOCK_FILE",
-    "MY_SANDBOX_PODMAN_RUNTIME_LOCK_HELD",
 )
 UNLISTED_SENSITIVE_ENV_VARS = (
     "AWS_SECRET_ACCESS_KEY",
@@ -381,7 +411,7 @@ def _isolated_test_environment(
     """Scrub provider/integration credentials from every test by default.
 
     This is the standard, reusable isolation applied to the whole suite
-    (issue #81): unit, container, and integration tests must produce the
+    (issue #81): unit and VM tests must produce the
     same result whether or not the host happens to have credentials set.
     Tests under `tests/e2e_inference` are intentional end-to-end tests that
     need real credentials, so they're exempt via the `e2e_inference` marker.
@@ -419,100 +449,6 @@ def isolated_home(tmp_path: Path) -> Path:
     return home
 
 
-def _configure_isolated_podman(env: dict[str, str], isolated_home: Path) -> None:
-    """Expose only non-secret Podman runtime state to launcher subprocesses."""
-    podman_path = shutil.which("podman")
-    if not podman_path or os.environ.get(SANITIZED_TEST_WRAPPER_ACTIVE) == "1":
-        return
-
-    isolated_bin = isolated_home.parent / "isolated-bin"
-    isolated_bin.mkdir(exist_ok=True)
-    podman_wrapper = isolated_bin / "podman"
-    runtime_root = isolated_home.parent / "podman-runtime"
-    podman_home = runtime_root / "home"
-    podman_config_home = runtime_root / "config"
-    podman_config_dir = podman_config_home / "containers"
-    podman_data_home = runtime_root / "data"
-    podman_runtime_dir = runtime_root / "runtime"
-    podman_tmp = runtime_root / "tmp"
-    podman_docker_config = runtime_root / "docker-config"
-    registry_auth_file = runtime_root / "registry-auth.json"
-    for path in (
-        podman_home,
-        podman_config_dir,
-        podman_data_home,
-        podman_runtime_dir,
-        podman_tmp,
-        podman_docker_config,
-    ):
-        path.mkdir(parents=True, exist_ok=True)
-        path.chmod(0o700)
-    registry_auth_file.write_text("{}\n")
-    registry_auth_file.chmod(0o600)
-
-    host_home = Path(os.environ["HOME"]) if os.environ.get("HOME") else None
-    host_config_home_value = os.environ.get("XDG_CONFIG_HOME")
-    host_config_home = (
-        Path(host_config_home_value)
-        if host_config_home_value
-        else host_home / ".config"
-        if host_home
-        else None
-    )
-    if host_config_home:
-        host_config_dir = host_config_home / "containers"
-        for name in PODMAN_RUNTIME_CONFIG_FILES:
-            source = host_config_dir / name
-            if source.is_file():
-                shutil.copyfile(source, podman_config_dir / name)
-        dropins = host_config_dir / "containers.conf.d"
-        if dropins.is_dir():
-            shutil.copytree(
-                dropins,
-                podman_config_dir / "containers.conf.d",
-                dirs_exist_ok=True,
-            )
-
-    host_data_home_value = os.environ.get("XDG_DATA_HOME")
-    host_data_home = (
-        Path(host_data_home_value)
-        if host_data_home_value
-        else host_home / ".local" / "share"
-        if host_home
-        else None
-    )
-    host_runtime_dir_value = os.environ.get("XDG_RUNTIME_DIR")
-    podman_args: list[str] = []
-    if host_data_home:
-        podman_args.extend(["--root", str(host_data_home / "containers" / "storage")])
-    if host_runtime_dir_value:
-        podman_args.extend(
-            ["--runroot", str(Path(host_runtime_dir_value) / "containers")]
-        )
-
-    wrapper_lines = [
-        "#!/usr/bin/env bash\n",
-        "set -euo pipefail\n",
-        f"export PATH={shlex.quote(os.environ.get('PATH', ''))}\n",
-        f"export HOME={shlex.quote(str(podman_home))}\n",
-        f"export XDG_CONFIG_HOME={shlex.quote(str(podman_config_home))}\n",
-        f"export XDG_DATA_HOME={shlex.quote(str(podman_data_home))}\n",
-        f"export XDG_RUNTIME_DIR={shlex.quote(str(podman_runtime_dir))}\n",
-        f"export TMPDIR={shlex.quote(str(podman_tmp))}\n",
-        f"export REGISTRY_AUTH_FILE={shlex.quote(str(registry_auth_file))}\n",
-        f"export DOCKER_CONFIG={shlex.quote(str(podman_docker_config))}\n",
-    ]
-    for name in (*ISOLATION_ENV_VARS, "DOCKER_AUTH_CONFIG"):
-        wrapper_lines.append(f"unset {name}\n")
-    wrapper_lines.append(f"exec {shlex.quote(podman_path)}")
-    for argument in podman_args:
-        wrapper_lines.append(f" {shlex.quote(argument)}")
-    wrapper_lines.append(' "$@"\n')
-    podman_wrapper.write_text("".join(wrapper_lines))
-    podman_wrapper.chmod(podman_wrapper.stat().st_mode | 0o111)
-    env["PATH"] = f"{isolated_bin}:{env.get('PATH', '')}"
-
-
 @pytest.fixture
 def isolated_env(host_credentials: None, isolated_home: Path) -> dict[str, str]:
     """A deterministic environment for launching `devbox` (or similar
@@ -531,78 +467,7 @@ def isolated_env(host_credentials: None, isolated_home: Path) -> dict[str, str]:
     ):
         env[xdg_var] = str(isolated_xdg / subdir)
 
-    _configure_isolated_podman(env, isolated_home)
     return env
-
-
-# Isolation-aware Podman cleanup (issue #178)
-# ---------------------------------------------------------------------------
-# `isolated_env` reaches its Podman runtime through a `podman` wrapper on the
-# PATH it injects, while `host_credentials` (its dependency) leaves fake
-# `CONTAINERS_*` config paths in `os.environ`. A raw
-# `subprocess.run(["podman", ...])` that omits `env=isolated_env` therefore
-# fails with a configuration error instead of cleaning anything up, and
-# `check=False` + `capture_output=True` hides that failure: tests pass while
-# leaking containers and volumes. All Podman cleanup in tests must go through
-# `run_podman_isolated()`, which always passes the isolated env, retries a
-# bounded number of times (volume detachment races container removal), and
-# raises on any real failure.
-PODMAN_CLEANUP_RETRIES = 5
-PODMAN_CLEANUP_RETRY_DELAY_SECONDS = 1.0
-PODMAN_ABSENT_MARKERS = ("no such container", "no such volume", "no such image")
-
-
-def _podman_reports_absent(result: subprocess.CompletedProcess[str]) -> bool:
-    stderr = (result.stderr or "").lower()
-    return any(marker in stderr for marker in PODMAN_ABSENT_MARKERS)
-
-
-def run_podman_isolated(
-    env: dict[str, str],
-    args: list[str],
-    *,
-    timeout: float = 30.0,
-    retries: int = 0,
-    retry_delay: float = PODMAN_CLEANUP_RETRY_DELAY_SECONDS,
-    allow_absent: bool = False,
-) -> subprocess.CompletedProcess[str]:
-    """Run ``podman`` through the ``isolated_env`` runtime and fail loudly.
-
-    ``retries`` bounds retries for failures other than success/absence (e.g.
-    ``volume rm`` racing container removal). With ``allow_absent``, a
-    "no such container/volume/image" error is treated as an already-clean
-    state instead of a failure; every other non-zero exit raises
-    ``AssertionError`` with the exit status and captured output so a leaky
-    cleanup can never pass silently.
-    """
-    cmd = ["podman", *args]
-    result: subprocess.CompletedProcess[str] | None = None
-    for attempt in range(retries + 1):
-        # Plain subprocess.run (not run_in_process_group): the cleanup verbs
-        # this helper takes (rm, volume rm, ps) are single leaf CLI
-        # executions with no descendants to orphan, unlike the
-        # launcher -> `podman build` chains issue #211 had to reap.
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=False,
-            env=env,
-            timeout=timeout,
-        )
-        if result.returncode == 0:
-            return result
-        if allow_absent and _podman_reports_absent(result):
-            return result
-        if attempt < retries:
-            time.sleep(retry_delay)
-    assert result is not None
-    detail = f"{result.stdout or ''}{result.stderr or ''}".strip()
-    raise AssertionError(
-        f"podman {' '.join(args)} exited with status {result.returncode} "
-        f"after {retries + 1} attempt(s) under the isolated env"
-        f"{f': {detail}' if detail else ''}"
-    )
 
 
 @pytest.fixture(scope="session")
@@ -613,118 +478,6 @@ def repo_root() -> Path:
 @pytest.fixture(scope="session")
 def devbox_path(repo_root: Path) -> Path:
     return repo_root / "devbox"
-
-
-@pytest.fixture(scope="session")
-def dockerfile_path(repo_root: Path) -> Path:
-    return repo_root / "container" / "Dockerfile"
-
-
-def devbox_context_fingerprint(context_dir: Path) -> str:
-    digest = hashlib.sha256()
-    files = sorted(
-        (path for path in context_dir.rglob("*") if path.is_file()),
-        key=lambda path: path.relative_to(context_dir).as_posix(),
-    )
-    for path in files:
-        digest.update(path.relative_to(context_dir).as_posix().encode())
-        digest.update(b"\0")
-        digest.update(path.read_bytes())
-        digest.update(b"\0")
-    return digest.hexdigest()
-
-
-# Rootless Podman can take substantially longer than a few seconds to
-# initialize storage and the runtime service, especially in devbox/CI
-# environments. A short timeout causes healthy runtimes to be misreported
-# as unavailable, silently skipping container/integration tests. This
-# default is intentionally generous; it only bounds how long a *single*,
-# session-cached probe may take, not the runtime of individual tests.
-DEFAULT_PODMAN_PROBE_TIMEOUT = 60.0
-
-# Allows environments (e.g. CI) to tune the probe timeout without editing
-# source.
-PODMAN_PROBE_TIMEOUT_ENV_VAR = "DEVBOX_PODMAN_PROBE_TIMEOUT"
-
-
-@dataclass(frozen=True)
-class PodmanProbeResult:
-    """Outcome of checking whether a usable Podman runtime is available."""
-
-    available: bool
-    reason: str
-
-
-def podman_probe_timeout() -> float:
-    """Resolve the probe timeout, honoring an environment override."""
-    raw_value = os.environ.get(PODMAN_PROBE_TIMEOUT_ENV_VAR)
-    if not raw_value:
-        return DEFAULT_PODMAN_PROBE_TIMEOUT
-    try:
-        value = float(raw_value)
-    except ValueError:
-        return DEFAULT_PODMAN_PROBE_TIMEOUT
-    if not math.isfinite(value) or value <= 0:
-        return DEFAULT_PODMAN_PROBE_TIMEOUT
-    return value
-
-
-def probe_podman_availability(timeout: float | None = None) -> PodmanProbeResult:
-    """Check whether ``podman info`` succeeds within ``timeout`` seconds.
-
-    Distinguishes three outcomes so callers can produce a clear diagnostic:
-    * the ``podman`` executable is missing entirely,
-    * the runtime is still initializing and exceeded the bounded timeout,
-    * the command ran but failed (a genuine runtime error).
-    """
-    if not shutil.which("podman"):
-        return PodmanProbeResult(
-            available=False,
-            reason="'podman' executable was not found on PATH",
-        )
-
-    effective_timeout = podman_probe_timeout() if timeout is None else timeout
-    try:
-        res = subprocess.run(
-            ["podman", "info"],
-            capture_output=True,
-            timeout=effective_timeout,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        return PodmanProbeResult(
-            available=False,
-            reason=(
-                f"'podman info' did not complete within {effective_timeout:g}s "
-                "(the runtime may still be initializing)"
-            ),
-        )
-    except OSError as exc:
-        return PodmanProbeResult(
-            available=False,
-            reason=f"failed to execute 'podman info': {exc}",
-        )
-
-    if res.returncode != 0:
-        stderr = (
-            res.stderr.decode(errors="replace").strip()
-            if isinstance(res.stderr, bytes)
-            else str(res.stderr or "").strip()
-        )
-        detail = f": {stderr}" if stderr else ""
-        return PodmanProbeResult(
-            available=False,
-            reason=f"'podman info' exited with status {res.returncode}{detail}",
-        )
-
-    return PodmanProbeResult(available=True, reason="podman is available")
-
-
-@pytest.fixture(scope="session")
-def podman_probe_result() -> PodmanProbeResult:
-    # Session-scoped so the (potentially slow) probe runs at most once per
-    # test session, regardless of how many tests/fixtures depend on it.
-    return probe_podman_availability()
 
 
 @pytest.fixture(scope="session")
@@ -742,11 +495,12 @@ def devbox_vm(
     """Use the current Lima guest or start a disposable provisioned VM.
 
     The source mount contains only a working-tree copy of this repository. This
-    avoids stacking the host's whole project mount into another 9p mount. Lima
-    and QEMU get a private HOME, so host credentials/configuration are neither
-    needed nor visible to test processes. From inside an existing devbox VM,
-    the fixture uses that guest directly and reserves a private Lima home for
-    recursive L2 instances.
+    avoids stacking the host's whole project mount into another 9p mount. A
+    disposable VM gets empty credential/config mounts and a private HOME. When
+    tests reuse the current guest, the environment and HOME are isolated, but
+    same-UID processes can still read files under the mounted `.host-config`;
+    guest mode is for trusted source only. The fixture reserves a private Lima
+    home for recursive L2 instances.
     """
     if not vm_capability_result.available:
         pytest.skip(
@@ -860,178 +614,12 @@ def devbox_vm(
         shutil.rmtree(lima_home)
 
 
-@pytest.fixture(scope="session")
-def is_podman_available(podman_probe_result: PodmanProbeResult) -> bool:
-    return podman_probe_result.available
-
-
-# The devbox image build must never hang the test session (issue #252): a
-# wedged nested `podman build` -- observed inside devboxes as a
-# fuse-overlayfs spin near the `useradd` layer, burning kernel CPU with no
-# layer or network progress and ignoring SIGTERM -- otherwise spins
-# forever. This bound is deliberately generous next to a healthy build
-# (minutes); environments with legitimately slower cold builds can raise it.
-DEFAULT_IMAGE_BUILD_TIMEOUT = 1800.0
-IMAGE_BUILD_TIMEOUT_ENV_VAR = "DEVBOX_IMAGE_BUILD_TIMEOUT"
-
-# `podman image exists` is a storage lookup once `podman info` has already
-# succeeded (the session probe), so it only needs a short bound; like the
-# build bound, it exists so a wedged runtime fails loudly instead of
-# hanging the session.
-IMAGE_EXISTS_TIMEOUT = 60.0
-
-
-def image_build_timeout() -> float:
-    """Resolve the devbox image build timeout, honoring an env override."""
-    raw_value = os.environ.get(IMAGE_BUILD_TIMEOUT_ENV_VAR)
-    if not raw_value:
-        return DEFAULT_IMAGE_BUILD_TIMEOUT
-    try:
-        value = float(raw_value)
-    except ValueError:
-        return DEFAULT_IMAGE_BUILD_TIMEOUT
-    if not math.isfinite(value) or value <= 0:
-        return DEFAULT_IMAGE_BUILD_TIMEOUT
-    return value
-
-
-def ensure_devbox_image(dockerfile_path: Path) -> str:
-    """Return the context-fingerprinted devbox image tag, building if needed.
-
-    Both Podman invocations run through ``run_in_process_group`` (issue
-    #211) rather than plain ``subprocess.run``: the build gets its own
-    process group and a timeout, so a wedged nested `podman build` (issue
-    #252) is terminated -- SIGTERM escalating to SIGKILL on the whole group
-    -- and reported as a loud failure instead of hanging the session and
-    leaving an orphaned CPU-spinning build behind.
-    """
-    image_tag = (
-        f"localhost/devbox:test-{devbox_context_fingerprint(dockerfile_path.parent)}"
-    )
-    try:
-        exists_res = run_in_process_group(
-            ["podman", "image", "exists", image_tag],
-            timeout=IMAGE_EXISTS_TIMEOUT,
-        )
-    except subprocess.TimeoutExpired as exc:
-        cleanup = getattr(exc, "process_group_cleanup", "")
-        pytest.fail(
-            f"'podman image exists {image_tag}' did not complete within "
-            f"{IMAGE_EXISTS_TIMEOUT:g}s even though the session probe "
-            "succeeded; the Podman runtime appears wedged, so this is an "
-            "infrastructure failure, not a product test failure "
-            f"(process-group cleanup: {cleanup or 'clean'})."
-        )
-    if exists_res.returncode == 0:
-        return image_tag
-
-    build_timeout = image_build_timeout()
-    try:
-        build_res = run_in_process_group(
-            [
-                "podman",
-                "build",
-                "--file",
-                str(dockerfile_path),
-                "--tag",
-                image_tag,
-                str(dockerfile_path.parent),
-            ],
-            timeout=build_timeout,
-        )
-    except subprocess.TimeoutExpired as exc:
-        cleanup = getattr(exc, "process_group_cleanup", "")
-        pytest.fail(
-            f"Timed out after {build_timeout:g}s building the devbox image "
-            f"({image_tag}); the nested 'podman build' made no progress and "
-            "its process group was terminated (SIGTERM escalated to SIGKILL; "
-            f"cleanup: {cleanup or 'clean'}). Sustained kernel CPU with no "
-            "layer or network progress matches the fuse-overlayfs wedge seen "
-            "inside devboxes (issue #252). Raise "
-            f"{IMAGE_BUILD_TIMEOUT_ENV_VAR} if this environment legitimately "
-            "needs a longer build."
-        )
-    if build_res.returncode == 0:
-        return image_tag
-    pytest.fail(f"Failed to build devbox image: {build_res.stderr}")
-    return image_tag
-
-
-@pytest.fixture(scope="session")
-def devbox_image(podman_probe_result: PodmanProbeResult, dockerfile_path: Path) -> str:
-    if not podman_probe_result.available:
-        pytest.skip(
-            f"Podman is not available in the environment: {podman_probe_result.reason}"
-        )
-    return ensure_devbox_image(dockerfile_path)
-
-
-def unique_workspace_dir(tmp_path: Path, label: str) -> Path:
-    """Create a per-run unique launcher workspace directory under ``tmp_path``.
-
-    The `devbox` launcher names its container after the workspace directory
-    basename (``devbox-<dirname>``), so a fixed workspace name reuses the same
-    container across runs: a container left behind by an interrupted run then
-    collides with the next run, and parallel sessions collide on one container
-    and the launcher's per-name lock (issue #152). A random per-run suffix
-    gives every run its own container name, which the test's own cleanup
-    removes.
-    """
-    test_dir = tmp_path / f"{label}-{uuid.uuid4().hex[:8]}"
-    test_dir.mkdir()
-    return test_dir
-
-
-def devbox_container_name(test_dir: Path) -> str:
-    """The container name the launcher derives for a workspace directory."""
-    return f"devbox-{test_dir.name}"
-
-
-def remove_devbox(
-    devbox_path: Path, test_dir: Path, env: dict[str, str], timeout: int = 60
-) -> None:
-    """Remove a test devbox, falling back to host-side cleanup on failure."""
-    try:
-        result = run_container_devbox(
-            devbox_path, ["--remove"], env=env, cwd=test_dir, timeout=timeout
-        )
-    except subprocess.TimeoutExpired as exc:
-        result = None
-        launcher_error = f"launcher cleanup timed out: {exc}"
-        cleanup = getattr(exc, "process_group_cleanup", "")
-        if cleanup:
-            launcher_error += f"; process-group cleanup failed: {cleanup}"
-    else:
-        launcher_error = (
-            f"launcher cleanup exited with status {result.returncode}"
-            if result.returncode != 0
-            else ""
-        )
-    if result is not None and result.returncode == 0:
-        return
-
-    try:
-        fallback = run_in_process_group(
-            ["podman", "rm", "-f", devbox_container_name(test_dir)],
-            timeout=timeout,
-            env=env,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise AssertionError(f"{launcher_error}; host cleanup failed: {exc}") from exc
-    if fallback.returncode != 0:
-        detail = fallback.stderr.strip()
-        raise AssertionError(
-            f"{launcher_error}; host cleanup exited with status "
-            f"{fallback.returncode}{f': {detail}' if detail else ''}"
-        )
-
-
 # Process-group bounded command runner (issue #211)
 # ---------------------------------------------------------------------------
 # `subprocess.run(timeout=...)` kills only the direct child on timeout, so a
-# timed-out launcher/test command leaks its descendants (e.g. `devbox` ->
-# `podman build` -> buildah) which keep consuming CPU, storage, and nested
-# containers after the command "returned". These runners launch each bounded
+# timed-out test command leaks its descendants (e.g. Lima startup and its QEMU
+# or provisioning children), which keep consuming CPU and storage after the
+# command "returned". These runners launch each bounded
 # command in a dedicated process group (`start_new_session=True`) and, on
 # timeout, terminate/reap the entire group, reporting any cleanup failure.
 TERM_GRACE_SECONDS = 2.0
@@ -1170,7 +758,7 @@ def _wait_process_group_gone(
 def _process_gone(pid: int) -> bool:
     """True once ``pid`` no longer runs. A zombie counts as gone: the killed
     child is reparented once its parent dies, and hosts without a reaping
-    init (e.g. pytest as container PID 1) keep zombies whose
+    init (e.g. pytest as PID 1 in a minimal guest) keep zombies whose
     ``kill(pid, 0)`` still succeeds.
     """
     try:
@@ -1343,38 +931,3 @@ def run_bash_script(
 ) -> subprocess.CompletedProcess[str]:
     cmd = [str(script_path)] + (args or [])
     return run_in_process_group(cmd, timeout=timeout, env=env, cwd=cwd)
-
-
-def run_container_devbox(
-    script_path: Path,
-    args: list[str] | None = None,
-    env: dict[str, str] | None = None,
-    cwd: Path | None = None,
-    timeout: int = 30,
-) -> subprocess.CompletedProcess[str]:
-    """Run the legacy container launcher explicitly during the Lima migration."""
-    return run_bash_script(
-        script_path,
-        ["--container", *(args or [])],
-        env=env,
-        cwd=cwd,
-        timeout=timeout,
-    )
-
-
-def run_in_devbox(
-    image: str,
-    cmd: list[str],
-    user: str | None = None,
-    volumes: list[str] | None = None,
-    timeout: int = 30,
-) -> subprocess.CompletedProcess[str]:
-    exec_cmd = ["podman", "run", "--rm"]
-    if user:
-        exec_cmd.extend(["--user", user])
-    if volumes:
-        for v in volumes:
-            exec_cmd.extend(["--volume", v])
-    exec_cmd.append(image)
-    exec_cmd.extend(cmd)
-    return run_in_process_group(exec_cmd, timeout=timeout)

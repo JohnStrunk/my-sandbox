@@ -7,8 +7,7 @@ import pytest
 from scripts.validate_tool_versions import validate_tool_versions
 
 _VALIDATOR_INPUTS = [
-    "container/tool-versions.json",
-    "container/Dockerfile",
+    "lima/tool-versions.json",
     ".github/workflows/ci-workflow.yaml",
     ".pre-commit-config.yaml",
     "pyproject.toml",
@@ -17,6 +16,9 @@ _VALIDATOR_INPUTS = [
     "lima/provision-user.sh",
     "lima/provision-tools.sh",
     "lima/probe-readiness.sh",
+    "lima/certs/redhat-ipa-ca.crt",
+    "lima/certs/redhat-rhcsv2-ca.crt",
+    "lima/certs/redhat-root-ca.crt",
 ]
 
 
@@ -42,12 +44,12 @@ def test_tool_version_validator_reports_pre_commit_drift(
 
     pre_commit_path = copy_root / ".pre-commit-config.yaml"
     pre_commit_path.write_text(
-        pre_commit_path.read_text().replace("rev: v2.15.1", "rev: v2.15.0", 1)
+        pre_commit_path.read_text().replace('rev: "v0.23.2"', 'rev: "v0.23.1"', 1)
     )
 
     errors = validate_tool_versions(copy_root)
 
-    assert any("hadolint" in error and "2.15.0" in error for error in errors)
+    assert any("markdownlint_cli2" in error and "0.23.1" in error for error in errors)
 
 
 @pytest.mark.unit
@@ -57,11 +59,11 @@ def test_tool_version_validator_rejects_hardcoded_consumer_versions(
     copy_root = tmp_path / "repo"
     _copy_validator_inputs(repo_root, copy_root)
 
-    dockerfile_path = copy_root / "container" / "Dockerfile"
-    dockerfile_path.write_text(
-        dockerfile_path.read_text().replace(
+    workflow_path = copy_root / ".github" / "workflows" / "ci-workflow.yaml"
+    workflow_path.write_text(
+        workflow_path.read_text().replace(
             '"markdownlint-cli2@${markdownlint_version}"',
-            '"markdownlint-cli2@0.23.1"',
+            '"markdownlint-cli2@0.23.2"',
             1,
         )
     )
@@ -92,7 +94,7 @@ def test_tool_version_validator_rejects_non_version_manifest_values(
 
 @pytest.mark.unit
 def test_tool_version_manifest_contains_renovate_metadata(repo_root: Path):
-    manifest = json.loads((repo_root / "container" / "tool-versions.json").read_text())
+    manifest = json.loads((repo_root / "lima" / "tool-versions.json").read_text())
 
     assert manifest["tools"]
     for name, spec in manifest["tools"].items():
@@ -100,11 +102,13 @@ def test_tool_version_manifest_contains_renovate_metadata(repo_root: Path):
         assert spec["datasource"], name
         assert spec["depName"], name
         assert spec["consumers"], name
+        assert "docker" not in spec["consumers"], name
+    assert "github_mcp_server" not in manifest["tools"]
 
 
 @pytest.mark.unit
 def test_opencode_manifest_pins_the_v2_npm_cli(repo_root: Path):
-    manifest = json.loads((repo_root / "container" / "tool-versions.json").read_text())
+    manifest = json.loads((repo_root / "lima" / "tool-versions.json").read_text())
     opencode = manifest["tools"]["opencode"]
 
     assert opencode["version"].startswith("2.")
@@ -113,10 +117,38 @@ def test_opencode_manifest_pins_the_v2_npm_cli(repo_root: Path):
 
 
 def _edit_manifest(copy_root: Path, mutate) -> None:
-    manifest_path = copy_root / "container" / "tool-versions.json"
+    manifest_path = copy_root / "lima" / "tool-versions.json"
     data = json.loads(manifest_path.read_text())
     mutate(data)
     manifest_path.write_text(json.dumps(data, indent=2) + "\n")
+
+
+@pytest.mark.unit
+def test_validator_rejects_a_modified_ca_trust_anchor(repo_root: Path, tmp_path: Path):
+    copy_root = tmp_path / "repo"
+    _copy_validator_inputs(repo_root, copy_root)
+    certificate = copy_root / "lima" / "certs" / "redhat-ipa-ca.crt"
+    certificate.write_bytes(certificate.read_bytes() + b"modified\n")
+
+    errors = validate_tool_versions(copy_root)
+
+    assert any("CA trust anchor 'redhat-ipa-ca.crt'" in error for error in errors)
+
+
+@pytest.mark.unit
+def test_validator_keeps_embedded_ca_pins_in_sync_with_the_manifest(
+    repo_root: Path, tmp_path: Path
+):
+    copy_root = tmp_path / "repo"
+    _copy_validator_inputs(repo_root, copy_root)
+    manifest = json.loads((copy_root / "lima" / "tool-versions.json").read_text())
+    digest = manifest["trust_anchors"]["redhat-root-ca.crt"]
+    system_script = copy_root / "lima" / "provision-system.sh"
+    system_script.write_text(system_script.read_text().replace(digest, "0" * 64, 1))
+
+    errors = validate_tool_versions(copy_root)
+
+    assert any("embedded CA trust-anchor pins" in error for error in errors)
 
 
 @pytest.mark.unit
@@ -173,26 +205,6 @@ def test_validator_flags_dangling_provenance_template(repo_root: Path, tmp_path:
 
 
 @pytest.mark.unit
-def test_validator_flags_provenance_dockerfile_drift(repo_root: Path, tmp_path: Path):
-    copy_root = tmp_path / "repo"
-    _copy_validator_inputs(repo_root, copy_root)
-
-    dockerfile_path = copy_root / "container" / "Dockerfile"
-    dockerfile_path.write_text(
-        dockerfile_path.read_text().replace(
-            "ast_grep_checksum=\"$(jq -er '.tools.ast_grep.checksums.arm64' "
-            '/tmp/devbox-tool-versions.json)" ;;',
-            'ast_grep_checksum="unused" ;;',
-            1,
-        )
-    )
-
-    errors = validate_tool_versions(copy_root)
-
-    assert any("arm64" in error and "never reads it" in error for error in errors)
-
-
-@pytest.mark.unit
 def test_validator_flags_unknown_manifest_field(repo_root: Path, tmp_path: Path):
     copy_root = tmp_path / "repo"
     _copy_validator_inputs(repo_root, copy_root)
@@ -209,7 +221,7 @@ def test_validator_flags_unknown_manifest_field(repo_root: Path, tmp_path: Path)
 
 @pytest.mark.unit
 def test_manifest_declares_lima_consumers(repo_root: Path):
-    manifest = json.loads((repo_root / "container" / "tool-versions.json").read_text())
+    manifest = json.loads((repo_root / "lima" / "tool-versions.json").read_text())
 
     expected = {
         "acli",
@@ -237,7 +249,7 @@ def test_manifest_declares_lima_consumers(repo_root: Path):
     for tool in expected:
         consumers = manifest["tools"][tool]["consumers"]
         assert consumers.get("lima") is True, tool
-    assert manifest["tools"]["github_mcp_server"]["consumers"].get("lima") is not True
+    assert "github_mcp_server" not in manifest["tools"]
 
 
 @pytest.mark.unit
@@ -304,11 +316,11 @@ def test_tool_version_validator_rejects_undeclared_lima_checksum_read(
     _copy_validator_inputs(repo_root, copy_root)
 
     script = copy_root / "lima" / "provision-user.sh"
-    script.write_text(script.read_text() + "verify_download github_mcp_server\n")
+    script.write_text(script.read_text() + "verify_download unknown_tool\n")
 
     errors = validate_tool_versions(copy_root)
 
-    assert any("reads 'github_mcp_server' checksums" in error for error in errors)
+    assert any("reads 'unknown_tool' checksums" in error for error in errors)
 
 
 @pytest.mark.unit
@@ -336,17 +348,16 @@ def test_tool_version_validator_requires_agent_skill_provenance_reads(
 
 
 @pytest.mark.unit
-def test_validator_allows_checksums_for_non_docker_consumers(
+def test_validator_allows_checksums_for_non_lima_consumers(
     repo_root: Path, tmp_path: Path
 ):
     copy_root = tmp_path / "repo"
     _copy_validator_inputs(repo_root, copy_root)
 
     # Checksums only need to be read by an installing consumer. yamllint
-    # is consumed by pre-commit alone, so a Dockerfile read is not
-    # required for its metadata (the lima scripts play that role for
-    # lima-only tools such as limactl). A fully valid non-docker entry
-    # with checksums + provenance passes validation end to end.
+    # is consumed by pre-commit alone, so a Lima provisioning read is not
+    # required for its metadata. A valid non-Lima entry with checksums and
+    # provenance still passes structural validation.
     def mutate(data):
         data["tools"]["yamllint"]["checksums"] = {"amd64": "ab" * 32}
         data["tools"]["yamllint"]["provenance"] = {

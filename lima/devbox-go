@@ -13,11 +13,11 @@ Commands:
   doctor                 Report the project and selected toolchain.
   env [--] [COMMAND ...] Print the selected environment or run a command with it.
   run COMMAND [ARG ...]  Run an arbitrary command with the selected environment.
-  [go arguments ...]     Run the image's Go command with the selection.
+  [go arguments ...]     Run the VM's Go command with the selection.
 
 The active go.work takes precedence over go.mod. Use GOWORK=off to ignore a
-workspace file. Toolchains downloaded by Go are cached under the devbox Go
-cache and survive container recreation.
+workspace file. Toolchains downloaded by Go are cached under the VM-local Go
+cache and survive ordinary stop/start and reprovisioning.
 EOF
 }
 
@@ -184,7 +184,7 @@ print_report() {
   printf 'Selection source: %s\n' "$SELECTION_SOURCE"
   printf 'Selected toolchain: %s\n' "$SELECTED_TOOLCHAIN"
   printf 'GOTOOLCHAIN: %s\n' "$GOTOOLCHAIN_VALUE"
-  printf 'Go cache: %s\n' "${GOPATH:-/sandbox/.cache/go}"
+  printf 'Go cache: %s\n' "${GOPATH:-$HOME/.cache/go}"
 }
 
 print_environment() {
@@ -197,7 +197,7 @@ go_bin_dir() {
     printf '%s\n' "$GOBIN"
     return
   fi
-  local go_path="${GOPATH:-/sandbox/.cache/go}"
+  local go_path="${GOPATH:-$HOME/.cache/go}"
   printf '%s/bin\n' "${go_path%%:*}"
 }
 

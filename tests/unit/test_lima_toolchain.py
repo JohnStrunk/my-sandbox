@@ -8,7 +8,7 @@ from lima.check_toolchain import _VERSION_COMMANDS, check_toolchain
 
 
 def _manifest(repo_root: Path) -> dict:
-    return json.loads((repo_root / "container/tool-versions.json").read_text())
+    return json.loads((repo_root / "lima/tool-versions.json").read_text())
 
 
 def _write_manifest(path: Path, manifest: dict) -> Path:

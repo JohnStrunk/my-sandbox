@@ -1,6 +1,6 @@
 # devbox Lima VM
 
-This directory holds the Lima template for the **VM-native devbox**. A single
+This directory holds the Lima template for the **VM-only devbox**. A single
 Fedora guest runs OpenCode directly inside it, with the full manifest-pinned
 toolchain, rootless Podman available as a project tool, and nested
 virtualization enabled for L2 test VMs, kind, and minikube. Project files are
@@ -9,19 +9,15 @@ from the package builder; configuration and credentials are mounted behind a
 root-owned parent and exposed only to the guest user.
 
 Issue [#267](https://github.com/JohnStrunk/my-sandbox/issues/267) provides the
-minimal bootstrap environment; this full template is the foundation for the
-VM-native migration tracked by
-[#280](https://github.com/JohnStrunk/my-sandbox/issues/280).
-The container devbox remains available during the migration.
+minimal bootstrap environment; this full template completes the VM-native
+design tracked by [#280](https://github.com/JohnStrunk/my-sandbox/issues/280).
 
 ## Why a VM
 
-The container devbox cannot run VMs: there is no `/dev/kvm` inside a
-rootless container, and nested rootless kind was removed as unreliable.
-The decided replacement (2026-09-28) is a VM-native devbox. The minimal
-bootstrap got a working VM in place quickly so agent sessions could run
-_inside_ the target environment. This full template adds the pinned toolchain
-and operator/Kubernetes profile needed to replace the container path.
+The VM-native design supports nested virtualization for L2 tests and project
+tools while keeping OpenCode and the development toolchain in one guest. The
+minimal bootstrap established the VM; this full template provisions the pinned
+toolchain and operator profile in that same environment.
 
 ## One-time host preparation (Fedora)
 
@@ -43,7 +39,8 @@ and operator/Kubernetes profile needed to replace the container path.
    ```
 
 3. **`/dev/kvm` access**: add yourself to the `kvm` group
-   (`sudo usermod -aG kvm "$USER"`, then log out/in).
+   (`sudo usermod -aG kvm "$USER"`, then log out/in). Keep the device owned
+   by `root:kvm` with mode `0660`; do not make it world-writable.
 
 4. **Nested virtualization check** (required: L2 test VMs, minikube, and
    kind inside the devbox need it). Lima ≤ 2.2 does **not** fail fast
@@ -95,7 +92,7 @@ to Lima; no separate `limactl start` command is needed. Host directories under
 The first boot downloads the Fedora 44 cloud image, installs the full toolchain,
 prefetches the Playwright browser and Semble model, and runs the readiness
 probe; expect several minutes. Subsequent starts are much faster. Provisioning
-re-runs idempotently on every start and reads `container/tool-versions.json`
+re-runs idempotently on every start and reads `lima/tool-versions.json`
 from the shared checkout. Third-party npm/Python packages, browser/model
 prefetch, and automatic version checks run as `devbox-toolbuilder`, a separate
 unprivileged account with no access to host mounts. The readiness probe checks
@@ -127,8 +124,8 @@ The top-level [`devbox`](../devbox) launcher is VM-native by default. It
 validates that the current directory is in a mounted host path, ensures the VM
 is running, and uses Lima's `--preserve-env` with a strict credential/provider
 allowlist. Unrelated host environment variables are not forwarded. The
-allowlist mirrors the transitional container launcher's provider names and
-credential-group rules. For a low-level host-side shell, `lima/devbox-shell`
+allowlist contains the supported provider names and credential-group rules.
+For a low-level host-side shell, `lima/devbox-shell`
 uses the same filtered environment and starts the VM if needed.
 
 After creating and validating the VM, enable optional host-login autostart to
@@ -243,7 +240,7 @@ reprovision operate on the existing instance's embedded template.
 
 ### Tool-version updates and drift
 
-Provisioning reads `container/tool-versions.json` from the shared checkout on
+Provisioning reads `lima/tool-versions.json` from the shared checkout on
 every start. It stores the root-owned system-script digest in
 `/var/lib/devbox-vm/system-provision.sha256` and the combined manifest,
 script, and tool-asset fingerprint in the VM-local
@@ -317,7 +314,7 @@ limactl start "$repo_path/lima/devbox.yaml" \
 | `~/src` | 9p, RW (virtiofs after host validation) | Same-path projects root and worktrees; its guest-side parent is accessible only to the guest UID |
 | `<repo>/.venv` | 9p, RW (virtiofs after host validation) | Under `~/src`; venv caveat below |
 | `~/kb` | 9p, RW (virtiofs after host validation) | Mounted at `~/.host-config/kb`; a same-path alias preserves absolute worktree pointers |
-| Host `~/.agents` → guest `~/.host-config/agents` | 9p, RO | Root-owned parent grants traversal only to guest UID; image skills win in guest-local `~/.agents` |
+| Host `~/.agents` → guest `~/.host-config/agents` | 9p, RO | Root-owned parent grants traversal only to guest UID; VM-owned skills win in guest-local `~/.agents` |
 | `~/.config/opencode` | 9p, RW (virtiofs after host validation) | Mounted under `~/.host-config/config/opencode`, linked into guest config |
 | `~/.local/share/opencode` | 9p, RW (virtiofs after host validation) | Mounted under `~/.host-config/local/share/opencode` |
 | `~/.config/gh` | 9p, RW (virtiofs after host validation) | Host credentials, protected from package builder |
@@ -410,13 +407,16 @@ integration work.
   a VM-local `~/.local/share/kubebuilder-envtest` asset-store location.
 - **Additional CLIs/utilities**: `gh`, `glab`, `gcloud`, `gws`, ShellCheck,
   `tokei`, `just`, `difft`, `hyperfine`, `fd`, `file`, `diff`, and `patch`.
+- **Red Hat internal TLS trust**: three CA roots are SHA-256 pinned in the
+  manifest and embedded provisioner, then installed into the VM trust store
+  for system tools, Node.js, and The Source.
 - **Nested VMs**: pinned `limactl` plus `qemu-kvm`, `qemu-img`, and
   `edk2-ovmf` inside the guest.
 - Git configured for GitHub over HTTPS (SSH remotes rewritten, `gh` as
   the credential helper), identity seeded once from the host.
 
 Every tool installed at a manifest-pinned version declares a `lima` consumer
-in `container/tool-versions.json`. Provisioning reads those versions and
+in `lima/tool-versions.json`. Provisioning reads those versions and
 checksummed asset digests at runtime; `scripts/validate_tool_versions.py`
 ensures the scripts consume every declared Lima tool, and
 `lima/check_toolchain.py` verifies the installed versions.
@@ -457,7 +457,7 @@ passes, verify from inside the VM (opened with
 - [ ] `~/src/my-sandbox/lima/validate-kind.sh` completes ten consecutive
       create/delete cycles using rootless Podman's Docker-compatible socket.
 - [ ] `~/.agents/skills/devbox-tools/SKILL.md` and the ast-grep skills are
-      present; image-owned files take precedence at those skill names.
+      present; VM-owned files take precedence at those skill names.
 - [ ] `HF_HOME` and `SEMBLE_CACHE_LOCATION` point under the VM-local cache,
       and Playwright's bundled Chromium launches without another download.
 - [ ] Updating a tool version in the shared manifest and restarting the VM

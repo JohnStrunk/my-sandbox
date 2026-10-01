@@ -15,10 +15,7 @@
         }
       },
       "consumers": {
-        "docker": true,
-        "ci": true,
-        "lima": true,
-        "pre-commit": "https://github.com/hadolint/hadolint"
+        "lima": true
       }
     },
     "go": {
@@ -36,7 +33,6 @@
         }
       },
       "consumers": {
-        "docker": true,
         "lima": true
       }
     },
@@ -55,7 +51,6 @@
         }
       },
       "consumers": {
-        "docker": true,
         "lima": true
       }
     },
@@ -64,7 +59,6 @@
       "datasource": "rust-version",
       "depName": "rust",
       "consumers": {
-        "docker": true,
         "lima": true
       }
     },
@@ -83,7 +77,6 @@
         }
       },
       "consumers": {
-        "docker": true,
         "lima": true
       }
     },
@@ -102,7 +95,6 @@
         }
       },
       "consumers": {
-        "docker": true,
         "lima": true
       }
     },
@@ -111,7 +103,6 @@
       "datasource": "npm",
       "depName": "markdownlint-cli2",
       "consumers": {
-        "docker": true,
         "ci": true,
         "lima": true,
         "pre-commit": "https://github.com/DavidAnson/markdownlint-cli2"
@@ -122,7 +113,6 @@
       "datasource": "npm",
       "depName": "@playwright/cli",
       "consumers": {
-        "docker": true,
         "lima": true
       }
     },
@@ -141,7 +131,6 @@
         }
       },
       "consumers": {
-        "docker": true,
         "lima": true
       }
     },
@@ -150,7 +139,6 @@
       "datasource": "npm",
       "depName": "@opencode/cli",
       "consumers": {
-        "docker": true,
         "lima": true
       }
     },
@@ -170,24 +158,6 @@
       },
       "consumers": {
         "lima": true
-      }
-    },
-    "github_mcp_server": {
-      "version": "1.12.2",
-      "datasource": "github-releases",
-      "depName": "github/github-mcp-server",
-      "checksums": {
-        "amd64": "95843162759da2c31dde082dd145be35db82164594796c294414b69790c2290e",
-        "arm64": "2b30f9fcc061b57456cbe38ddc0f13c88863bad49557508a9196f2d1c4cb17a5"
-      },
-      "provenance": {
-        "url_templates": {
-          "checksums.amd64": "https://github.com/github/github-mcp-server/releases/download/v{version}/github-mcp-server_Linux_x86_64.tar.gz",
-          "checksums.arm64": "https://github.com/github/github-mcp-server/releases/download/v{version}/github-mcp-server_Linux_arm64.tar.gz"
-        }
-      },
-      "consumers": {
-        "docker": true
       }
     },
     "helm": {
@@ -257,7 +227,6 @@
       "datasource": "npm",
       "depName": "repomix",
       "consumers": {
-        "docker": true,
         "lima": true
       }
     },
@@ -265,8 +234,14 @@
       "version": "0.45.3",
       "datasource": "github-releases",
       "depName": "ast-grep/ast-grep",
-      "checksums": {"amd64": "f8ac830881339d1edee6b2652f54798c0f4da5a827f2db38a08ee31117783ce8", "arm64": "b39cfbc58da4b869a88b8a4bc57bd5deb0d24541e704cf7c257da7b53ec81c8f"},
-      "agent_skill": {"commit": "f2175aff21f20cfb8e2db30c28febeb3a2d42b61", "sha256": "6e8ccb117f90cf5d153c9b95acad7ffc689032e0b71c0f89131789d4288ac5f5"},
+      "checksums": {
+        "amd64": "f8ac830881339d1edee6b2652f54798c0f4da5a827f2db38a08ee31117783ce8",
+        "arm64": "b39cfbc58da4b869a88b8a4bc57bd5deb0d24541e704cf7c257da7b53ec81c8f"
+      },
+      "agent_skill": {
+        "commit": "f2175aff21f20cfb8e2db30c28febeb3a2d42b61",
+        "sha256": "6e8ccb117f90cf5d153c9b95acad7ffc689032e0b71c0f89131789d4288ac5f5"
+      },
       "provenance": {
         "url_templates": {
           "checksums.amd64": "https://github.com/ast-grep/ast-grep/releases/download/{version}/app-x86_64-unknown-linux-gnu.zip",
@@ -274,14 +249,15 @@
           "agent_skill.sha256": "https://github.com/ast-grep/agent-skill/archive/{agent_skill.commit}.tar.gz"
         }
       },
-      "consumers": {"docker": true, "lima": true}
+      "consumers": {
+        "lima": true
+      }
     },
     "semble": {
       "version": "0.6.0",
       "datasource": "pypi",
       "depName": "semble",
       "consumers": {
-        "docker": true,
         "lima": true
       }
     },
@@ -300,7 +276,6 @@
         }
       },
       "consumers": {
-        "docker": true,
         "lima": true
       }
     },
@@ -309,7 +284,6 @@
       "datasource": "npm",
       "depName": "@googleworkspace/cli",
       "consumers": {
-        "docker": true,
         "lima": true
       }
     },
@@ -318,7 +292,6 @@
       "datasource": "pypi",
       "depName": "pre-commit",
       "consumers": {
-        "docker": true,
         "lima": true,
         "ci": true
       }
@@ -406,5 +379,10 @@
         "pre-commit": "https://github.com/zizmorcore/zizmor-pre-commit"
       }
     }
+  },
+  "trust_anchors": {
+    "redhat-ipa-ca.crt": "9c7eb653696cdc9a1e4037b154d805ddfac28aa853e154ef0c5f959c9c7e2013",
+    "redhat-rhcsv2-ca.crt": "79fa34635ab392f0b5775b94c944f870122be5e170fe78241ac08bd0e499648e",
+    "redhat-root-ca.crt": "e9713aed04b4ef3003edd10fc9c4f8ab875436e4a44195f0cbafcdf95e9bad2c"
   }
 }

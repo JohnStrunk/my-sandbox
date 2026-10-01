@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-SCRIPT = Path(__file__).resolve().parents[2] / "container" / "devbox-go"
+SCRIPT = Path(__file__).resolve().parents[2] / "lima" / "devbox-go"
 
 
 def _run(
@@ -73,23 +73,23 @@ def test_go_mod_version_selects_and_propagates_toolchain(tmp_path: Path):
 
 
 @pytest.mark.unit
-def test_cached_go_binary_does_not_shadow_image_toolchain(tmp_path: Path):
+def test_cached_go_binary_does_not_shadow_vm_toolchain(tmp_path: Path):
     project = tmp_path / "project"
     project.mkdir()
     (project / "go.mod").write_text("module example.test/project\n\ngo 1.26.0\n")
-    image_bin = tmp_path / "image-bin"
+    vm_bin = tmp_path / "vm-bin"
     cache_bin = tmp_path / "go-cache" / "bin"
-    image_bin.mkdir()
+    vm_bin.mkdir()
     cache_bin.mkdir(parents=True)
     log_file = tmp_path / "toolchain.log"
-    for directory, label in ((image_bin, "image"), (cache_bin, "cached")):
+    for directory, label in ((vm_bin, "vm"), (cache_bin, "cached")):
         command = directory / "go"
         command.write_text(
             f"#!/usr/bin/env bash\nprintf '%s\\n' {label} > \"$DEVBOX_GO_TEST_LOG\"\n"
         )
         command.chmod(command.stat().st_mode | stat.S_IEXEC)
 
-    env = _test_env(image_bin, log_file)
+    env = _test_env(vm_bin, log_file)
     env["GOPATH"] = str(tmp_path / "go-cache")
     result = subprocess.run(
         ["bash", str(SCRIPT), "version"],
@@ -101,7 +101,45 @@ def test_cached_go_binary_does_not_shadow_image_toolchain(tmp_path: Path):
     )
 
     assert result.returncode == 0
-    assert log_file.read_text().strip() == "image"
+    assert log_file.read_text().strip() == "vm"
+
+
+@pytest.mark.unit
+def test_go_cache_fallback_uses_vm_local_home_cache(tmp_path: Path):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "go.mod").write_text("module example.test/project\n\ngo 1.26.0\n")
+    home = tmp_path / "guest-home"
+    go_cache = home / ".cache" / "go"
+    fake_bin = go_cache / "bin"
+    fake_bin.mkdir(parents=True)
+    log_file = tmp_path / "toolchain.log"
+    _fake_command(fake_bin, "fake-linter")
+    env = _test_env(None, log_file) | {"HOME": str(home)}
+    env.pop("GOPATH", None)
+
+    doctor = subprocess.run(
+        ["bash", str(SCRIPT), "--doctor"],
+        cwd=project,
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    run = subprocess.run(
+        ["bash", str(SCRIPT), "run", "fake-linter", "check"],
+        cwd=project,
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+
+    assert doctor.returncode == 0, doctor.stderr
+    assert f"Go cache: {go_cache}" in doctor.stdout
+    assert run.returncode == 0, run.stderr
+    assert "fake check" in run.stdout
+    assert log_file.read_text().strip() == "go1.26.0+auto"
 
 
 @pytest.mark.unit

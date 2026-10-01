@@ -8,7 +8,7 @@ if [[ "$DEVBOX_SRC_ROOT" != /* || ! -d "$DEVBOX_SRC_ROOT" ]]; then
   echo "devbox: SrcPath must be the absolute guest-visible ~/src mount" >&2
   exit 1
 fi
-if [[ "$DEVBOX_REPO" != /* || ! -r "$DEVBOX_REPO/container/tool-versions.json" ]]; then
+if [[ "$DEVBOX_REPO" != /* || ! -r "$DEVBOX_REPO/lima/tool-versions.json" ]]; then
   echo "devbox: RepoPath must be an absolute path to the my-sandbox checkout" >&2
   exit 1
 fi
@@ -17,7 +17,7 @@ case "$DEVBOX_REPO/" in
   "$repo_prefix"*) ;;
   *) echo "devbox: RepoPath must be inside SrcPath" >&2; exit 1 ;;
 esac
-MANIFEST="$DEVBOX_REPO/container/tool-versions.json"
+MANIFEST="$DEVBOX_REPO/lima/tool-versions.json"
 if ! cmp -s "$MANIFEST" /var/lib/devbox-vm/tool-versions.json; then
   echo "devbox: tool manifest changed during provisioning; restart the VM" >&2
   exit 1
@@ -174,8 +174,8 @@ ln -sfn "$TOOL_BUILDER_HOME/.local/bin/semble-bin" \
   "$HOME/.local/bin/semble-bin"
 ln -sfn "$TOOL_BUILDER_HOME/.local/bin/rustup" "$HOME/.cargo/bin/rustup"
 
-# Image-owned skills are staged after the host mount and win at their own names.
-skill_src="$DEVBOX_REPO/container/agent-skills/devbox-tools"
+# VM-owned skills are staged after the host mount and win at their own names.
+skill_src="$DEVBOX_REPO/lima/agent-skills/devbox-tools"
 skill_dst="$HOME/.agents/skills/devbox-tools"
 if [[ -d "$skill_src" ]] && tree_differs "$skill_src" "$skill_dst"; then
   rm -rf -- "$skill_dst"
@@ -214,7 +214,7 @@ if [[ ! -f "$ast_grep_skill_state" ]] \
 fi
 
 # Expose host agent configuration and non-conflicting skills through the
-# guest-local overlay. The two image-owned skill names above take precedence.
+# guest-local overlay. The VM-owned skill names above take precedence.
 host_agents="$HOME/.host-config/agents"
 if [[ -n "$host_agents" && -d "$host_agents" ]]; then
   for source in "$host_agents"/*; do

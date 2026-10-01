@@ -154,6 +154,13 @@ probes:
       DOCKER_HOST="unix:///run/user/$(id -u)/podman/podman.sock"
       export DOCKER_HOST
 
+      for cert in redhat-ipa-ca.crt redhat-rhcsv2-ca.crt redhat-root-ca.crt; do
+        test -s "/etc/pki/ca-trust/source/anchors/$cert" \
+          || fail "Red Hat CA trust anchor $cert is missing"
+      done
+      test -r /etc/ssl/certs/ca-certificates.crt \
+        || fail "the system CA bundle is missing"
+
       for tool in \
         acli agy cargo diff difft fd file ffmpeg gh glab gcloud gws \
         hadolint helm hyperfine jq just kind kubectl limactl make \
@@ -188,7 +195,7 @@ probes:
       test -d "$HOME/.local/share/kubebuilder-envtest" \
         || fail "the VM-local setup-envtest asset cache is missing"
       test -r "$HOME/.agents/skills/devbox-tools/SKILL.md" \
-        || fail "image-owned devbox-tools skill is not staged"
+        || fail "VM-owned devbox-tools skill is not staged"
       test -r "$HOME/.agents/skills/ast-grep/SKILL.md" \
         || fail "ast-grep skill is not staged"
       test -r "$HOME/.agents/skills/ast-grep-outline/SKILL.md" \

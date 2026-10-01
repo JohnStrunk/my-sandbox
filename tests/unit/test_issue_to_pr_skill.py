@@ -77,3 +77,15 @@ def test_issue_to_pr_skill_encodes_required_constraints(repo_root: Path, needle:
     assert needle.lower() in normalized, (
         f"issue-to-pr skill is missing a required constraint: {needle!r}"
     )
+
+
+@pytest.mark.unit
+def test_issue_to_pr_skill_only_recommends_supported_github_and_test_paths(
+    repo_root: Path,
+):
+    normalized = " ".join(_skill_text(repo_root).lower().split())
+
+    assert "github mcp" not in normalized
+    assert "container coverage" not in normalized
+    assert "integration or container coverage" not in normalized
+    assert "provisioned-vm, recursive, or kind coverage" in normalized

@@ -4,7 +4,6 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "config:recommended", // Use recommended settings
-    "docker:pinDigests", // Pin container digests
     "helpers:pinGitHubActionDigests", // Pin GitHub action digests
     ":enablePreCommit", // Enable updates to pre-commit repos
     ":gitSignOff", // Add Signed-off-by line to commit messages
@@ -71,18 +70,10 @@
       "commitMessageSuffix": "(refresh release checksums with scripts/verify_provenance.py --update)",
     },
     {
-      "description": "GitHub MCP server version bumps must refresh release checksums",
-      "matchPackageNames": [
-        "github/github-mcp-server",
-      ],
-      "commitMessageSuffix": "(refresh release checksums via scripts/verify_provenance.py --update)",
-    },
-    {
       "description": "Keep canonical tool versions and their consumers together",
       "matchPackageNames": [
         "hadolint/hadolint",
         "ast-grep/ast-grep",
-        "github/github-mcp-server",
         "lima-vm/lima",
         "@opencode/cli",
         "astral-sh/uv",
@@ -120,29 +111,6 @@
       "versioning": "loose",
     },
     {
-      "description": "Pin devcontainer image digests",
-      "matchManagers": [
-        "devcontainer",
-      ],
-      "matchDepTypes": [
-        "image",
-      ],
-      "pinDigests": true,
-    },
-    {
-      // Features can be pinned, but they don't support the standard :tag@sha256
-      // syntax. It's just one or the other.
-      // See: https://github.com/devcontainers/cli/issues/825
-      "description": "Devcontainer 'features' don't support digest pinning",
-      "matchManagers": [
-        "devcontainer",
-      ],
-      "matchDepTypes": [
-        "feature",
-      ],
-      "pinDigests": false,
-    },
-    {
       "description": "Update renovatebot/pre-commit-hooks weekly to decrease noise",
       "matchPackageNames": [
         "renovatebot/pre-commit-hooks",
@@ -150,17 +118,6 @@
       "schedule": [
         "before 9am on monday",
       ],
-    },
-    {
-      // Container registries often lack releaseTimestamp metadata, which
-      // causes the default timestamp-required behaviour to mark every digest
-      // pin as permanently pending. Allow updates to proceed even if the
-      // timestamp is missing.
-      "description": "Use image creation date for container age checks",
-      "matchCategories": [
-        "docker",
-      ],
-      "minimumReleaseAgeBehaviour": "timestamp-optional",
     },
     {
       "description": "Keep overrides as ranges — they are security/compat floors",
@@ -199,7 +156,7 @@
     },
     {
       "customType": "regex",
-      "managerFilePatterns": ["/(?:^|/)Dockerfile$/", "/\\.sh$/"],
+      "managerFilePatterns": ["/\\.sh$/"],
       "matchStrings": [
         "#\\s*renovate:\\s*datasource=(?<datasource>[a-z-.]+)\\s+depName=(?<depName>[a-zA-Z0-9/@_.:-]+)(?:\\s+versioning=(?<versioning>[a-z-]+))?(?:\\s+extractVersion=(?<extractVersion>[^\\s]+))?\\s+(?:ARG\\s+)?[A-Z0-9_]+_VERSION=[\"']?(?<currentValue>[^\"'\\s]+)[\"']?",
       ],
@@ -210,15 +167,6 @@
       "matchStrings": [
         "#\\s*renovate:\\s*datasource=(?<datasource>[a-z-.]+)\\s+depName=(?<depName>[a-zA-Z0-9/@_.:-]+)(?:\\s+versioning=(?<versioning>[a-z-]+))?\\s+[^#\\n]*?@(?<currentValue>[a-zA-Z0-9.-]+)",
       ],
-    },
-    {
-      "customType": "regex",
-      "managerFilePatterns": ["/(?:^|/)Dockerfile$/"],
-      "matchStrings": [
-        "(?<depName>(?:@[a-zA-Z0-9_.-]+/)?[a-zA-Z0-9_.-]+)@(?<currentValue>[0-9]+\\.[0-9]+[a-zA-Z0-9.-]*)",
-      ],
-      "datasourceTemplate": "npm",
-      "versioningTemplate": "npm",
     },
   ],
   "vulnerabilityAlerts": {

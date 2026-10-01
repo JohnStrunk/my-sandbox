@@ -39,6 +39,28 @@ def test_filter_ignores_multiline_manifest_release_checksum(
 
 
 @pytest.mark.unit
+def test_filter_ignores_manifest_trust_anchor_digest(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+):
+    line = f'    "redhat-root-ca.crt": "{_DIGEST}",'
+    manifest = tmp_path / "tool-versions.json"
+    manifest.write_text("\n".join(("{", '  "trust_anchors": {', line, "  }", "}", "")))
+    monkeypatch.setattr(filters, "_MANIFEST_PATH", manifest)
+    filters._manifest_checksum_lines.cache_clear()
+
+    try:
+        assert filters.is_manifest_release_checksum(
+            str(manifest),
+            line,
+            _DIGEST,
+            HexHighEntropyString(),
+        )
+    finally:
+        filters._manifest_checksum_lines.cache_clear()
+
+
+@pytest.mark.unit
 def test_filter_ignores_inline_manifest_release_checksum(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
@@ -77,7 +99,7 @@ def test_filter_keeps_secret_in_manifest_outside_checksums():
     line = f'    "token": "{_DIGEST}",'
 
     assert not filters.is_manifest_release_checksum(
-        "container/tool-versions.json",
+        "lima/tool-versions.json",
         line,
         _DIGEST,
         HexHighEntropyString(),
@@ -89,7 +111,7 @@ def test_filter_keeps_checksum_for_another_detector():
     line = f'"checksums": {{"amd64": "{_DIGEST}"}}'
 
     assert not filters.is_manifest_release_checksum(
-        "container/tool-versions.json",
+        "lima/tool-versions.json",
         line,
         _DIGEST,
         OtherDetector(),

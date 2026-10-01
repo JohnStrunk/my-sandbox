@@ -5,8 +5,6 @@ import subprocess
 import pytest
 import requests
 
-from tests.conftest import run_in_devbox
-
 
 @pytest.mark.e2e_inference
 def test_litemaas_inference_e2e():
@@ -174,20 +172,3 @@ def test_pricetag_openai_gateway_credential_precedence_e2e(tmp_path):
     )
     assert "HTTP 401" not in output
     assert "ok" in run.stdout.lower()
-
-
-@pytest.mark.e2e_inference
-def test_opencode_cli_in_devbox(devbox_image: str):
-    # If any inference credential is set, verify OpenCode runs a basic model check
-    has_creds = bool(
-        os.getenv("GEMINI_API_KEY")
-        or os.getenv("LITEMAAS_API_KEY")
-        or os.getenv("GOOGLE_CLOUD_PROJECT")
-    )
-    if not has_creds:
-        pytest.skip(
-            "No cloud/LLM credentials found in environment for OpenCode CLI run"
-        )
-
-    res = run_in_devbox(devbox_image, ["opencode", "--version"], user="sandbox")
-    assert res.returncode == 0

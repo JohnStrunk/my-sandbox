@@ -3,7 +3,7 @@
 set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-manifest="$repo_root/container/tool-versions.json"
+manifest="$repo_root/lima/tool-versions.json"
 version="$(jq -er '.tools.limactl.version' "$manifest")"
 case "$(uname -m)" in
   x86_64)

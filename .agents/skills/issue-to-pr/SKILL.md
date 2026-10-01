@@ -10,10 +10,9 @@ description: >
 # Issue to Pull Request
 
 Turn a repository issue into a tested, reviewed pull request. Reach GitHub only
-through the `gh` CLI (required for all authenticated actions) or the GitHub MCP
-server for read-only lookups -- both over HTTPS, never SSH. When the user names
-no specific issue, first select one; otherwise run the workflow directly on the
-named issue.
+through the authenticated `gh` CLI over HTTPS; never use SSH. When the user
+names no specific issue, first select one; otherwise run the workflow directly
+on the named issue.
 
 ## When no issue is named: choose the highest-value one
 
@@ -23,11 +22,10 @@ issues for exactly that decision (see the triage vocabulary in `AGENTS.md`);
 use the labels first and reserve full-body reads for what they cannot answer.
 
 1. Enumerate candidates with one list call that includes labels, assignees,
-   and dependency summaries -- for example `gh api
+    and dependency summaries -- for example `gh api
    'repos/<owner>/<repo>/issues?state=open&per_page=100'` returns all three
-   per item (the GitHub MCP `list_issues` filter works too). Note that
-   `--assignee ""` is a no-op and still returns assigned issues; `gh
-   issue list` needs `--search "no:assignee"` instead. Keep
+   per item. Note that `--assignee ""` is a no-op and still returns assigned
+   issues; `gh issue list` needs `--search "no:assignee"` instead. Keep
    issues that are unassigned, labeled `ready`, not labeled `blocked`, and
    whose `issue_dependencies_summary.total_blocked_by` is 0. An open
    unassigned issue carrying no triage labels at all is not dropped here;
@@ -73,7 +71,7 @@ use the labels first and reserve full-body reads for what they cannot answer.
 5. Implement the smallest complete change that satisfies the acceptance criteria,
    following existing conventions and reusing what already exists.
 6. Test from the fastest tier upward -- unit, lint, and type checks first, then
-   the relevant integration or container coverage. Use the repository's
+   the relevant provisioned-VM, recursive, or kind coverage. Use the repo's
    documented test command (for example `uv run --extra test pytest`) in a
    sanitized environment, and never print the full environment.
 7. Review. Have an independent subagent review the final diff for quality and
@@ -93,8 +91,8 @@ use the labels first and reserve full-body reads for what they cannot answer.
 
 ## Guardrails
 
-- Route every GitHub action through `gh` or the GitHub MCP server over HTTPS; no
-  SSH.
+- Route every GitHub action through the authenticated `gh` CLI over HTTPS; do
+  not attempt SSH.
 - Keep the user's dirty and untracked files untouched; isolate all edits in the
   `.worktrees/` worktree created from the latest `origin/main`.
 - Prefer reuse and existing house patterns; keep the change minimal.
