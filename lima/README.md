@@ -481,14 +481,23 @@ database passed `PRAGMA integrity_check` with no SQLite lock/corruption or
 service-registration replacement errors. No production session data was used.
 
 This is guest-to-guest evidence only; it does **not** prove host-to-VM
-filesystem coherency for OpenCode's SQLite data. The issue #287 fresh-VM test
-adds a bidirectional file-visibility smoke on a disposable host data directory,
-but does not test SQLite. The host CodeBurn process could not be exercised
-from the guest, so its end-to-end session parsing remains unverified. Keep the
-session data mount unchanged and do not infer that concurrent host/VM SQLite
-writers are safe. The full template now provisions Semble and its VM-local
-model cache. TUI session-switching UX and model-backed conversation resume
-remain to be validated in the later integration work.
+filesystem coherency for OpenCode's production SQLite data. The issue #287
+fresh-VM CI test runs the bounded SQLite probe before the VM suite, alongside a
+bidirectional file-visibility smoke. It uses a uniquely named test-only WAL
+database in the disposable host data directory. L1 checks the mounted database
+first; CI stops L1, copies the database and optional WAL into a private
+host-only snapshot, and checks exact rows plus `PRAGMA integrity_check` from
+both sides. This exercises disposable cross-boundary SQLite concurrency only;
+it does not establish production database integrity, verify CodeBurn's
+end-to-end session parsing, or validate other mount types. John manually
+reported that CodeBurn running on the physical host displayed the current L1
+session, confirming basic manual session visibility. CI does not launch
+CodeBurn or automate session parsing, and it uses only disposable data. Keep
+the session data mount unchanged and do not generalize the probe to production
+sessions or other filesystems/mount configurations. The full template now
+provisions Semble and its VM-local model cache. TUI session-switching UX and
+model-backed conversation resume remain to be validated in the later
+integration work.
 
 ## What is inside
 
