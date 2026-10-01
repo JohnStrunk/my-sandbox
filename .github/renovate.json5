@@ -24,14 +24,6 @@
   "rangeStrategy": "pin",
   "packageRules": [
     {
-      "description": "Update golang version in the canonical manifest",
-      "groupName": "golang version",
-      "matchDepNames": [
-        "go",
-        "golang",
-      ],
-    },
-    {
       // ast-grep's manifest entry also pins platform release checksums and the
       // official agent-skill archive hash. Renovate cannot recompute those, so
       // a version-only bump is caught by the "Verify release provenance
@@ -70,6 +62,16 @@
       "commitMessageSuffix": "(refresh release checksums with scripts/verify_provenance.py --update)",
     },
     {
+      "description": "Update golang version in the canonical manifest",
+      "groupName": "golang version",
+      "matchDepNames": [
+        "go",
+        "golang",
+      ],
+      // Keep after the release-checksum rule so this conditional reminder wins.
+      "commitMessageSuffix": "(run scripts/verify_provenance.py --update if a provenance-pinned tool changes)",
+    },
+    {
       "description": "Keep canonical tool versions and their consumers together",
       "matchPackageNames": [
         "hadolint/hadolint",
@@ -99,6 +101,9 @@
         "zizmorcore/zizmor-pre-commit",
       ],
       "groupName": "devbox tool versions",
+      // Grouped PRs can drop individual checksum-refresh suffixes. Keep the
+      // follow-up visible, while making clear it applies only to provenance pins.
+      "commitMessageSuffix": "(run scripts/verify_provenance.py --update if a provenance-pinned tool changes)",
     },
     {
       "description": "Use loose versioning for ShellCheck's four-part tags",
