@@ -7,6 +7,8 @@ instance="${DEVBOX_LIMA_INSTANCE:-devbox}"
 action="${1:-run}"
 shift || true
 command=("$@")
+guest_workdir=""
+delete_restore_protection=false
 
 if ! command -v limactl >/dev/null 2>&1; then
   echo "devbox: limactl is not installed or not on PATH" >&2
@@ -55,6 +57,89 @@ lima_status() {
     fi
   done <<<"$instances"
   printf '%s\n' "$status"
+}
+
+lima_protection_state() {
+  local instances name protection_state
+  if ! instances="$(limactl list --format '{{.Name}} {{.Protected}}' 2>/dev/null)"; then
+    echo "devbox: could not verify protection state for Lima instance '$instance'" >&2
+    return 1
+  fi
+  while read -r name protection_state; do
+    if [[ "$name" == "$instance" ]]; then
+      case "$protection_state" in
+        true | false)
+          printf '%s\n' "$protection_state"
+          return 0
+          ;;
+        *)
+          echo "devbox: Lima returned an invalid protection state for '$instance'" >&2
+          return 1
+          ;;
+      esac
+    fi
+  done <<<"$instances"
+  echo "devbox: could not verify protection state for Lima instance '$instance'" >&2
+  return 1
+}
+
+lima_instance_exists() {
+  local instances name
+  if ! instances="$(limactl list --format '{{.Name}}' 2>/dev/null)"; then
+    return 2
+  fi
+  while read -r name; do
+    if [[ "$name" == "$instance" ]]; then
+      return 0
+    fi
+  done <<<"$instances"
+  return 1
+}
+
+report_protection_warning() {
+  local reason="$1"
+  printf 'WARNING: %s for Lima instance %q.\n' "$reason" "$instance" >&2 || true
+  printf '       If the instance still exists, restore protection manually with: limactl protect %q\n' \
+    "$instance" >&2 || true
+}
+
+restore_lima_protection() {
+  local reason="$1"
+  if limactl protect -- "$instance"; then
+    printf 'devbox: %s; protection is in place for Lima instance %q.\n' \
+      "$reason" "$instance" >&2 || true
+    return 0
+  fi
+  report_protection_warning "$reason; protection could not be restored"
+  return 1
+}
+
+handle_lifecycle_delete_signal() {
+  local signal_name="$1" exit_status instance_status
+  case "$signal_name" in
+    INT) exit_status=130 ;;
+    TERM) exit_status=143 ;;
+    HUP) exit_status=129 ;;
+    QUIT) exit_status=131 ;;
+    PIPE) exit_status=141 ;;
+    *) exit_status=1 ;;
+  esac
+
+  # Prevent repeated signals from interrupting best-effort protection repair.
+  trap '' INT TERM HUP QUIT PIPE
+  if [[ "$delete_restore_protection" == true ]]; then
+    if lima_instance_exists; then
+      restore_lima_protection "deletion interrupted by SIG$signal_name" || true
+    else
+      instance_status=$?
+      if [[ "$instance_status" -eq 2 ]]; then
+        report_protection_warning \
+          "deletion interrupted by SIG$signal_name; could not verify whether protection needs restoration"
+      fi
+    fi
+  fi
+  # The existing EXIT trap still releases the lifecycle lock.
+  exit "$exit_status"
 }
 
 create_instance() {
@@ -124,7 +209,13 @@ ensure_running() {
 
 require_no_command() {
   if [[ ${#command[@]} -ne 0 ]]; then
-    echo "devbox: '$action' does not accept a command" >&2
+    local option
+    case "$action" in
+      stop) option=--stop ;;
+      delete) option=--delete ;;
+      *) option="$action" ;;
+    esac
+    echo "devbox: '$option' does not accept a command" >&2
     exit 2
   fi
 }
@@ -266,7 +357,7 @@ resolve_guest_workdir() {
 }
 
 run_launcher() {
-  local initial_status guest_workdir
+  local initial_status
   guest_workdir="$(resolve_guest_workdir)" || return 1
   initial_status="$(lima_status)" || return 1
   ensure_running "$initial_status" || return 1
@@ -280,7 +371,26 @@ run_launcher() {
   release_lima_lock
   # The VM is already running under the lifecycle lock. Do not ask the shell
   # helper to start it again after unlocking: a concurrent --stop must win.
-  exec "$HERE/devbox-shell" --no-start --workdir "$guest_workdir" "${command[@]}"
+  exec "$HERE/devbox-shell" --no-start --workdir "$guest_workdir" -- \
+    "${command[@]}"
+}
+
+prepare_lifecycle_command() {
+  if [[ ${#command[@]} -gt 0 ]]; then
+    # Fail before resetting or stopping the VM if its post-action command
+    # cannot use the caller's current directory in the guest.
+    guest_workdir="$(resolve_guest_workdir)" || return 1
+  fi
+}
+
+run_lifecycle_command() {
+  if [[ ${#command[@]} -gt 0 ]]; then
+    release_lima_lock
+    # Keep the user's argv behind a second delimiter so the helper cannot
+    # mistake option-like commands (such as --workdir) for its own options.
+    exec "$HERE/devbox-shell" --no-start --workdir "$guest_workdir" -- \
+      "${command[@]}"
+  fi
 }
 
 if ! acquire_lima_lock; then
@@ -305,14 +415,15 @@ case "$action" in
     fi
     ;;
   reset)
-    require_no_command
+    prepare_lifecycle_command || exit 1
     require_existing_instance || exit 1
     echo "==> Factory-resetting Lima VM '$instance'"
     limactl factory-reset "$instance" --yes
     ensure_running
+    run_lifecycle_command
     ;;
   reprovision)
-    require_no_command
+    prepare_lifecycle_command || exit 1
     status="$(lima_status)" || exit 1
     if [[ -z "$status" ]]; then
       echo "devbox: Lima instance '$instance' does not exist; run 'devbox' to create it first" >&2
@@ -327,6 +438,49 @@ case "$action" in
     echo "==> Starting Lima VM '$instance' and rerunning provisioning"
     limactl start "$instance"
     warn_stale_provisioning true
+    run_lifecycle_command
+    ;;
+  delete)
+    require_no_command
+    status="$(lima_status)" || exit 1
+    if [[ -z "$status" ]]; then
+      echo "==> Lima VM '$instance' does not exist; nothing to delete"
+    else
+      protection_state="$(lima_protection_state)" || exit 1
+      delete_restore_protection="$protection_state"
+      trap 'handle_lifecycle_delete_signal INT' INT
+      trap 'handle_lifecycle_delete_signal TERM' TERM
+      trap 'handle_lifecycle_delete_signal HUP' HUP
+      trap 'handle_lifecycle_delete_signal QUIT' QUIT
+      trap 'handle_lifecycle_delete_signal PIPE' PIPE
+      echo "==> Deleting Lima VM '$instance' (including its protection)"
+      if [[ "$protection_state" == true ]]; then
+        if limactl unprotect -- "$instance"; then
+          :
+        else
+          limactl_status=$?
+          restore_lima_protection "unprotect failed" || true
+          trap - INT TERM HUP QUIT PIPE
+          delete_restore_protection=false
+          exit "$limactl_status"
+        fi
+      fi
+      if limactl delete --force -- "$instance"; then
+        :
+      else
+        limactl_status=$?
+        if [[ "$protection_state" == true ]]; then
+          restore_lima_protection "deletion failed" || true
+        else
+          printf 'devbox: could not delete Lima instance %q\n' "$instance" >&2 || true
+        fi
+        trap - INT TERM HUP QUIT PIPE
+        delete_restore_protection=false
+        exit "$limactl_status"
+      fi
+      trap - INT TERM HUP QUIT PIPE
+      delete_restore_protection=false
+    fi
     ;;
   run)
     run_launcher

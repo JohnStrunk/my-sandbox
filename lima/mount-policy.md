@@ -56,9 +56,9 @@ The seed is intentionally one-way: edits made later by the host's regular
 OpenCode process do not overwrite the L1's preferences, and L1 service
 registrations are not shared with that process. The separately mounted data
 directory remains the shared location for OpenCode sessions. The dedicated
-`~/.local/state/devbox-opencode` directory persists across `devbox --reset`
-and manual Lima recreation; remove that exact directory only when
-intentionally resetting the L1's persisted OpenCode preferences/history.
+`~/.local/state/devbox-opencode` directory persists across `devbox --reset`,
+`devbox --delete`, and manual Lima recreation; remove that exact directory only
+when intentionally resetting the L1's persisted OpenCode preferences/history.
 
 ## Validation notes
 
