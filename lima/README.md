@@ -160,12 +160,12 @@ without credentials, then starts the child with only its own credentials,
 `HOME`, and a minimal `PATH`; OpenCode's unrelated provider tokens are not
 inherited by that process.
 
-GitHub operations use the forwarded `gh` CLI and host `gh` authentication; the
-VM intentionally does not configure the legacy GitHub MCP proxy (see issue
-[#275](https://github.com/JohnStrunk/my-sandbox/issues/275)). OpenCode's one
-VM-local service loads the runtime config at startup and serves project
-sessions across the same-path `~/src` mount. If credentials change while the
-service is running, stop and restart the service from a `devbox` shell so it
+GitHub operations use the forwarded `gh` CLI and host `gh` authentication.
+This gh-only policy is recorded in
+[issue #275](https://github.com/JohnStrunk/my-sandbox/issues/275).
+OpenCode's one VM-local service loads the runtime config at startup and serves
+project sessions across the same-path `~/src` mount. If credentials change while
+the service is running, stop and restart the service from a `devbox` shell so it
 inherits the updated environment.
 
 The schema-drift test runs against the manifest-pinned VM binary and an isolated
@@ -431,11 +431,9 @@ adds a bidirectional file-visibility smoke on a disposable host data directory,
 but does not test SQLite. The host CodeBurn process could not be exercised
 from the guest, so its end-to-end session parsing remains unverified. Keep the
 session data mount unchanged and do not infer that concurrent host/VM SQLite
-writers are safe. The full template now provisions Semble
-and its VM-local model cache. GitHub MCP is intentionally not installed: the
-decision in #275 makes the `gh` CLI canonical. TUI session-switching UX and
-model-backed conversation resume remain to be validated in the later
-integration work.
+writers are safe. The full template now provisions Semble and its VM-local
+model cache. TUI session-switching UX and model-backed conversation resume
+remain to be validated in the later integration work.
 
 ## What is inside
 
