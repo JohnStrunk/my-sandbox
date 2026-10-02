@@ -131,7 +131,7 @@ repos:
         language: node
         # 2.2.1 fixes critical JSONata RCE advisories CVE-2026-77414/77415.
         additional_dependencies:
-          - jsonata@2.2.1
+          - jsonata@2.2.2
           - json5@2.2.3
         pass_filenames: false
         files: '^(\.pre-commit-config\.yaml|\.github/renovate\.json5|tests/fixtures/renovate/.*|scripts/test_renovate_transforms\.cjs)$'
