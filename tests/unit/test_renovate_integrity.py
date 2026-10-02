@@ -16,11 +16,6 @@ _CHECKSUM_GROUPS = {
     "ast-grep/ast-grep": "ast-grep release artifacts",
     "acli": "acli release artifacts",
 }
-_ACLI_PINNED_VERSION = "1.3.29-stable"
-_ACLI_PINNED_DIGESTS = {
-    "amd64": "8dcfc7bcf9dc788e7143e93d74445310094977ba1bad2513c6c613460851d34e",  # noqa: E501  # pragma: allowlist secret
-    "arm64": "cea39c4eb90c65d8d0cafc869a75fa3b6afaaf4573f8da650f4ae73801f8ec46",  # noqa: E501  # pragma: allowlist secret
-}
 
 
 def _config_object(config: str, marker: str) -> str:
@@ -379,7 +374,14 @@ def test_go_version_only_policy_keeps_timestamped_source(repo_root: Path):
 
 
 @pytest.mark.unit
-def test_acli_uses_scoped_timestamp_exception(repo_root: Path, tmp_path: Path):
+def test_acli_uses_scoped_timestamp_exception(repo_root: Path):
+    """Check both base and candidate states; CI verifies live artifact bytes.
+
+    The formula fixture is a snapshot for the initial Renovate transition.
+    When its version matches the manifest, compare both architecture digests
+    with that snapshot. The live check-only provenance verifier remains the
+    integrity gate for other versions and future updates.
+    """
     manifest = json.loads((repo_root / "lima" / "tool-versions.json").read_text())
     acli = manifest["tools"]["acli"]
 
@@ -411,28 +413,26 @@ def test_acli_uses_scoped_timestamp_exception(repo_root: Path, tmp_path: Path):
     ).read_text()
     version_match = re.search(r'^\s*version\s+"([^"]+)"', formula, re.MULTILINE)
     assert version_match
-    assert acli["version"] == _ACLI_PINNED_VERSION
     assert version_match.group(1) == "1.3.39-stable"
-    assert version_match.group(1) != acli["version"]
     assert {
         arch: artifact["version"] for arch, artifact in acli["artifacts"].items()
-    } == dict.fromkeys(("amd64", "arm64"), _ACLI_PINNED_VERSION)
-    assert {
-        arch: artifact["sha256"] for arch, artifact in acli["artifacts"].items()
-    } == _ACLI_PINNED_DIGESTS
+    } == dict.fromkeys(("amd64", "arm64"), acli["version"])
+    assert all(
+        re.fullmatch(r"[0-9a-f]{64}", artifact["sha256"])
+        for artifact in acli["artifacts"].values()
+    )
     assert {artifact["depName"] for artifact in acli["artifacts"].values()} == {
         "acli-amd64",
         "acli-arm64",
     }
 
-    expected_by_url = {}
     for arch in ("amd64", "arm64"):
         artifact = acli["artifacts"][arch]
         formula_artifact = _acli_formula_artifact(formula, arch)
         datasource = f"custom.acli-{arch}"
         assert formula_artifact["version"] == version_match.group(1)
-        assert formula_artifact["version"] != artifact["version"]
-        assert formula_artifact["digest"] != artifact["sha256"]
+        if artifact["version"] == formula_artifact["version"]:
+            assert artifact["sha256"] == formula_artifact["digest"]
         assert artifact["depName"] == f"acli-{arch}"
         assert artifact["datasource"] == datasource
         assert artifact["packageName"] == "acli"
@@ -451,16 +451,9 @@ def test_acli_uses_scoped_timestamp_exception(repo_root: Path, tmp_path: Path):
         assert f"{{artifacts.{arch}.version}}" in provenance_template
         provenance_url = _render_url(provenance_template, acli)
         assert provenance_url == (
-            f"https://acli.atlassian.com/linux/{_ACLI_PINNED_VERSION}/"
-            f"acli_{_ACLI_PINNED_VERSION}_linux_{arch}.tar.gz"
+            f"https://acli.atlassian.com/linux/{acli['version']}/"
+            f"acli_{acli['version']}_linux_{arch}.tar.gz"
         )
-        expected_by_url[provenance_url] = _ACLI_PINNED_DIGESTS[arch]
-
-    manifest_file = tmp_path / "tool-versions.json"
-    manifest_file.write_text(json.dumps({"tools": {"acli": acli}}, indent=2) + "\n")
-    assert (
-        verify_provenance(manifest_file, fetch=lambda url: expected_by_url[url]) == []
-    )
 
     assert '"minimumReleaseAge": "10 days"' in config
     acli_rule = _config_object(
