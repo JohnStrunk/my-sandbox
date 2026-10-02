@@ -1,3 +1,5 @@
+import errno
+import fcntl
 import getpass
 import hashlib
 import math
@@ -11,7 +13,7 @@ import sys
 import tempfile
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -530,6 +532,138 @@ def isolated_env(host_credentials: None, isolated_home: Path) -> dict[str, str]:
         env[xdg_var] = str(isolated_xdg / subdir)
 
     return env
+
+
+@pytest.fixture
+def shared_process_signal_test_lock() -> Iterator[None]:
+    """Bound cross-worktree interference in timing-sensitive signal tests.
+
+    Each sanitized test invocation has a private TMPDIR, so use a stable,
+    per-UID lock under a private directory in /tmp for the few tests that send
+    signals to subprocess groups. This serializes only those tests across
+    worktrees.
+    """
+    fd, lock_path = _open_shared_process_signal_test_lock()
+    locked = False
+    try:
+        _wait_for_shared_process_signal_test_lock(fd, lock_path)
+        locked = True
+
+        yield
+    finally:
+        if locked:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def _open_shared_process_signal_test_lock(
+    root: Path = Path("/tmp"),
+) -> tuple[int, Path]:
+    """Create/open the cross-worktree signal lock without following links."""
+    uid = os.getuid()
+    lock_directory = root / f"my-sandbox-process-signals-{uid}"
+    lock_path = lock_directory / "process-signals.lock"
+    try:
+        os.mkdir(lock_directory, 0o700)
+    except FileExistsError:
+        pass
+    except OSError as exc:
+        pytest.skip(
+            "infrastructure limitation: could not create process-signal lock "
+            f"directory {lock_directory}: {exc}"
+        )
+
+    try:
+        directory_fd = os.open(
+            lock_directory,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+        )
+    except OSError as exc:
+        pytest.skip(
+            "infrastructure limitation: could not safely open process-signal lock "
+            f"directory {lock_directory}: {exc}"
+        )
+
+    lock_fd = -1
+    try:
+        directory_stat = os.fstat(directory_fd)
+        if (
+            not stat.S_ISDIR(directory_stat.st_mode)
+            or directory_stat.st_uid != uid
+            or stat.S_IMODE(directory_stat.st_mode) & 0o077
+        ):
+            pytest.skip(
+                "infrastructure limitation: process-signal lock directory must be "
+                f"owned by uid {uid} and private: {lock_directory}"
+            )
+
+        try:
+            lock_fd = os.open(
+                "process-signals.lock",
+                os.O_CREAT | os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK,
+                0o600,
+                dir_fd=directory_fd,
+            )
+        except OSError as exc:
+            pytest.skip(
+                "infrastructure limitation: could not safely open process-signal "
+                f"test lock {lock_path}: {exc}"
+            )
+
+        file_stat = os.fstat(lock_fd)
+        if (
+            not stat.S_ISREG(file_stat.st_mode)
+            or file_stat.st_uid != uid
+            or file_stat.st_nlink != 1
+        ):
+            pytest.skip(
+                "infrastructure limitation: process-signal test lock must be a "
+                f"regular file owned by uid {uid} with one link: {lock_path}"
+            )
+        os.fchmod(lock_fd, 0o600)
+        result_fd = lock_fd
+        lock_fd = -1
+        return result_fd, lock_path
+    except OSError as exc:
+        pytest.skip(
+            "infrastructure limitation: could not secure process-signal test "
+            f"lock {lock_path}: {exc}"
+        )
+    finally:
+        os.close(directory_fd)
+        if lock_fd >= 0:
+            os.close(lock_fd)
+
+
+def _wait_for_shared_process_signal_test_lock(
+    fd: int,
+    lock_path: Path,
+    *,
+    timeout: float = 300,
+    try_lock: Callable[[int, int], None] = fcntl.flock,
+    monotonic: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> None:
+    """Wait for the shared lock, skipping when shared-guest contention is excessive."""
+    deadline = monotonic() + timeout
+    while True:
+        try:
+            try_lock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except BlockingIOError:
+            if monotonic() >= deadline:
+                pytest.skip(
+                    "infrastructure limitation: timed out waiting for process-signal "
+                    f"test lock {lock_path}"
+                )
+            sleep(0.05)
+        except OSError as exc:
+            if exc.errno not in {errno.ENOLCK, errno.EOPNOTSUPP, errno.ENOSYS}:
+                raise
+            pytest.skip(
+                "infrastructure limitation: process-signal test lock is unavailable "
+                f"on this filesystem: {exc}"
+            )
 
 
 @pytest.fixture(scope="session")

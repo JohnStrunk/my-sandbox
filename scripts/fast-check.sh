@@ -20,4 +20,4 @@ echo "==> Running pre-commit checks"
 "$TOP_DIR/.github/lint-all.sh"
 
 echo "==> Running unit tests"
-(cd "$TOP_DIR" && uv run --extra test pytest -m unit)
+"$TOP_DIR/scripts/run-unit-tests.sh"

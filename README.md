@@ -126,23 +126,33 @@ credential mounts.
 
 ```shell
 # Fast lint and unit-test iteration
-./scripts/sanitized-test.sh --guest-vm -- \
+./scripts/sanitized-test.sh --guest-vm --vm-lock -- \
   env UV_PROJECT_ENVIRONMENT="$UV_PROJECT_ENVIRONMENT" \
   PRE_COMMIT_HOME="$HOME/.cache/pre-commit" ./scripts/fast-check.sh
 
 # Tests against this provisioned VM, including the kind smoke test
-./scripts/sanitized-test.sh --guest-vm --require-vm -- \
+./scripts/sanitized-test.sh --guest-vm --vm-lock --require-vm -- \
   env UV_PROJECT_ENVIRONMENT="$UV_PROJECT_ENVIRONMENT" \
   uv run --extra test pytest -m "vm or e2e_kind"
 
 # Lima-in-Lima coverage (requires host nested KVM)
-./scripts/sanitized-test.sh --guest-vm --require-recursive-vm -- \
+./scripts/sanitized-test.sh --guest-vm --vm-lock --require-recursive-vm -- \
   env UV_PROJECT_ENVIRONMENT="$UV_PROJECT_ENVIRONMENT" \
   uv run --extra test pytest -m recursive
 ```
 
-Pytest markers are `unit`, `vm`, `recursive`, `e2e_kind`, `cold_bootstrap`, and
-`e2e_inference`. The inference tests call real provider APIs and are excluded
+The per-user lock serializes full test commands across worktrees. Full
+`fast-check` runs include signal/process-group regression tests that timed out
+when run concurrently, so use the lock shown above; targeted parallel-safe
+tests can still run concurrently. See
+[`docs/test-runtime.md`](docs/test-runtime.md) for measured baselines,
+resource-collection commands, and concurrency guidance.
+The lock waits up to 3600 seconds by default (configurable up to 86400 seconds).
+
+Pytest markers are `unit`, `unit_serial`, `vm`, `recursive`, `e2e_kind`,
+`cold_bootstrap`, and `e2e_inference`. `unit_serial` keeps process/signal
+regression tests out of the parallel-safe worker pool. The inference tests call
+real provider APIs and are excluded
 from routine validation; run them only when intentionally using provider
 credentials. A missing VM capability is reported as an infrastructure limit,
 not as a product-test failure. CI runs unit/pre-commit checks and the

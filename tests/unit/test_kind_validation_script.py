@@ -12,8 +12,21 @@ def test_kind_validation_script_runs_ten_create_delete_cycles(
     fake_bin.mkdir()
     log_path = tmp_path / "kind.log"
     kind = fake_bin / "kind"
-    kind.write_text('#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$KIND_LOG"\n')
+    kind.write_text(
+        "#!/usr/bin/env bash\n"
+        'printf \'%s\\n\' "$*" >> "$KIND_LOG"\n'
+        'if [[ "${FAIL_CREATE:-}" == 1 && "$1 $2" == \'create cluster\' ]]; then\n'
+        "  exit 1\n"
+        "fi\n"
+    )
     kind.chmod(0o755)
+    fake_date = fake_bin / "date"
+    fake_date.write_text(
+        "#!/bin/sh\n"
+        "if [ \"$1\" = '+%s' ]; then printf '1234567890\\n'; "
+        'else exec /usr/bin/date "$@"; fi\n'
+    )
+    fake_date.chmod(0o755)
     env = {
         "PATH": f"{fake_bin}:/usr/bin:/bin",
         "KIND_LOG": str(log_path),
@@ -38,6 +51,25 @@ def test_kind_validation_script_runs_ten_create_delete_cycles(
     delete_names = [line.split("--name ", 1)[1].split()[0] for line in deletes]
     assert create_names == delete_names
     assert "kind validation passed: 10 consecutive clusters" in result.stdout
+
+    failed_run = subprocess.run(
+        ["bash", str(repo_root / "lima/validate-kind.sh"), "1"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**env, "FAIL_CREATE": "1"},
+        timeout=10,
+    )
+
+    assert failed_run.returncode != 0
+    calls = log_path.read_text().splitlines()
+    creates = [line for line in calls if line.startswith("create cluster")]
+    deletes = [line for line in calls if line.startswith("delete cluster")]
+    all_create_names = [line.split("--name ", 1)[1].split()[0] for line in creates]
+    all_delete_names = [line.split("--name ", 1)[1].split()[0] for line in deletes]
+    assert all_create_names[:10] == all_delete_names[:10]
+    assert all_create_names[10] not in all_create_names[:10]
+    assert all_delete_names[10] == all_create_names[10]
 
 
 @pytest.mark.unit

@@ -3,6 +3,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+original_home="${HOME:-}"
+vm_lock_fd="${MY_SANDBOX_VM_TEST_LOCK_FD:-}"
+unset MY_SANDBOX_VM_TEST_LOCK_FD
 
 usage() {
   cat <<'EOF'
@@ -23,6 +26,10 @@ Options:
   --guest-vm          Run in the current guest with a scrubbed environment.
                       Same-UID mounted host files remain readable; use only
                       with trusted source (CI uses an empty-config guest).
+  --vm-lock           Serialize full test commands that share the devbox user;
+                      requires flock and Python 3.
+  --vm-lock-timeout SECONDS
+                      Maximum lock wait (0-86400 seconds; default: 3600).
   -h, --help          Show this help text.
 EOF
 }
@@ -32,6 +39,9 @@ require_vm=false
 require_recursive_vm=false
 guest_vm=false
 resource_cgroup_root="/sys/fs/cgroup"
+vm_lock_enabled=false
+vm_lock_timeout=3600
+vm_lock_timeout_explicit=false
 while (($# > 0)); do
   case "$1" in
     --resource-preflight)
@@ -50,6 +60,23 @@ while (($# > 0)); do
     --guest-vm)
       guest_vm=true
       shift
+      ;;
+    --vm-lock)
+      vm_lock_enabled=true
+      shift
+      ;;
+    --vm-lock-timeout)
+      if (($# < 2)) || [[ -z "$2" || "$2" == -* ]]; then
+        printf 'sanitized-test: --vm-lock-timeout requires whole seconds\n' >&2
+        exit 2
+      fi
+      if [[ ! "$2" =~ ^[0-9]{1,5}$ ]] || ((10#$2 > 86400)); then
+        printf 'sanitized-test: --vm-lock-timeout must be an integer from 0 to 86400\n' >&2
+        exit 2
+      fi
+      vm_lock_timeout=$((10#$2))
+      vm_lock_timeout_explicit=true
+      shift 2
       ;;
     --resource-cgroup-root)
       if (($# < 2)) || [[ -z "$2" || "$2" == -* ]]; then
@@ -84,7 +111,152 @@ if (($# == 0)); then
   exit 2
 fi
 
+if [[ "$vm_lock_timeout_explicit" == true && "$vm_lock_enabled" != true ]]; then
+  printf 'sanitized-test: --vm-lock-timeout requires --vm-lock\n' >&2
+  exit 2
+fi
+
 host_path="${PATH:-/usr/local/bin:/usr/bin:/bin}"
+
+# Acquire the shared-test lock before capability/resource preflights or
+# temporary-directory setup so another worktree waiting for a full test run
+# does not add work to the active suite. The lock lives outside the private
+# HOME/TMPDIR created below.
+if [[ "$vm_lock_enabled" == true ]]; then
+  if [[ "$original_home" != /* || "$original_home" == "/" || ! -d "$original_home" ]]; then
+    printf '%s\n' \
+      'sanitized-test: --vm-lock requires an existing absolute original HOME.' \
+      'sanitized-test: this is an infrastructure/runtime configuration failure, not a product test failure.' >&2
+    exit 125
+  fi
+  resolved_home="$(realpath -e -- "$original_home" 2>/dev/null || true)"
+  if [[ -z "$resolved_home" ]]; then
+    printf 'sanitized-test: could not resolve original HOME for shared-VM lock: %s\n' \
+      "$original_home" >&2
+    exit 125
+  fi
+  original_home="$resolved_home"
+  current_uid="$(id -u)"
+  directory="$original_home"
+  while [[ "$directory" != "/" ]]; do
+    directory_owner="$(stat -c %u -- "$directory" 2>/dev/null || true)"
+    directory_mode="$(stat -c %a -- "$directory" 2>/dev/null || true)"
+    if [[ -z "$directory_owner" || -z "$directory_mode" ]]; then
+      printf 'sanitized-test: could not inspect original HOME path component %s\n' \
+        "$directory" >&2
+      exit 125
+    fi
+    directory_mode_value=$((8#$directory_mode))
+    if [[ "$directory" == "$original_home" ]]; then
+      if [[ "$directory_owner" != "$current_uid" ]] \
+        || (( (directory_mode_value & 0022) != 0 )); then
+        printf 'sanitized-test: original HOME must be owned by uid %s and not group/world-writable: %s\n' \
+          "$current_uid" "$directory" >&2
+        exit 125
+      fi
+    elif (( (directory_mode_value & 0022) != 0 )) \
+      && (( (directory_mode_value & 01000) == 0 )); then
+      printf 'sanitized-test: original HOME ancestor is group/world-writable without the sticky bit: %s\n' \
+        "$directory" >&2
+      exit 125
+    fi
+    directory="${directory%/*}"
+    [[ -n "$directory" ]] || directory="/"
+  done
+  if ! command -v flock >/dev/null 2>&1; then
+    printf '%s\n' \
+      'sanitized-test: flock is required for --vm-lock.' \
+      'sanitized-test: this is an infrastructure/runtime configuration failure, not a product test failure.' >&2
+    exit 125
+  fi
+
+  vm_lock_dir="$original_home/.cache"
+  vm_lock_file="$vm_lock_dir/my-sandbox-vm-tests.lock"
+  if ! (umask 077; mkdir -p -- "$vm_lock_dir"); then
+    printf 'sanitized-test: could not create shared-VM lock directory %s\n' \
+      "$vm_lock_dir" >&2
+    exit 125
+  fi
+  if [[ -L "$vm_lock_dir" || ! -d "$vm_lock_dir" ]]; then
+    printf 'sanitized-test: shared-VM lock directory must be a real directory: %s\n' \
+      "$vm_lock_dir" >&2
+    exit 125
+  fi
+  lock_dir_owner="$(stat -c %u -- "$vm_lock_dir" 2>/dev/null || true)"
+  lock_dir_mode="$(stat -c %a -- "$vm_lock_dir" 2>/dev/null || true)"
+  if [[ "$lock_dir_owner" != "$current_uid" || -z "$lock_dir_mode" ]] \
+    || (( (8#$lock_dir_mode & 0022) != 0 )); then
+    printf 'sanitized-test: shared-VM lock directory must be owned by uid %s and not group/world-writable: %s\n' \
+      "$current_uid" "$vm_lock_dir" >&2
+    exit 125
+  fi
+  if [[ -L "$vm_lock_file" || ( -e "$vm_lock_file" && ! -f "$vm_lock_file" ) ]]; then
+    printf 'sanitized-test: shared-VM lock path must be a regular file, not a symlink: %s\n' \
+      "$vm_lock_file" >&2
+    exit 125
+  fi
+
+  if [[ -z "$vm_lock_fd" ]]; then
+    if ! command -v python3 >/dev/null 2>&1; then
+      printf '%s\n' \
+        'sanitized-test: python3 is required to open the shared-VM test lock safely.' \
+        'sanitized-test: this is an infrastructure/runtime configuration failure, not a product test failure.' >&2
+      exit 125
+    fi
+    lock_reexec_args=()
+    if [[ "$resource_preflight_enabled" == true ]]; then
+      lock_reexec_args+=(--resource-preflight --resource-cgroup-root "$resource_cgroup_root")
+    fi
+    if [[ "$require_recursive_vm" == true ]]; then
+      lock_reexec_args+=(--require-recursive-vm)
+    elif [[ "$require_vm" == true ]]; then
+      lock_reexec_args+=(--require-vm)
+    fi
+    if [[ "$guest_vm" == true ]]; then
+      lock_reexec_args+=(--guest-vm)
+    fi
+    lock_reexec_args+=(--vm-lock --vm-lock-timeout "$vm_lock_timeout" --)
+    lock_reexec_args+=("$@")
+    exec python3 -I "$SCRIPT_DIR/open_vm_test_lock.py" \
+      --lock-directory "$vm_lock_dir" -- \
+      "$SCRIPT_DIR/sanitized-test.sh" "${lock_reexec_args[@]}"
+  fi
+
+  if [[ ! "$vm_lock_fd" =~ ^([3-9]|[1-9][0-9]+)$ ]]; then
+    printf 'sanitized-test: invalid inherited shared-VM lock descriptor: %s\n' \
+      "$vm_lock_fd" >&2
+    exit 125
+  fi
+  lock_fd_path="/proc/self/fd/$vm_lock_fd"
+  lock_fd_target="$(readlink -f -- "$lock_fd_path" 2>/dev/null || true)"
+  lock_file_owner="$(stat -Lc %u -- "$lock_fd_path" 2>/dev/null || true)"
+  if [[ ! -f "$lock_fd_path" || "$lock_fd_target" != "$vm_lock_file" \
+    || "$lock_file_owner" != "$current_uid" ]]; then
+    printf 'sanitized-test: inherited shared-VM lock descriptor is not the expected owned lock file: %s\n' \
+      "$vm_lock_file" >&2
+    exit 125
+  fi
+
+  printf 'sanitized-test: waiting for shared-VM test lock %s (timeout: %ss).\n' \
+    "$vm_lock_file" "$vm_lock_timeout" >&2
+  if flock --exclusive --wait "$vm_lock_timeout" \
+    --conflict-exit-code 124 "$vm_lock_fd"; then
+    printf 'sanitized-test: acquired shared-VM test lock.\n' >&2
+  else
+    lock_status=$?
+    if [[ "$lock_status" -eq 124 ]]; then
+      printf 'sanitized-test: timed out after %ss waiting for shared-VM test lock %s.\n' \
+        "$vm_lock_timeout" "$vm_lock_file" >&2
+    else
+      printf 'sanitized-test: could not acquire shared-VM test lock %s (flock status %s).\n' \
+        "$vm_lock_file" "$lock_status" >&2
+    fi
+    printf '%s\n' \
+      'sanitized-test: this is an infrastructure/runtime configuration failure, not a product test failure.' >&2
+    exit 125
+  fi
+fi
+
 if [[ "$require_vm" == true ]]; then
   if ! command -v python3 >/dev/null 2>&1; then
     printf '%s\n' \
@@ -96,8 +268,18 @@ if [[ "$require_vm" == true ]]; then
   if [[ "$require_recursive_vm" == true ]]; then
     vm_preflight_args+=(--recursive)
   fi
-  if env -i "PATH=$host_path" python3 -I \
-    "$SCRIPT_DIR/vm_preflight.py" "${vm_preflight_args[@]}"; then
+  vm_preflight_command=(
+    env -i "PATH=$host_path" python3 -I
+    "$SCRIPT_DIR/vm_preflight.py" "${vm_preflight_args[@]}"
+  )
+  if [[ "$vm_lock_enabled" == true ]]; then
+    if "${vm_preflight_command[@]}" {vm_lock_fd}>&-; then
+      :
+    else
+      preflight_status=$?
+      exit "$preflight_status"
+    fi
+  elif "${vm_preflight_command[@]}"; then
     :
   else
     preflight_status=$?
@@ -187,8 +369,14 @@ resource_preflight() {
       'sanitized-test: this is an infrastructure/runtime configuration failure, not a product test failure.' >&2
     return 125
   fi
-  env -i -- "${safe_env[@]}" python3 -I "$SCRIPT_DIR/resource_preflight.py" \
-    --cgroup-root "$resource_cgroup_root" --fail-on-constrained
+  if [[ "$vm_lock_enabled" == true ]]; then
+    env -i -- "${safe_env[@]}" python3 -I "$SCRIPT_DIR/resource_preflight.py" \
+      --cgroup-root "$resource_cgroup_root" --fail-on-constrained \
+      {vm_lock_fd}>&-
+  else
+    env -i -- "${safe_env[@]}" python3 -I "$SCRIPT_DIR/resource_preflight.py" \
+      --cgroup-root "$resource_cgroup_root" --fail-on-constrained
+  fi
 }
 
 if [[ "$resource_preflight_enabled" == true ]]; then
@@ -266,7 +454,13 @@ trap 'forward_signal_to_command HUP' HUP
 
 set +e
 set -m
-env -i -- "${safe_env[@]}" "$@" &
+if [[ "$vm_lock_enabled" == true ]]; then
+  # Keep the lock held only by this wrapper, not by test descendants that may
+  # outlive the command process.
+  env -i -- "${safe_env[@]}" "$@" {vm_lock_fd}>&- &
+else
+  env -i -- "${safe_env[@]}" "$@" &
+fi
 command_pid=$!
 command_status=0
 wait "$command_pid" || command_status=$?

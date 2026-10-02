@@ -17,9 +17,15 @@
 
 ## Tests run
 
-<!-- Exact commands and their results, with pass/skip counts. For example:
-     ./scripts/fast-check.sh
-     uv run --extra test pytest -m "not e2e_inference and not cold_bootstrap and not vm and not recursive and not e2e_kind"
+<!-- Exact commands and their results, with pass/skip counts. From a local VM,
+     use the sanitizer and shared-worktree lock, for example:
+     ./scripts/sanitized-test.sh --guest-vm --vm-lock --resource-preflight -- \
+       env UV_PROJECT_ENVIRONMENT="$UV_PROJECT_ENVIRONMENT" \
+       PRE_COMMIT_HOME="$HOME/.cache/pre-commit" ./scripts/fast-check.sh
+     # Unit tests only (serial signal tests, then parallel-safe tests):
+     ./scripts/sanitized-test.sh --guest-vm --vm-lock -- \
+       env UV_PROJECT_ENVIRONMENT="$UV_PROJECT_ENVIRONMENT" \
+       ./scripts/run-unit-tests.sh
      Paste real output instead of asserting success. -->
 
 ## Known limitations

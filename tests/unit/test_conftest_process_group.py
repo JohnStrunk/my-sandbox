@@ -5,7 +5,10 @@ child Podman/buildah builds cannot leak past the timeout, while normal runs
 keep their exact output and exit-status semantics.
 """
 
+import errno
+import os
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -14,11 +17,67 @@ from pathlib import Path
 import pytest
 
 from tests.conftest import (
+    _open_shared_process_signal_test_lock,
     _terminate_process_group,
+    _wait_for_shared_process_signal_test_lock,
     _wait_pid_gone,
     run_bash_script,
     run_in_process_group,
 )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("entry_type", ["symlink", "hardlink"])
+def test_shared_process_signal_lock_skips_unsafe_entries(
+    tmp_path: Path, entry_type: str
+) -> None:
+    lock_directory = tmp_path / f"my-sandbox-process-signals-{os.getuid()}"
+    lock_directory.mkdir(mode=0o700)
+    target = tmp_path / "unrelated-file"
+    target.write_text("preserve this content")
+    target.chmod(0o644)
+    lock_path = lock_directory / "process-signals.lock"
+    if entry_type == "symlink":
+        lock_path.symlink_to(target)
+    else:
+        os.link(target, lock_path)
+
+    with pytest.raises(pytest.skip.Exception, match="infrastructure limitation"):
+        _open_shared_process_signal_test_lock(tmp_path)
+
+    assert target.read_text() == "preserve this content"
+    assert stat.S_IMODE(target.stat().st_mode) == 0o644
+
+
+@pytest.mark.unit
+def test_shared_process_signal_lock_timeout_is_infrastructure_skip() -> None:
+    times = iter((0.0, 1.0))
+
+    def lock_is_held(_fd: int, _operation: int) -> None:
+        raise BlockingIOError
+
+    with pytest.raises(pytest.skip.Exception, match="infrastructure limitation"):
+        _wait_for_shared_process_signal_test_lock(
+            0,
+            Path("/tmp/test-process-signal.lock"),
+            timeout=1,
+            try_lock=lock_is_held,
+            monotonic=lambda: next(times),
+            sleep=lambda _seconds: None,
+        )
+
+
+@pytest.mark.unit
+def test_shared_process_signal_lock_unavailable_is_infrastructure_skip() -> None:
+    def lock_unavailable(_fd: int, _operation: int) -> None:
+        raise OSError(errno.ENOLCK, "locking is unavailable")
+
+    with pytest.raises(pytest.skip.Exception, match="lock is unavailable"):
+        _wait_for_shared_process_signal_test_lock(
+            0,
+            Path("/tmp/test-process-signal.lock"),
+            try_lock=lock_unavailable,
+        )
 
 
 @pytest.mark.unit
@@ -106,8 +165,11 @@ def test_terminate_process_group_clean_result():
 
 
 @pytest.mark.unit
+@pytest.mark.unit_serial
 def test_sigterm_handler_kills_tracked_session_groups(
-    repo_root: Path, tmp_path: Path
+    repo_root: Path,
+    tmp_path: Path,
+    shared_process_signal_test_lock: None,
 ) -> None:
     """The suite's SIGTERM handler must kill builds in their own sessions.
 
