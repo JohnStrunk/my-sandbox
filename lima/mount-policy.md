@@ -68,15 +68,54 @@ when intentionally resetting the L1's persisted OpenCode preferences/history.
 - The provisioned-VM test reads a KB sentinel through the canonical guest
   `~/kb` path, in addition to checking the live mount and absolute worktree
   alias. A missing or unreadable KB mount is a readiness failure.
-- The fresh-VM CI tier checks that a sentinel in the host's disposable
+- The fresh-VM CI `vm` tier checks that a sentinel in the host's disposable
   OpenCode data directory is readable in L1 and that an L1 write is visible
-  back on the host. Before the VM test suite, it runs bounded concurrent
-  SQLite writers on the host and fresh L1 against a uniquely named, test-only
-  WAL database in that disposable directory. L1 checks the mounted database
-  first; CI then stops L1, snapshots the database and optional WAL into a
-  private host-only directory, and checks exact rows plus
-  `PRAGMA integrity_check` from both sides. The probe never touches production
-  session data.
+  back on the host. Before the VM test suite, it runs bounded host/L1 SQLite
+  contention against a uniquely named, test-only WAL database in that
+  disposable directory. On a passing contention check, the runner stops L1,
+  snapshots the database and optional WAL into a private host-only directory,
+  and checks exact rows plus `PRAGMA integrity_check` from both sides. The probe
+  never touches production session data.
+- The 2026-10-02 outer-host run with default 9p failed because the host held
+  `BEGIN IMMEDIATE` while L1's competing `BEGIN IMMEDIATE` succeeded. The helper
+  rolled back that unexpected L1 transaction before any additional writes. No
+  production data was used, and the exact lock-versus-WAL/SHM mechanism remains
+  unknown. Concurrent host/L1 WAL writers must not be treated as safe or
+  validated on this 9p stack; the assertion remains enabled. GitHub's VM tier
+  was skipped because `/dev/kvm` was unavailable, and CI has no physical-host
+  integration job for this boundary.
+- To opt in to the #287 disposable virtiofs SQLite probe, run the command from
+  the physical/outer Linux host with Lima/QEMU. It runs #287's SQLite probe
+  before the VM tests; it is not #268's full mixed-write benchmark. Running it
+  inside the devbox L1 starts a nested L2 and tests a nested boundary instead
+  of the physical-host-to-L1 filesystem boundary:
+
+  ```shell
+  DEVBOX_VM_TEST_MOUNT_TYPE=virtiofs scripts/run-vm-ci.sh vm
+  ```
+
+  An optional sanitized-wrapper form also preserves the non-secret control:
+
+  ```shell
+  DEVBOX_VM_TEST_MOUNT_TYPE=virtiofs \
+    scripts/sanitized-test.sh -- scripts/run-vm-ci.sh vm
+  ```
+
+  The override applies only to the `vm` tier. `run-vm-ci.sh` validates it and
+  unsets it before child/guest commands. Linux/QEMU virtiofs requires the Rust
+  `virtiofsd`; QEMU-packaged `qemu-virtiofsd` is not sufficient. Startup failure
+  is fatal and never falls back to 9p. The override is passed only to the first
+  Lima start that creates the temporary instance, and that create-time mount
+  choice persists through the SQLite probe's stop/restart. When unset, the
+  template's 9p default is used without a runtime mount-type assertion (the
+  template test pins 9p); a set-empty value is rejected. Only exact `9p` and
+  `virtiofs` values are accepted, and the `recursive` tier rejects any set
+  override. For explicit overrides, runner output logs the requested type at
+  creation, then records requested and effective `findmnt` FSTYPE for L1's
+  `~/.local/share/opencode` after first start and stop/restart; any mismatch
+  fails the run. This does not change the template, normal `devbox` launcher,
+  or CI workflow default. Issue #287 remains open/blocked until a successful
+  virtiofs run or a policy decision resolves this question.
 - The recursive test mounts only a read-only OpenCode executable into each
   disposable L2. It starts two L2 VMs concurrently, starts a managed OpenCode
   service in each, checks distinct and stable registrations over a 15-second
@@ -84,9 +123,11 @@ when intentionally resetting the L1's persisted OpenCode preferences/history.
   rather than a shared host/L1 mount.
 - The shared session-data mount is retained for host visibility and CodeBurn.
   Guest-to-guest SQLite and session visibility have prior coverage (#269).
-  John manually reported that physical-host CodeBurn displayed the current L1
-  session, confirming basic session visibility.
-  CI exercises only disposable cross-boundary SQLite concurrency: it does not
-  establish production database integrity, automate CodeBurn session parsing,
-  or validate other mount types. Do not generalize this probe to production
-  session data or other filesystems/mount configurations.
+  John's manual CodeBurn observation was that a completed L1 session appeared
+  on the physical host. This confirms basic completed-session visibility only;
+  it was not concurrent-read testing.
+  When the VM tier runs, CI exercises only disposable cross-boundary SQLite
+  concurrency: it does not establish production database integrity, automate
+  CodeBurn session parsing, or validate other mount types. Do not generalize
+  this probe to production session data or other filesystems/mount
+  configurations.
