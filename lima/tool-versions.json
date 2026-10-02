@@ -41,7 +41,7 @@
       }
     },
     "node": {
-      "version": "22.23.2",
+      "version": "24.21.0",
       "datasource": "node-version",
       "depName": "node",
       "integrity": "version-only",
