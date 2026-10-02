@@ -4,6 +4,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 original_home="${HOME:-}"
+test_mount_type_is_set="${DEVBOX_VM_TEST_MOUNT_TYPE+x}"
+test_mount_type="${DEVBOX_VM_TEST_MOUNT_TYPE-}"
 vm_lock_fd="${MY_SANDBOX_VM_TEST_LOCK_FD:-}"
 unset MY_SANDBOX_VM_TEST_LOCK_FD
 
@@ -355,6 +357,11 @@ for name in LANG LC_ALL LC_CTYPE TERM CI DEVBOX_VM_START_TIMEOUT \
     safe_env+=("$name=${!name}")
   fi
 done
+# This non-secret runner control must preserve set-empty so run-vm-ci can
+# reject it instead of mistaking it for an unset request.
+if [[ "$test_mount_type_is_set" == x ]]; then
+  safe_env+=("DEVBOX_VM_TEST_MOUNT_TYPE=$test_mount_type")
+fi
 
 resource_preflight() {
   if [[ ! -r "$SCRIPT_DIR/resource_preflight.py" ]]; then

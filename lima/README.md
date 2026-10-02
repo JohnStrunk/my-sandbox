@@ -432,11 +432,47 @@ changes the Lima instance name but does not namespace the persistent state
 directory; do not run multiple L1 instances concurrently from the same host
 home.
 
-The template remains on 9p because Lima's `virtiofsd` exited before guest
-startup during the direct host-to-VM attempt in this environment. The #268
-benchmark recommends virtiofs for the full Linux/QEMU template after a direct
-host-to-VM mixed-write check passes. On a host where virtiofsd starts, switch
-`mountType` to `virtiofs` only after running that check; otherwise keep 9p.
+The production/default template remains on 9p because Lima's Rust `virtiofsd`
+exited before guest startup during the direct host-to-VM attempt in this
+environment. The #268 benchmark recommends virtiofs for the full Linux/QEMU
+template after a direct host-to-VM mixed-write check passes. The command below
+runs the #287 disposable SQLite probe with an opt-in mount type; it is not
+the full mixed-write benchmark from #268.
+
+Run it on the physical/outer Linux host with Lima/QEMU. Do not run it inside
+the devbox L1, where it starts a nested L2 and tests a nested boundary instead
+of the physical-host-to-L1 filesystem boundary. Use either invocation:
+
+```shell
+DEVBOX_VM_TEST_MOUNT_TYPE=virtiofs scripts/run-vm-ci.sh vm
+```
+
+or an optional sanitized-wrapper invocation:
+
+```shell
+DEVBOX_VM_TEST_MOUNT_TYPE=virtiofs \
+  scripts/sanitized-test.sh -- scripts/run-vm-ci.sh vm
+```
+
+This runner-only override applies to the disposable `vm` tier, not the normal
+`devbox` launcher. Linux/QEMU virtiofs requires the Rust `virtiofsd`; the
+QEMU-packaged `qemu-virtiofsd` is not sufficient. Startup failure is fatal and
+never falls back to 9p. `run-vm-ci.sh` validates this non-secret runner control
+and unsets it before child/guest commands. The sanitizer preserves it when
+wrapping the runner, including a set-empty value.
+
+The override is passed only to the first `limactl start`, when the disposable
+instance is created; that create-time mount choice persists when the SQLite
+probe stops and restarts the same instance. With the variable unset, the
+temporary VM uses the template's 9p default and the runner does not assert a
+type (the template test pins 9p). A set-empty value is rejected; only exact
+`9p` and `virtiofs` values are accepted, and the `recursive` tier rejects any
+set override. For an explicit override, runner output logs the requested type
+at VM creation, then records both `requested` and `effective` types after the
+first start and after the probe's stop/restart. It queries `findmnt` for the
+L1's `~/.local/share/opencode` filesystem type and fails unless it exactly
+matches the request. None of this changes `lima/devbox.yaml`, the
+production/default mount type, or the CI workflow default.
 
 The guest home directory itself is VM-local (Lima's default
 `/home/<user>.guest`); `provision-user.sh` symlinks the shared paths into
@@ -489,18 +525,29 @@ service-registration replacement errors. No production session data was used.
 
 This is guest-to-guest evidence only; it does **not** prove host-to-VM
 filesystem coherency for OpenCode's production SQLite data. The issue #287
-fresh-VM CI test runs the bounded SQLite probe before the VM suite, alongside a
+fresh-VM `vm` tier runs a bounded SQLite probe before the VM suite, alongside a
 bidirectional file-visibility smoke. It uses a uniquely named test-only WAL
-database in the disposable host data directory. L1 checks the mounted database
-first; CI stops L1, copies the database and optional WAL into a private
+database in the disposable host data directory. On a passing contention check,
+the runner stops L1, copies the database and optional WAL into a private
 host-only snapshot, and checks exact rows plus `PRAGMA integrity_check` from
-both sides. This exercises disposable cross-boundary SQLite concurrency only;
-it does not establish production database integrity, verify CodeBurn's
-end-to-end session parsing, or validate other mount types. John manually
-reported that CodeBurn running on the physical host displayed the current L1
-session, confirming basic manual session visibility. CI does not launch
-CodeBurn or automate session parsing, and it uses only disposable data. Keep
-the session data mount unchanged and do not generalize the probe to production
+both sides.
+
+The 2026-10-02 outer-host run with the default 9p mount failed because the host
+held `BEGIN IMMEDIATE` while L1's competing `BEGIN IMMEDIATE` succeeded. The
+helper rolled back that unexpected L1 transaction before any additional writes.
+No production data was used, and the exact lock-versus-WAL/SHM mechanism remains
+unknown. Concurrent host/L1 WAL writers must not be treated as safe or
+validated on this 9p stack; the SQLite assertion remains enabled. GitHub's VM
+tier was skipped because `/dev/kvm` was unavailable, and CI has no physical-host
+integration job for this boundary.
+
+John's manual CodeBurn observation was that a completed L1 session appeared in
+CodeBurn on the physical host. That confirms basic completed-session
+visibility only; it was not concurrent-read testing, does not automate
+CodeBurn's session parsing, and does not prove production SQLite integrity.
+Issue #287 remains open/blocked until a successful opt-in virtiofs run or an
+explicit policy decision resolves the mount question. Keep the session-data
+mount unchanged and do not generalize these disposable checks to production
 sessions or other filesystems/mount configurations. The full template now
 provisions Semble and its VM-local model cache. TUI session-switching UX and
 model-backed conversation resume remain to be validated in the later

@@ -21,6 +21,51 @@ case "$tier" in
     ;;
 esac
 
+mount_type_is_set="${DEVBOX_VM_TEST_MOUNT_TYPE+x}"
+requested_mount_type="${DEVBOX_VM_TEST_MOUNT_TYPE-}"
+mount_type_args=()
+if [[ "$mount_type_is_set" == x ]]; then
+  if [[ "$tier" != vm ]]; then
+    printf 'run-vm-ci: DEVBOX_VM_TEST_MOUNT_TYPE is only valid for the vm tier\n' >&2
+    exit 2
+  fi
+  case "$requested_mount_type" in
+    9p | virtiofs)
+      mount_type_args=(--mount-type "$requested_mount_type")
+      ;;
+    *)
+      printf 'run-vm-ci: DEVBOX_VM_TEST_MOUNT_TYPE must be exactly 9p or virtiofs\n' >&2
+      exit 2
+      ;;
+  esac
+fi
+# The validated value is now represented only as an argv pair for VM creation;
+# do not pass the runner-only control through to later host or guest commands.
+unset DEVBOX_VM_TEST_MOUNT_TYPE
+
+# Lima's CLI request is not proof of the mounted filesystem; verify the guest.
+verify_requested_mount_type() {
+  local checkpoint="$1" effective_mount_type
+  if effective_mount_type="$(
+    # shellcheck disable=SC2016 # HOME must expand inside the guest shell.
+    limactl shell --workdir /workspace/src/my-sandbox devbox \
+      bash -c 'findmnt -rn -T "$HOME/.local/share/opencode" -o FSTYPE'
+  )"; then
+    printf 'run-vm-ci: OpenCode data mount (%s): requested=%s effective=%s\n' \
+      "$checkpoint" "$requested_mount_type" "$effective_mount_type" >&2
+  else
+    printf 'run-vm-ci: OpenCode data mount (%s): requested=%s effective=unavailable (findmnt failed)\n' \
+      "$checkpoint" "$requested_mount_type" >&2
+    return 1
+  fi
+
+  if [[ "$effective_mount_type" != "$requested_mount_type" ]]; then
+    printf 'run-vm-ci: OpenCode data mount type mismatch (%s): requested=%s effective=%s\n' \
+      "$checkpoint" "$requested_mount_type" "$effective_mount_type" >&2
+    return 1
+  fi
+}
+
 test_root="$(mktemp -d "$runner_temp/my-sandbox-vm-test.XXXXXX")"
 host_home="$test_root/home"
 lima_home="$test_root/lima"
@@ -133,6 +178,11 @@ if [[ "$tier" == vm ]]; then
   fi
 fi
 
+if [[ "$mount_type_is_set" == x ]]; then
+  printf 'run-vm-ci: requested OpenCode data mount type=%s for disposable VM creation\n' \
+    "$requested_mount_type" >&2
+fi
+
 limactl start \
   --yes \
   --name devbox \
@@ -144,7 +194,12 @@ limactl start \
   --param KbPath=/workspace/kb \
   --param GitUserName=CI \
   --param GitUserEmail=ci-test@example.invalid \
+  "${mount_type_args[@]}" \
   "$repo_root/lima/devbox.yaml"
+
+if [[ "$mount_type_is_set" == x ]]; then
+  verify_requested_mount_type "first start"
+fi
 
 if [[ "$tier" == vm ]]; then
   # Run the host coordinator from the protected temp-root copy before any guest
@@ -174,6 +229,9 @@ if [[ "$tier" == vm ]]; then
   # The SQLite probe stopped this disposable instance; restart the existing
   # instance before entering the ordinary VM test tier.
   limactl start --yes --timeout 60m devbox
+  if [[ "$mount_type_is_set" == x ]]; then
+    verify_requested_mount_type "SQLite probe stop/restart"
+  fi
 fi
 
 # Run the test wrapper directly in the guest. The host environment is not

@@ -128,6 +128,42 @@ def test_wrapper_passes_only_vm_timeout_tuning(repo_root: Path) -> None:
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize(
+    "mount_type",
+    ["9p", "virtiofs", "", None],
+    ids=["9p", "virtiofs", "set-empty", "unset"],
+)
+def test_wrapper_preserves_mount_type_runner_control(
+    repo_root: Path, mount_type: str | None
+) -> None:
+    env = os.environ.copy()
+    if mount_type is None:
+        env.pop("DEVBOX_VM_TEST_MOUNT_TYPE", None)
+    else:
+        env["DEVBOX_VM_TEST_MOUNT_TYPE"] = mount_type
+
+    result = _run_wrapper(
+        repo_root,
+        [
+            "--",
+            sys.executable,
+            "-c",
+            (
+                "import json, os; print(json.dumps({"
+                "'is_set': 'DEVBOX_VM_TEST_MOUNT_TYPE' in os.environ, "
+                "'value': os.environ.get('DEVBOX_VM_TEST_MOUNT_TYPE')}))"
+            ),
+        ],
+        env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    child_env = json.loads(result.stdout)
+    assert child_env["is_set"] is (mount_type is not None)
+    assert child_env["value"] == mount_type
+
+
+@pytest.mark.unit
 def test_wrapper_rejects_retired_podman_options(repo_root: Path) -> None:
     env = os.environ.copy()
 
