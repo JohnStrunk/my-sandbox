@@ -41,7 +41,7 @@
       }
     },
     "node": {
-      "version": "22.23.1",
+      "version": "22.23.2",
       "datasource": "node-version",
       "depName": "node",
       "integrity": "version-only",
@@ -99,7 +99,7 @@
       }
     },
     "markdownlint_cli2": {
-      "version": "0.23.2",
+      "version": "0.23.3",
       "datasource": "npm",
       "depName": "markdownlint-cli2",
       "integrity": "version-only",
@@ -401,7 +401,7 @@
       }
     },
     "renovatebot_hooks": {
-      "version": "44.94.0",
+      "version": "44.107.0",
       "datasource": "github-tags",
       "depName": "renovatebot/pre-commit-hooks",
       "integrity": "version-only",
