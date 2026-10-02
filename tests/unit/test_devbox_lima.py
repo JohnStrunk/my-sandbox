@@ -36,6 +36,11 @@ def _install_lima_shim(
     limactl.write_text(
         """#!/usr/bin/env bash
 set -euo pipefail
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+trap 'exit 131' QUIT
+trap 'exit 141' PIPE
 python3 - "$MOCK_LIMACTL_CALLS" "$@" <<'PY'
 import json
 import sys
@@ -911,6 +916,7 @@ def test_delete_stops_after_unprotect_failure(
 
 
 @pytest.mark.unit
+@pytest.mark.unit_serial
 @pytest.mark.parametrize(
     "sig",
     [signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT, signal.SIGPIPE],
@@ -921,6 +927,7 @@ def test_signal_during_delete_restores_protection_and_returns_signal_status(
     isolated_env: dict[str, str],
     project_dir: Path,
     tmp_path: Path,
+    shared_process_signal_test_lock: None,
     sig: signal.Signals,
 ):
     instance = "configured-devbox"
@@ -946,11 +953,13 @@ def test_signal_during_delete_restores_protection_and_returns_signal_status(
 
 
 @pytest.mark.unit
+@pytest.mark.unit_serial
 def test_signal_after_instance_is_deleted_does_not_attempt_protection_rollback(
     devbox_path: Path,
     isolated_env: dict[str, str],
     project_dir: Path,
     tmp_path: Path,
+    shared_process_signal_test_lock: None,
 ):
     instance = "configured-devbox"
     isolated_env["DEVBOX_LIMA_INSTANCE"] = instance
@@ -976,11 +985,13 @@ def test_signal_after_instance_is_deleted_does_not_attempt_protection_rollback(
 
 
 @pytest.mark.unit
+@pytest.mark.unit_serial
 def test_signal_delete_rollback_failure_warns_but_returns_signal_status(
     devbox_path: Path,
     isolated_env: dict[str, str],
     project_dir: Path,
     tmp_path: Path,
+    shared_process_signal_test_lock: None,
 ):
     instance = "configured-devbox"
     isolated_env["DEVBOX_LIMA_INSTANCE"] = instance

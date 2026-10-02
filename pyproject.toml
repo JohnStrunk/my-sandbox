@@ -10,6 +10,7 @@ dependencies = []
 test = [
     "pytest==9.1.1",
     "pytest-mock==3.15.1",
+    "pytest-xdist==3.8.0",
     "pyyaml==6.0.3",
     "requests==2.34.2",
     "ruff==0.16.8",
@@ -26,6 +27,7 @@ markers = [
     "e2e_kind: End-to-end kind cluster tests inside a provisioned Lima VM",
     "cold_bootstrap: Cold-cache pre-commit bootstrap validation (path-gated and scheduled in CI)",
     "e2e_inference: End-to-end LLM inference tests for API providers",
+    "unit_serial: Timing-sensitive unit tests excluded from the parallel-safe worker pool",
 ]
 
 [tool.pyright]

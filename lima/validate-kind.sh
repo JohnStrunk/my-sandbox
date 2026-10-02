@@ -10,7 +10,7 @@ fi
 
 export DOCKER_HOST="${DOCKER_HOST:-unix:///run/user/$(id -u)/podman/podman.sock}"
 export KIND_EXPERIMENTAL_PROVIDER="${KIND_EXPERIMENTAL_PROVIDER:-podman}"
-prefix="devbox-kind-validation-$(date +%s)"
+prefix="devbox-kind-validation-$(date +%s)-$$"
 clusters=()
 cleanup() {
   local status=$?

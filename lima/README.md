@@ -173,7 +173,9 @@ home/config directory, leaving the mounted global config untouched:
 
 ```shell
 cd ~/src/my-sandbox
-uv run --extra test pytest -q tests/unit/test_lima_opencode_config.py
+./scripts/sanitized-test.sh --guest-vm -- \
+  env UV_PROJECT_ENVIRONMENT="$UV_PROJECT_ENVIRONMENT" \
+  uv run --extra test pytest -q tests/unit/test_lima_opencode_config.py
 ```
 
 The test is skipped outside the provisioned VM; there it asserts that
@@ -458,8 +460,13 @@ and can corrupt it). Pick one side per checkout:
   ```shell
   export UV_PROJECT_ENVIRONMENT="$HOME/.venvs/my-sandbox-issue269"
   uv sync --extra test
-  uv run --extra test pytest -m unit
+  ./scripts/sanitized-test.sh --guest-vm --vm-lock -- \
+    env UV_PROJECT_ENVIRONMENT="$UV_PROJECT_ENVIRONMENT" \
+    ./scripts/run-unit-tests.sh
   ```
+
+  See [test-runtime.md](../docs/test-runtime.md) for measured runtime/resource
+  baselines and the shared-VM concurrency model.
 
   Issue #269 validation on 2026-09-29 passed all 317 unit tests with both
   placements. The shared 9p run took 165.73s; its cache/resource conditions
@@ -574,9 +581,10 @@ passes, verify from inside the VM (opened with
       changes the stored fingerprint and applies the new version without a
       VM rebuild.
 - [ ] Create a worktree and set `UV_PROJECT_ENVIRONMENT` to a unique
-      VM-local path before `uv sync --extra test`; run
-      `uv run --extra test pytest -m unit` — tests pass. Do not reuse that
-      checkout's venv from the host (see the venv caveat above).
+       VM-local path before `uv sync --extra test`; run the sanitized unit
+       runner through `scripts/sanitized-test.sh --guest-vm --vm-lock` — tests
+       pass. Do not reuse that checkout's venv from the host (see the venv
+       caveat above).
 - [ ] Commit and push via `gh`/git from inside the VM.
 - [ ] Edits made in the VM are visible on the host, owned by your uid.
 - [ ] `~/kb/kbase.py sync` round-trips (knowledge base usable).
