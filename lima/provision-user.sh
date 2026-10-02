@@ -207,19 +207,45 @@ if [[ -d "$skill_src" ]] && tree_differs "$skill_src" "$skill_dst"; then
   cp -R "$skill_src" "$skill_dst"
 fi
 
+AST_GREP_SKILL_INTEGRITY="$(manifest_agent_skill ast_grep integrity)" || {
+  echo "devbox: missing ast-grep agent-skill integrity policy" >&2
+  exit 1
+}
 AST_GREP_COMMIT="$(manifest_agent_skill ast_grep commit)"
-AST_GREP_SKILL_SHA256="$(manifest_agent_skill ast_grep sha256)"
 if [[ ! "$AST_GREP_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
   echo "devbox: invalid ast-grep skill commit in tool manifest" >&2
   exit 1
 fi
-if [[ ! "$AST_GREP_SKILL_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
-  echo "devbox: invalid ast-grep skill checksum in tool manifest" >&2
-  exit 1
-fi
+AST_GREP_SKILL_SHA256=""
+case "$AST_GREP_SKILL_INTEGRITY" in
+  sha256)
+    AST_GREP_SKILL_SHA256="$(manifest_agent_skill ast_grep sha256)" || {
+      echo "devbox: missing ast-grep skill SHA-256 digest" >&2
+      exit 1
+    }
+    if [[ ! "$AST_GREP_SKILL_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+      echo "devbox: invalid ast-grep skill SHA-256 digest in tool manifest" >&2
+      exit 1
+    fi
+    ;;
+  version-only)
+    if jq -e '.tools.ast_grep.agent_skill | has("sha256")' "$MANIFEST" >/dev/null; then
+      echo "devbox: version-only ast-grep skill must not declare a stale SHA-256 digest" >&2
+      exit 1
+    fi
+    echo "devbox: ast_grep.agent_skill uses version-only integrity; SHA-256 verification is skipped" >&2
+    ;;
+  *)
+    echo "devbox: unknown ast-grep agent-skill integrity policy '$AST_GREP_SKILL_INTEGRITY'" >&2
+    exit 1
+    ;;
+esac
+# Include the integrity policy and digest in the stamp so tightening a cached
+# skill from version-only to SHA-256 forces a fresh download and verification.
+AST_GREP_SKILL_STATE_VALUE="${AST_GREP_COMMIT}|${AST_GREP_SKILL_INTEGRITY}|${AST_GREP_SKILL_SHA256:-}"
 ast_grep_skill_state="$HOME/.local/share/devbox-toolchain/ast-grep-skill.commit"
 if [[ ! -f "$ast_grep_skill_state" ]] \
-  || [[ "$(cat "$ast_grep_skill_state")" != "$AST_GREP_COMMIT" ]] \
+  || [[ "$(cat "$ast_grep_skill_state")" != "$AST_GREP_SKILL_STATE_VALUE" ]] \
   || [[ ! -f "$HOME/.agents/skills/ast-grep/SKILL.md" ]] \
   || [[ ! -f "$HOME/.agents/skills/ast-grep-outline/SKILL.md" ]]; then
   tmp="$(mktemp -d "$HOME/.cache/ast-grep-skill.XXXXXX")"
@@ -227,14 +253,16 @@ if [[ ! -f "$ast_grep_skill_state" ]] \
   curl --retry 3 --retry-connrefused -fsSL \
     "https://github.com/ast-grep/agent-skill/archive/${AST_GREP_COMMIT}.tar.gz" \
     -o "$archive"
-  printf '%s  %s\n' "$AST_GREP_SKILL_SHA256" "$archive" | sha256sum -c -
+  if [[ "$AST_GREP_SKILL_INTEGRITY" == sha256 ]]; then
+    printf '%s  %s\n' "$AST_GREP_SKILL_SHA256" "$archive" | sha256sum -c -
+  fi
   tar -C "$tmp" -xzf "$archive"
   skill_root="$tmp/agent-skill-${AST_GREP_COMMIT}/ast-grep/skills"
   rm -rf -- "$HOME/.agents/skills/ast-grep" \
     "$HOME/.agents/skills/ast-grep-outline"
   cp -R "$skill_root/ast-grep" "$HOME/.agents/skills/ast-grep"
   cp -R "$skill_root/outline" "$HOME/.agents/skills/ast-grep-outline"
-  printf '%s\n' "$AST_GREP_COMMIT" >"$ast_grep_skill_state"
+  printf '%s\n' "$AST_GREP_SKILL_STATE_VALUE" >"$ast_grep_skill_state"
   rm -rf -- "$tmp"
 fi
 

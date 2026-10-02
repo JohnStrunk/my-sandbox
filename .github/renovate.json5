@@ -24,63 +24,75 @@
   "rangeStrategy": "pin",
   "packageRules": [
     {
-      // ast-grep's manifest entry also pins platform release checksums and the
-      // official agent-skill archive hash. Renovate cannot recompute those, so
-      // a version-only bump is caught by the "Verify release provenance
-      // checksums" CI step; run the refresh command below to update the whole
-      // unit together.
-      "description": "ast-grep version bumps must refresh release checksums + agent-skill pin",
+      "description": "Group hadolint version and architecture artifact updates",
       "matchPackageNames": [
-        "ast-grep/ast-grep",
+        "hadolint/hadolint",
       ],
-      "commitMessageSuffix": "(refresh release checksums + agent-skill pin via scripts/verify_provenance.py --update)",
+      "groupName": "hadolint release artifacts",
+      "minimumGroupSize": 3,
     },
     {
-      // Lima provisioning reads release checksums from the manifest at
-      // runtime; Renovate cannot recompute them, so a version-only bump is
-      // caught by the "Verify release provenance checksums" CI step.
-      "description": "limactl version bumps must refresh release checksums",
+      "description": "Group uv version and architecture artifact updates",
+      "matchPackageNames": [
+        "astral-sh/uv",
+      ],
+      "groupName": "uv release artifacts",
+      "minimumGroupSize": 3,
+    },
+    {
+      "description": "Group Antigravity CLI version and architecture artifact updates",
+      "matchPackageNames": [
+        "google-antigravity/antigravity-cli",
+      ],
+      "groupName": "antigravity cli release artifacts",
+      "minimumGroupSize": 3,
+    },
+    {
+      "description": "Group Lima version and architecture artifact updates",
       "matchPackageNames": [
         "lima-vm/lima",
       ],
-      "commitMessageSuffix": "(refresh release checksums via scripts/verify_provenance.py --update)",
+      "groupName": "limactl release artifacts",
+      "minimumGroupSize": 3,
     },
     {
-      "description": "Release binary version bumps must refresh manifest checksums",
+      "description": "Group kind version and architecture artifact updates",
       "matchPackageNames": [
-        "hadolint/hadolint",
-        "golang",
-        "astral-sh/uv",
-        "node",
-        "rust-lang/rustup",
-        "google-antigravity/antigravity-cli",
-        "acli",
-        "helm/helm",
         "kubernetes-sigs/kind",
-        "kubernetes/kubernetes",
       ],
-      "commitMessageSuffix": "(refresh release checksums with scripts/verify_provenance.py --update)",
+      "groupName": "kind release artifacts",
+      "minimumGroupSize": 3,
     },
     {
-      "description": "Update golang version in the canonical manifest",
-      "groupName": "golang version",
-      "matchDepNames": [
-        "go",
-        "golang",
+      "description": "Group ast-grep version and architecture artifact updates",
+      "matchPackageNames": [
+        "ast-grep/ast-grep",
       ],
-      // Keep after the release-checksum rule so this conditional reminder wins.
-      "commitMessageSuffix": "(run scripts/verify_provenance.py --update if a provenance-pinned tool changes)",
+      "groupName": "ast-grep release artifacts",
+      "minimumGroupSize": 3,
+    },
+    {
+      "description": "Group acli version and architecture artifact updates",
+      "matchPackageNames": [
+        "acli",
+      ],
+      "groupName": "acli release artifacts",
+      "minimumGroupSize": 3,
+      "versioning": "loose",
+    },
+    {
+      "description": "Allow acli's official formula feed, which has no release timestamp",
+      "matchPackageNames": [
+        "acli",
+      ],
+      "minimumReleaseAgeBehaviour": "timestamp-optional",
     },
     {
       "description": "Keep canonical tool versions and their consumers together",
       "matchPackageNames": [
-        "hadolint/hadolint",
-        "ast-grep/ast-grep",
-        "lima-vm/lima",
         "@opencode/cli",
-        "astral-sh/uv",
+        "golang",
         "helm/helm",
-        "kubernetes-sigs/kind",
         "kubernetes/kubernetes",
         "node",
         "rust",
@@ -101,9 +113,6 @@
         "zizmorcore/zizmor-pre-commit",
       ],
       "groupName": "devbox tool versions",
-      // Grouped PRs can drop individual checksum-refresh suffixes. Keep the
-      // follow-up visible, while making clear it applies only to provenance pins.
-      "commitMessageSuffix": "(run scripts/verify_provenance.py --update if a provenance-pinned tool changes)",
     },
     {
       "description": "Use loose versioning for ShellCheck's four-part tags",
@@ -146,6 +155,20 @@
         "{\"releases\": [releases[$contains(version, \"version \")].{\"version\": $replace(version, /.*version \"([^\"]+)\".*/, \"$1\")}]}",
       ],
     },
+    "acli-amd64": {
+      "defaultRegistryUrlTemplate": "https://raw.githubusercontent.com/atlassian/homebrew-acli/main/Formula/acli.rb",
+      "format": "plain",
+      "transformTemplates": [
+        "{\"releases\": [$$.releases#$i[$contains(version, \"https://acli.atlassian.com/linux/\") and $contains(version, \"linux_amd64.tar.gz\")].{\"version\": $split($split(version, \"/linux/\")[1], \"/\")[0], \"digest\": $replace($$.releases[$i + 1].version, /.*sha256 \"([0-9a-f]+)\".*/, \"$1\")}]}"
+      ],
+    },
+    "acli-arm64": {
+      "defaultRegistryUrlTemplate": "https://raw.githubusercontent.com/atlassian/homebrew-acli/main/Formula/acli.rb",
+      "format": "plain",
+      "transformTemplates": [
+        "{\"releases\": [$$.releases#$i[$contains(version, \"https://acli.atlassian.com/linux/\") and $contains(version, \"linux_arm64.tar.gz\")].{\"version\": $split($split(version, \"/linux/\")[1], \"/\")[0], \"digest\": $replace($$.releases[$i + 1].version, /.*sha256 \"([0-9a-f]+)\".*/, \"$1\")}]}"
+      ],
+    },
   },
   "customManagers": [
     {
@@ -155,9 +178,22 @@
         "/(?:^|/)tool-versions\\.json$/",
       ],
       "matchStrings": [
-        '$each(tools, function($v, $k) { {"depName": $v.depName, "currentValue": $v.version, "datasource": $v.datasource, "versioning": $v.versioning} })',
+        '$each(tools, function($v, $k) { {"depName": $v.depName, "packageName": $v.depName, "currentValue": $v.version, "datasource": $v.datasource, "versioning": $v.versioning} })',
       ],
       "versioningTemplate": "{{#if versioning}}{{{versioning}}}{{else}}semver-coerced{{/if}}",
+    },
+    {
+      "customType": "regex",
+      "description": "Update each checksum-managed architecture artifact and digest",
+      "managerFilePatterns": [
+        "/(?:^|/)tool-versions\\.json$/",
+      ],
+      "matchStrings": [
+        '"version": "(?<currentValue>[^"]+)"\\s*,\\s*"sha256": "(?<currentDigest>[0-9a-f]{64})"\\s*,\\s*"depName": "(?<depName>[^"]+)"\\s*,\\s*"packageName": "(?<packageName>[^"]+)"\\s*,\\s*"datasource": "(?<datasource>[^"]+)"',
+      ],
+      "datasourceTemplate": "{{{datasource}}}",
+      "autoReplaceStringTemplate": '"version": "{{{newValue}}}",\n          "sha256": "{{{newDigest}}}",\n          "depName": "{{{depName}}}",\n          "packageName": "{{{packageName}}}",\n          "datasource": "{{{datasource}}}"',
+      "versioningTemplate": "semver-coerced",
     },
     {
       "customType": "regex",

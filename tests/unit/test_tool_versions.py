@@ -21,6 +21,16 @@ _VALIDATOR_INPUTS = [
     "lima/certs/redhat-root-ca.crt",
 ]
 
+_CHECKSUM_MANAGED_TOOLS = {
+    "acli",
+    "antigravity_cli",
+    "ast_grep",
+    "hadolint",
+    "kind",
+    "limactl",
+    "uv",
+}
+
 
 def _copy_validator_inputs(repo_root: Path, copy_root: Path) -> None:
     for relative_path in _VALIDATOR_INPUTS:
@@ -110,9 +120,164 @@ def test_tool_version_manifest_contains_renovate_metadata(repo_root: Path):
         assert spec["version"], name
         assert spec["datasource"], name
         assert spec["depName"], name
+        assert spec["integrity"] in {"sha256", "version-only"}, name
         assert spec["consumers"], name
         assert "docker" not in spec["consumers"], name
     assert "github_mcp_server" not in manifest["tools"]
+
+
+@pytest.mark.unit
+def test_checksum_managed_tool_set_is_an_explicit_v1_policy(repo_root: Path):
+    manifest = json.loads((repo_root / "lima" / "tool-versions.json").read_text())
+    checksum_managed = {
+        name
+        for name, spec in manifest["tools"].items()
+        if spec["integrity"] == "sha256"
+    }
+
+    assert checksum_managed == _CHECKSUM_MANAGED_TOOLS
+    assert manifest["tools"]["ast_grep"]["agent_skill"]["integrity"] == "sha256"
+    for tool in ("node", "go", "rustup", "helm", "kubectl"):
+        assert manifest["tools"][tool]["integrity"] == "version-only"
+        assert "artifacts" not in manifest["tools"][tool]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("policy", [None, "md5", ""])
+def test_validator_requires_explicit_integrity_policy(
+    repo_root: Path, tmp_path: Path, policy: str | None
+):
+    copy_root = tmp_path / "repo"
+    _copy_validator_inputs(repo_root, copy_root)
+
+    def mutate(data):
+        if policy is None:
+            del data["tools"]["node"]["integrity"]
+        else:
+            data["tools"]["node"]["integrity"] = policy
+
+    _edit_manifest(copy_root, mutate)
+
+    errors = validate_tool_versions(copy_root)
+
+    assert any("node" in error and "integrity policy" in error for error in errors)
+
+
+@pytest.mark.unit
+def test_validator_requires_explicit_agent_skill_integrity_policy(
+    repo_root: Path, tmp_path: Path
+):
+    copy_root = tmp_path / "repo"
+    _copy_validator_inputs(repo_root, copy_root)
+
+    def mutate(data):
+        del data["tools"]["ast_grep"]["agent_skill"]["integrity"]
+
+    _edit_manifest(copy_root, mutate)
+
+    errors = validate_tool_versions(copy_root)
+
+    assert any(
+        "ast_grep" in error
+        and "agent_skill needs an explicit integrity policy" in error
+        for error in errors
+    )
+
+
+@pytest.mark.unit
+def test_validator_requires_artifact_versions_to_match_top_level_alias(
+    repo_root: Path, tmp_path: Path
+):
+    copy_root = tmp_path / "repo"
+    _copy_validator_inputs(repo_root, copy_root)
+
+    def mutate(data):
+        data["tools"]["limactl"]["artifacts"]["arm64"]["version"] = "v2.2.1"
+
+    _edit_manifest(copy_root, mutate)
+
+    errors = validate_tool_versions(copy_root)
+
+    assert any(
+        "limactl" in error and "does not normalize to top-level version" in error
+        for error in errors
+    )
+
+
+@pytest.mark.unit
+def test_validator_requires_datasource_for_each_checksum_artifact(
+    repo_root: Path, tmp_path: Path
+):
+    copy_root = tmp_path / "repo"
+    _copy_validator_inputs(repo_root, copy_root)
+
+    def mutate(data):
+        del data["tools"]["acli"]["artifacts"]["amd64"]["datasource"]
+
+    _edit_manifest(copy_root, mutate)
+
+    errors = validate_tool_versions(copy_root)
+
+    assert any(
+        "acli" in error and "artifacts['amd64'].datasource" in error for error in errors
+    )
+
+
+@pytest.mark.unit
+def test_validator_rejects_unknown_artifact_datasource(repo_root: Path, tmp_path: Path):
+    copy_root = tmp_path / "repo"
+    _copy_validator_inputs(repo_root, copy_root)
+
+    def mutate(data):
+        data["tools"]["acli"]["artifacts"]["amd64"]["datasource"] = "untrusted-feed"
+
+    _edit_manifest(copy_root, mutate)
+
+    errors = validate_tool_versions(copy_root)
+
+    assert any(
+        "acli" in error and "artifacts['amd64'].datasource must be one of" in error
+        for error in errors
+    )
+
+
+@pytest.mark.unit
+def test_validator_rejects_acli_datasource_for_the_other_architecture(
+    repo_root: Path, tmp_path: Path
+):
+    copy_root = tmp_path / "repo"
+    _copy_validator_inputs(repo_root, copy_root)
+
+    def mutate(data):
+        data["tools"]["acli"]["artifacts"]["amd64"]["datasource"] = "custom.acli-arm64"
+
+    _edit_manifest(copy_root, mutate)
+
+    errors = validate_tool_versions(copy_root)
+
+    assert any(
+        "acli" in error
+        and "datasource must match the acli architecture-specific datasource" in error
+        for error in errors
+    )
+
+
+@pytest.mark.unit
+def test_version_only_policy_rejects_stale_checksum_metadata(
+    repo_root: Path, tmp_path: Path
+):
+    copy_root = tmp_path / "repo"
+    _copy_validator_inputs(repo_root, copy_root)
+
+    def mutate(data):
+        node = data["tools"]["node"]
+        node["artifacts"] = {"amd64": {"sha256": "ab" * 32}}
+
+    _edit_manifest(copy_root, mutate)
+
+    errors = validate_tool_versions(copy_root)
+
+    assert any("node" in error and "version-only" in error for error in errors)
 
 
 @pytest.mark.unit
@@ -166,7 +331,7 @@ def test_validator_flags_malformed_checksum(repo_root: Path, tmp_path: Path):
     _copy_validator_inputs(repo_root, copy_root)
 
     def mutate(data):
-        data["tools"]["ast_grep"]["checksums"]["amd64"] = "deadbeef"
+        data["tools"]["ast_grep"]["artifacts"]["amd64"]["sha256"] = "deadbeef"
 
     _edit_manifest(copy_root, mutate)
 
@@ -199,16 +364,16 @@ def test_validator_flags_dangling_provenance_template(repo_root: Path, tmp_path:
     _copy_validator_inputs(repo_root, copy_root)
 
     def mutate(data):
-        data["tools"]["ast_grep"]["provenance"]["url_templates"]["checksums.riscv"] = (
-            "https://example.invalid/riscv.zip"
-        )
+        data["tools"]["ast_grep"]["provenance"]["url_templates"][
+            "artifacts.riscv64.sha256"
+        ] = "https://example.invalid/riscv.zip"
 
     _edit_manifest(copy_root, mutate)
 
     errors = validate_tool_versions(copy_root)
 
     assert any(
-        "ast_grep" in error and "riscv" in error and "no matching" in error
+        "ast_grep" in error and "riscv64" in error and "no matching" in error
         for error in errors
     )
 
@@ -314,7 +479,9 @@ def test_tool_version_validator_requires_lima_release_checksum_reads(
 
     errors = validate_tool_versions(copy_root)
 
-    assert any("does not read 'limactl' release checksums" in error for error in errors)
+    assert any(
+        "does not verify 'limactl' SHA-256 artifacts" in error for error in errors
+    )
 
 
 @pytest.mark.unit
@@ -344,7 +511,7 @@ def test_tool_version_validator_requires_agent_skill_provenance_reads(
         "\n".join(
             line
             for line in script.read_text().splitlines()
-            if "manifest_agent_skill ast_grep sha256" not in line
+            if "manifest_agent_skill ast_grep integrity" not in line
         )
         + "\n"
     )
@@ -352,7 +519,7 @@ def test_tool_version_validator_requires_agent_skill_provenance_reads(
     errors = validate_tool_versions(copy_root)
 
     assert any(
-        "does not read 'ast_grep' agent_skill['sha256']" in error for error in errors
+        "does not read 'ast_grep' agent_skill['integrity']" in error for error in errors
     )
 
 
@@ -363,15 +530,33 @@ def test_validator_allows_checksums_for_non_lima_consumers(
     copy_root = tmp_path / "repo"
     _copy_validator_inputs(repo_root, copy_root)
 
-    # Checksums only need to be read by an installing consumer. yamllint
+    # SHA-256 digests only need to be read by an installing consumer. yamllint
     # is consumed by pre-commit alone, so a Lima provisioning read is not
-    # required for its metadata. A valid non-Lima entry with checksums and
-    # provenance still passes structural validation.
+    # required for its metadata. A valid non-Lima entry with artifact records
+    # and provenance still passes structural validation.
     def mutate(data):
-        data["tools"]["yamllint"]["checksums"] = {"amd64": "ab" * 32}
+        tool = data["tools"]["yamllint"]
+        tool["integrity"] = "sha256"
+        tool["artifacts"] = {
+            "amd64": {
+                "version": tool["version"],
+                "sha256": "ab" * 32,
+                "depName": "adrienverge/yamllint-amd64",
+                "packageName": "adrienverge/yamllint",
+                "datasource": "github-release-attachments",
+            },
+            "arm64": {
+                "version": tool["version"],
+                "sha256": "cd" * 32,
+                "depName": "adrienverge/yamllint-arm64",
+                "packageName": "adrienverge/yamllint",
+                "datasource": "github-release-attachments",
+            },
+        }
         data["tools"]["yamllint"]["provenance"] = {
             "url_templates": {
-                "checksums.amd64": "https://example.test/yamllint-{version}"
+                "artifacts.amd64.sha256": "https://example.test/yamllint/{artifacts.amd64.version}/amd64",
+                "artifacts.arm64.sha256": "https://example.test/yamllint/{artifacts.arm64.version}/arm64",
             }
         }
 

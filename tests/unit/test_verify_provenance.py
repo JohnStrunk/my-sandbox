@@ -16,18 +16,19 @@ from scripts.verify_provenance import (
 # realistic high-entropy hex secret (and to keep them clearly non-secret).
 _VERSION = "0.45.3"
 _COMMIT = "ab" * 20  # 40-char git-style hex
+_OLD_SKILL = "ef" * 32  # stored agent-skill sha256
 _OLD_ASSET = "ab" * 32  # stored amd64 sha256
 _ARM_ASSET = "cd" * 32  # stored arm64 sha256 (kept current)
-_OLD_SKILL = "ef" * 32  # stored agent-skill sha256 (kept current)
 _NEW_ASSET = "12" * 32  # recomputed amd64 sha256
+_NEW_SKILL = "34" * 32  # recomputed agent-skill sha256
 
 _ASSET_TEMPLATE = (
     "https://github.com/ast-grep/ast-grep/releases/download/"
-    "{version}/app-x86_64-unknown-linux-gnu.zip"
+    "{artifacts.amd64.version}/app-x86_64-unknown-linux-gnu.zip"
 )
 _ARM_TEMPLATE = (
     "https://github.com/ast-grep/ast-grep/releases/download/"
-    "{version}/app-aarch64-unknown-linux-gnu.zip"
+    "{artifacts.arm64.version}/app-aarch64-unknown-linux-gnu.zip"
 )
 _SKILL_TEMPLATE = (
     "https://github.com/ast-grep/agent-skill/archive/{agent_skill.commit}.tar.gz"
@@ -43,19 +44,34 @@ _ARM_URL = (
 _SKILL_URL = f"https://github.com/ast-grep/agent-skill/archive/{_COMMIT}.tar.gz"
 
 
-def _spec(*, asset: str, skill: str) -> dict:
+def _spec(*, asset: str) -> dict:
     return {
         "version": _VERSION,
-        "checksums": {"amd64": asset, "arm64": _ARM_ASSET},
-        "agent_skill": {"commit": _COMMIT, "sha256": skill},
+        "integrity": "sha256",
+        "artifacts": {
+            "amd64": {
+                "version": _VERSION,
+                "sha256": asset,
+                "depName": "ast-grep/ast-grep-amd64",
+                "packageName": "ast-grep/ast-grep",
+                "datasource": "github-release-attachments",
+            },
+            "arm64": {
+                "version": _VERSION,
+                "sha256": _ARM_ASSET,
+                "depName": "ast-grep/ast-grep-arm64",
+                "packageName": "ast-grep/ast-grep",
+                "datasource": "github-release-attachments",
+            },
+        },
+        "agent_skill": {"integrity": "version-only", "commit": _COMMIT},
         "provenance": {
             "url_templates": {
-                "checksums.amd64": _ASSET_TEMPLATE,
-                "checksums.arm64": _ARM_TEMPLATE,
-                "agent_skill.sha256": _SKILL_TEMPLATE,
+                "artifacts.amd64.sha256": _ASSET_TEMPLATE,
+                "artifacts.arm64.sha256": _ARM_TEMPLATE,
             }
         },
-        "consumers": {"docker": True},
+        "consumers": {"lima": True},
     }
 
 
@@ -71,27 +87,33 @@ def _fake_fetch(mapping: dict[str, str]):
 
 
 def _current_fetch(amd64: str = _OLD_ASSET) -> dict[str, str]:
-    return {_ASSET_URL: amd64, _ARM_URL: _ARM_ASSET, _SKILL_URL: _OLD_SKILL}
+    return {_ASSET_URL: amd64, _ARM_URL: _ARM_ASSET}
 
 
 @pytest.mark.unit
 def test_render_url_substitutes_placeholders():
-    spec = _spec(asset=_OLD_ASSET, skill=_OLD_SKILL)
+    spec = _spec(asset=_OLD_ASSET)
     assert _render_url(_ASSET_TEMPLATE, spec) == _ASSET_URL
-    assert _render_url(_SKILL_TEMPLATE, spec) == _SKILL_URL
 
 
 @pytest.mark.unit
 def test_render_url_rejects_unknown_placeholder():
-    spec = _spec(asset=_OLD_ASSET, skill=_OLD_SKILL)
+    spec = _spec(asset=_OLD_ASSET)
     with pytest.raises(ProvenanceError):
         _render_url("https://example.test/{bogus}", spec)
 
 
 @pytest.mark.unit
+def test_render_url_rejects_non_https_template():
+    spec = _spec(asset=_OLD_ASSET)
+    with pytest.raises(ProvenanceError, match="absolute HTTPS URL"):
+        _render_url("http://example.test/{artifacts.amd64.version}", spec)
+
+
+@pytest.mark.unit
 def test_verify_provenance_passes_when_current(tmp_path: Path):
     manifest = tmp_path / "tool-versions.json"
-    _write_manifest(manifest, _spec(asset=_OLD_ASSET, skill=_OLD_SKILL))
+    _write_manifest(manifest, _spec(asset=_OLD_ASSET))
 
     errors = verify_provenance(manifest, fetch=_fake_fetch(_current_fetch()))
 
@@ -101,7 +123,7 @@ def test_verify_provenance_passes_when_current(tmp_path: Path):
 @pytest.mark.unit
 def test_verify_provenance_flags_stale_digest(tmp_path: Path):
     manifest = tmp_path / "tool-versions.json"
-    _write_manifest(manifest, _spec(asset=_OLD_ASSET, skill=_OLD_SKILL))
+    _write_manifest(manifest, _spec(asset=_OLD_ASSET))
 
     errors = verify_provenance(
         manifest, fetch=_fake_fetch(_current_fetch(amd64=_NEW_ASSET))
@@ -109,26 +131,53 @@ def test_verify_provenance_flags_stale_digest(tmp_path: Path):
 
     assert len(errors) == 1
     assert "ast_grep" in errors[0]
-    assert "checksums.amd64" in errors[0]
+    assert "artifacts.amd64.sha256" in errors[0]
     assert _NEW_ASSET in errors[0]
+
+
+@pytest.mark.unit
+def test_verify_provenance_flags_and_refreshes_sha256_agent_skill(
+    tmp_path: Path,
+):
+    spec = _spec(asset=_OLD_ASSET)
+    spec["agent_skill"] = {
+        "integrity": "sha256",
+        "commit": _COMMIT,
+        "sha256": _OLD_SKILL,
+    }
+    spec["provenance"]["url_templates"]["agent_skill.sha256"] = _SKILL_TEMPLATE
+    manifest = tmp_path / "tool-versions.json"
+    _write_manifest(manifest, spec)
+    fetch = _fake_fetch({**_current_fetch(), _SKILL_URL: _NEW_SKILL})
+
+    errors = verify_provenance(manifest, fetch=fetch)
+
+    assert len(errors) == 1
+    assert "agent_skill.sha256" in errors[0]
+    assert _NEW_SKILL in errors[0]
+    assert "agent-skill commit is not Renovate-managed" in errors[0]
+
+    changes = update_provenance(manifest, fetch=fetch)
+
+    assert changes == [("ast_grep", "agent_skill.sha256", _OLD_SKILL, _NEW_SKILL)]
+    assert verify_provenance(manifest, fetch=fetch) == []
 
 
 @pytest.mark.unit
 def test_update_provenance_rewrites_only_stale_values(tmp_path: Path):
     manifest = tmp_path / "tool-versions.json"
-    _write_manifest(manifest, _spec(asset=_OLD_ASSET, skill=_OLD_SKILL))
+    _write_manifest(manifest, _spec(asset=_OLD_ASSET))
     original = manifest.read_text()
 
     changes = update_provenance(
         manifest, fetch=_fake_fetch(_current_fetch(amd64=_NEW_ASSET))
     )
 
-    assert changes == [("ast_grep", "checksums.amd64", _OLD_ASSET, _NEW_ASSET)]
+    assert changes == [("ast_grep", "artifacts.amd64.sha256", _OLD_ASSET, _NEW_ASSET)]
     updated = manifest.read_text()
     assert _NEW_ASSET in updated
     assert _OLD_ASSET not in updated
-    # The skill pin (current) and the arm64 checksum (current) are untouched.
-    assert _OLD_SKILL in updated
+    # Version-only skill pins are absent from provenance verification.
     assert _ARM_ASSET in updated
     assert updated == original.replace(_OLD_ASSET, _NEW_ASSET)
     assert json.loads(updated)  # still valid JSON
@@ -137,7 +186,7 @@ def test_update_provenance_rewrites_only_stale_values(tmp_path: Path):
 @pytest.mark.unit
 def test_update_provenance_no_op_when_current(tmp_path: Path):
     manifest = tmp_path / "tool-versions.json"
-    _write_manifest(manifest, _spec(asset=_OLD_ASSET, skill=_OLD_SKILL))
+    _write_manifest(manifest, _spec(asset=_OLD_ASSET))
     original = manifest.read_text()
 
     changes = update_provenance(manifest, fetch=_fake_fetch(_current_fetch()))
@@ -147,60 +196,37 @@ def test_update_provenance_no_op_when_current(tmp_path: Path):
 
 
 @pytest.mark.unit
-def test_node_version_bump_requires_both_arch_checksums_to_refresh(
+def test_version_only_node_bump_skips_checksum_verification(
     repo_root: Path, tmp_path: Path
 ):
     manifest_data = json.loads((repo_root / "lima" / "tool-versions.json").read_text())
     node = manifest_data["tools"]["node"]
-    old_checksums = node["checksums"].copy()
+    assert node["integrity"] == "version-only"
+    assert "checksums" not in node
+    assert "artifacts" not in node
+    assert "provenance" not in node
     node["version"] = "99.0.0"
-    assert node["checksums"] == old_checksums
 
     manifest = tmp_path / "tool-versions.json"
     manifest.write_text(json.dumps({"tools": {"node": node}}, indent=2) + "\n")
 
-    # Repeated hex digests are deliberate offline test data, not release hashes.
-    new_checksums = {"amd64": "12" * 32, "arm64": "34" * 32}
-    templates = node["provenance"]["url_templates"]
-    assert set(templates) == {"checksums.amd64", "checksums.arm64"}
-    fetch = _fake_fetch(
-        {
-            _render_url(template, node): new_checksums[field.removeprefix("checksums.")]
-            for field, template in templates.items()
-        }
-    )
+    requested_urls: list[str] = []
 
-    errors = verify_provenance(manifest, fetch=fetch)
+    def unexpected_fetch(url: str) -> str:
+        requested_urls.append(url)
+        raise AssertionError(f"version-only entry fetched for checksum: {url}")
 
-    assert len(errors) == 2
-    assert all(
-        "node:" in error and "is stale for this version" in error for error in errors
-    )
-    assert {
-        field
-        for field in ("checksums.amd64", "checksums.arm64")
-        if any(f"{field} is stale" in error for error in errors)
-    } == {"checksums.amd64", "checksums.arm64"}
-
-    changes = update_provenance(manifest, fetch=fetch)
-
-    assert set(changes) == {
-        ("node", f"checksums.{arch}", old_checksums[arch], new_checksums[arch])
-        for arch in ("amd64", "arm64")
-    }
-    updated_node = json.loads(manifest.read_text())["tools"]["node"]
-    assert updated_node["version"] == "99.0.0"
-    assert updated_node["checksums"] == new_checksums
-    assert verify_provenance(manifest, fetch=fetch) == []
+    assert verify_provenance(manifest, fetch=unexpected_fetch) == []
+    assert requested_urls == []
 
 
 @pytest.mark.unit
 def test_update_provenance_refuses_ambiguous_digest(tmp_path: Path):
-    # Both arch checksums carry the same stored value, so a single stored
-    # digest appears twice and an in-place rewrite would be ambiguous.
+    # Both architecture records carry the same digest, so an in-place rewrite
+    # would be ambiguous.
     manifest = tmp_path / "tool-versions.json"
-    spec = _spec(asset=_OLD_ASSET, skill=_OLD_SKILL)
-    spec["checksums"]["arm64"] = _OLD_ASSET
+    spec = _spec(asset=_OLD_ASSET)
+    spec["artifacts"]["arm64"]["sha256"] = _OLD_ASSET
     _write_manifest(manifest, spec)
 
     with pytest.raises(ProvenanceError, match="appears 2 times"):
@@ -210,7 +236,6 @@ def test_update_provenance_refuses_ambiguous_digest(tmp_path: Path):
                 {
                     _ASSET_URL: _NEW_ASSET,
                     _ARM_URL: _NEW_ASSET,
-                    _SKILL_URL: _OLD_SKILL,
                 }
             ),
         )
@@ -219,23 +244,23 @@ def test_update_provenance_refuses_ambiguous_digest(tmp_path: Path):
 @pytest.mark.unit
 def test_verify_provenance_reports_fetch_failure_not_traceback(tmp_path: Path):
     manifest = tmp_path / "tool-versions.json"
-    _write_manifest(manifest, _spec(asset=_OLD_ASSET, skill=_OLD_SKILL))
+    _write_manifest(manifest, _spec(asset=_OLD_ASSET))
 
     def boom(url: str) -> str:
         raise OSError("network unreachable")
 
     errors = verify_provenance(manifest, fetch=boom)
 
-    # Every checksummed field is reported as an infrastructure failure rather
-    # than raising out of the command.
-    assert len(errors) == 3
+    # Only the two SHA-256-managed binary records are fetched; the version-only
+    # skill archive is explicitly skipped.
+    assert len(errors) == 2
     assert all("could not be fetched" in error for error in errors)
 
 
 @pytest.mark.unit
 def test_update_provenance_raises_on_fetch_failure(tmp_path: Path):
     manifest = tmp_path / "tool-versions.json"
-    _write_manifest(manifest, _spec(asset=_NEW_ASSET, skill=_OLD_SKILL))
+    _write_manifest(manifest, _spec(asset=_NEW_ASSET))
 
     def boom(url: str) -> str:
         raise OSError("network unreachable")
@@ -246,7 +271,7 @@ def test_update_provenance_raises_on_fetch_failure(tmp_path: Path):
     assert (
         manifest.read_text()
         == json.dumps(
-            {"tools": {"ast_grep": _spec(asset=_NEW_ASSET, skill=_OLD_SKILL)}},
+            {"tools": {"ast_grep": _spec(asset=_NEW_ASSET)}},
             indent=2,
         )
         + "\n"
@@ -258,7 +283,7 @@ def test_main_exit_code_zero_when_current(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     manifest = tmp_path / "tool-versions.json"
-    _write_manifest(manifest, _spec(asset=_OLD_ASSET, skill=_OLD_SKILL))
+    _write_manifest(manifest, _spec(asset=_OLD_ASSET))
     monkeypatch.setattr(vp, "verify_provenance", lambda path: [])
     assert vp.main(["--manifest", str(manifest)]) == 0
 
@@ -266,7 +291,7 @@ def test_main_exit_code_zero_when_current(
 @pytest.mark.unit
 def test_main_exit_code_one_when_stale(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     manifest = tmp_path / "tool-versions.json"
-    _write_manifest(manifest, _spec(asset=_OLD_ASSET, skill=_OLD_SKILL))
+    _write_manifest(manifest, _spec(asset=_OLD_ASSET))
     monkeypatch.setattr(vp, "verify_provenance", lambda path: ["stale checksum"])
     assert vp.main(["--manifest", str(manifest)]) == 1
 
@@ -289,7 +314,7 @@ def test_main_update_exit_code_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     manifest = tmp_path / "tool-versions.json"
 
     def fake_update(path):
-        return [("ast_grep", "checksums.amd64", "a", "b")]
+        return [("ast_grep", "artifacts.amd64.sha256", "a", "b")]
 
     monkeypatch.setattr(vp, "update_provenance", fake_update)
     assert vp.main(["--update", "--manifest", str(manifest)]) == 0
@@ -329,44 +354,3 @@ def test_ci_and_merge_queue_gate_on_release_provenance(repo_root: Path):
     mergify = yaml.safe_load((repo_root / ".github" / "mergify.yml").read_text())
     queue_conditions = mergify["queue_rules"][0]["queue_conditions"]
     assert 'check-success="CI Workflow - Success"' in queue_conditions
-
-
-def _renovate_group_rule(config: str, group_name: str) -> str:
-    lines = config.splitlines()
-    marker = f'"groupName": "{group_name}",'
-    matches = [index for index, line in enumerate(lines) if line.strip() == marker]
-    assert len(matches) == 1
-    group_index = matches[0]
-    start = next(
-        index for index in range(group_index - 1, -1, -1) if lines[index].strip() == "{"
-    )
-    end = next(
-        index
-        for index in range(group_index + 1, len(lines))
-        if lines[index].strip() == "},"
-    )
-    return "\n".join(lines[start : end + 1])
-
-
-@pytest.mark.unit
-def test_renovate_checksum_groups_keep_conditional_refresh(repo_root: Path):
-    config = (repo_root / ".github" / "renovate.json5").read_text()
-    refresh_suffix = "scripts/verify_provenance.py --update"
-
-    for group_name in ("golang version", "devbox tool versions"):
-        group_rule = _renovate_group_rule(config, group_name)
-        assert refresh_suffix in group_rule
-        assert "if a provenance-pinned tool changes" in group_rule
-
-    release_rule_index = config.index(
-        '"description": "Release binary version bumps must refresh manifest checksums"'
-    )
-    golang_group_index = config.index('"groupName": "golang version"')
-    devbox_group_index = config.index('"groupName": "devbox tool versions"')
-    assert release_rule_index < golang_group_index
-    for description in (
-        '"description": "ast-grep version bumps must refresh release checksums',
-        '"description": "limactl version bumps must refresh release checksums"',
-        '"description": "Release binary version bumps must refresh manifest checksums"',
-    ):
-        assert config.index(description) < devbox_group_index

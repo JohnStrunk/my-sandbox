@@ -33,8 +33,26 @@ _EXPECTED_TRUST_ANCHORS = frozenset(
         "redhat-root-ca.crt",
     }
 )
-_ALLOWED_AGENT_SKILL_FIELDS = frozenset({"commit", "sha256"})
-_ALLOWED_PROVENANCE_PLACEHOLDERS = frozenset({"version", "agent_skill.commit"})
+_ALLOWED_AGENT_SKILL_FIELDS = frozenset({"integrity", "commit", "sha256"})
+_INTEGRITY_POLICIES = frozenset({"sha256", "version-only"})
+_ALLOWED_ARTIFACT_FIELDS = frozenset(
+    {"version", "sha256", "depName", "packageName", "datasource"}
+)
+_ALLOWED_ARTIFACT_DATASOURCES = frozenset(
+    {
+        "github-release-attachments",
+        "custom.acli-amd64",
+        "custom.acli-arm64",
+    }
+)
+_CUSTOM_ARTIFACT_DATASOURCE_TOOL_ARCHES = {
+    "custom.acli-amd64": ("acli", "amd64"),
+    "custom.acli-arm64": ("acli", "arm64"),
+}
+_ALLOWED_PROVENANCE_PLACEHOLDERS = frozenset(
+    {"version", "agent_skill.commit"}
+    | {f"artifacts.{arch}.version" for arch in _SUPPORTED_ARCHES}
+)
 _ALLOWED_TOOL_FIELDS = frozenset(
     {
         "version",
@@ -42,7 +60,8 @@ _ALLOWED_TOOL_FIELDS = frozenset(
         "depName",
         "versioning",
         "consumers",
-        "checksums",
+        "integrity",
+        "artifacts",
         "agent_skill",
         "provenance",
     }
@@ -94,6 +113,13 @@ def _load_manifest(path: Path, errors: list[str]) -> dict[str, dict[str, object]
             errors.append(
                 f"{path}: tool '{name}' version must be a safe version token, "
                 "not a URL, range, or package specifier"
+            )
+
+        integrity = spec.get("integrity")
+        if not isinstance(integrity, str) or integrity not in _INTEGRITY_POLICIES:
+            errors.append(
+                f"{path}: tool '{name}' needs an explicit integrity policy of "
+                "'sha256' or 'version-only'"
             )
 
         consumers = spec.get("consumers")
@@ -384,7 +410,7 @@ _LIMA_MANIFEST_VERSION_PATTERN = re.compile(
 )
 _LIMA_MANIFEST_CHECKSUM_PATTERN = re.compile(r"\bverify_download\s+([a-z][a-z0-9_]*)\b")
 _LIMA_AGENT_SKILL_PATTERN = re.compile(
-    r"\bmanifest_agent_skill\s+([a-z][a-z0-9_]*)\s+(commit|sha256)\b"
+    r"\bmanifest_agent_skill\s+([a-z][a-z0-9_]*)\s+(integrity|commit|sha256)\b"
 )
 
 
@@ -423,6 +449,12 @@ def _check_lima_consumers(
     checksum_reads = set(_LIMA_MANIFEST_CHECKSUM_PATTERN.findall(active_text))
     skill_reads = set(_LIMA_AGENT_SKILL_PATTERN.findall(active_text))
 
+    if not re.search(r"\bmanifest_integrity_policy\s+[\"']?\$tool\b", active_text):
+        errors.append(
+            "lima/*.sh must validate each tool's explicit integrity policy before "
+            "using its manifest version"
+        )
+
     declared = {
         name
         for name, spec in tools.items()
@@ -435,14 +467,17 @@ def _check_lima_consumers(
             errors.append(
                 f"lima/*.sh does not read '{name}' version from tool-versions.json"
             )
-        if isinstance(spec.get("checksums"), dict) and name not in checksum_reads:
+        if spec.get("integrity") == "sha256" and name not in checksum_reads:
             errors.append(
-                f"lima/*.sh does not read '{name}' release checksums from "
+                f"lima/*.sh does not verify '{name}' SHA-256 artifacts from "
                 "tool-versions.json"
             )
         agent_skill = spec.get("agent_skill")
         if isinstance(agent_skill, dict):
-            for field in sorted(agent_skill):
+            required_skill_fields = {"integrity", "commit"}
+            if agent_skill.get("integrity") == "sha256":
+                required_skill_fields.add("sha256")
+            for field in sorted(required_skill_fields):
                 if (name, field) not in skill_reads:
                     errors.append(
                         f"lima/*.sh does not read '{name}' agent_skill['{field}'] "
@@ -486,6 +521,11 @@ def _check_lima_consumers(
                 "does not declare it as a 'lima' consumer"
             )
         elif field not in spec["agent_skill"]:
+            if (
+                field == "sha256"
+                and spec["agent_skill"].get("integrity") == "version-only"
+            ):
+                continue
             errors.append(
                 f"lima/*.sh reads '{name}' agent_skill['{field}'] but the "
                 "manifest does not declare it"
@@ -496,11 +536,11 @@ def _declared_checksummed_fields(
     spec: dict[str, object],
 ) -> set[str]:
     fields: set[str] = set()
-    checksums = spec.get("checksums")
-    if isinstance(checksums, dict):
-        fields.update(f"checksums.{arch}" for arch in checksums)
+    artifacts = spec.get("artifacts")
+    if isinstance(artifacts, dict):
+        fields.update(f"artifacts.{arch}.sha256" for arch in artifacts)
     agent_skill = spec.get("agent_skill")
-    if isinstance(agent_skill, dict) and "sha256" in agent_skill:
+    if isinstance(agent_skill, dict) and agent_skill.get("integrity") == "sha256":
         fields.add("agent_skill.sha256")
     return fields
 
@@ -560,20 +600,104 @@ def _check_trust_anchors(repo_root: Path, errors: list[str]) -> None:
             )
 
 
-def _check_checksums(name: str, checksums: object, errors: list[str]) -> None:
-    if not isinstance(checksums, dict) or not checksums:
-        errors.append(f"tool '{name}' 'checksums' must be a non-empty object")
-        return
-    for arch in sorted(set(checksums) - _SUPPORTED_ARCHES):
+def _check_artifacts(
+    name: str,
+    spec: dict[str, object],
+    artifacts: object,
+    errors: list[str],
+) -> None:
+    if not isinstance(artifacts, dict):
         errors.append(
-            f"tool '{name}' declares a checksum for unsupported architecture '{arch}'"
+            f"tool '{name}' SHA-256 integrity needs per-architecture artifacts"
         )
-    for arch, value in sorted(checksums.items()):
-        if not _is_sha256(value):
+        return
+    if set(artifacts) != _SUPPORTED_ARCHES:
+        errors.append(
+            f"tool '{name}' SHA-256 artifacts must declare exactly amd64 and arm64"
+        )
+    package_name = spec.get("depName")
+    alias = spec.get("version")
+    for arch in sorted(set(artifacts) - _SUPPORTED_ARCHES):
+        errors.append(
+            f"tool '{name}' declares an artifact for unsupported architecture '{arch}'"
+        )
+    dep_names: set[str] = set()
+    for arch, artifact in sorted(artifacts.items()):
+        if not isinstance(artifact, dict):
+            errors.append(f"tool '{name}' artifacts['{arch}'] must be an object")
+            continue
+        unknown_fields = set(artifact) - _ALLOWED_ARTIFACT_FIELDS
+        if unknown_fields:
             errors.append(
-                f"tool '{name}' checksums['{arch}'] must be a 64-char lowercase "
-                "SHA-256 hex digest"
+                f"tool '{name}' artifacts['{arch}'] has unknown field(s): "
+                + ", ".join(sorted(unknown_fields))
             )
+
+        artifact_version = artifact.get("version")
+        if not isinstance(artifact_version, str) or not _SAFE_VERSION_PATTERN.fullmatch(
+            artifact_version
+        ):
+            errors.append(
+                f"tool '{name}' artifacts['{arch}'].version must be a safe "
+                "version or exact release tag"
+            )
+        elif isinstance(alias, str) and _normalized_version(artifact_version) != (
+            _normalized_version(alias)
+        ):
+            errors.append(
+                f"tool '{name}' artifacts['{arch}'].version is "
+                f"'{artifact_version}', which does not normalize to top-level "
+                f"version '{alias}'"
+            )
+
+        if not _is_sha256(artifact.get("sha256")):
+            errors.append(
+                f"tool '{name}' artifacts['{arch}'].sha256 must be a 64-char "
+                "lowercase SHA-256 hex digest"
+            )
+
+        dep_name = artifact.get("depName")
+        if not isinstance(dep_name, str) or not dep_name:
+            errors.append(
+                f"tool '{name}' artifacts['{arch}'].depName must be a non-empty string"
+            )
+        else:
+            if dep_name in dep_names:
+                errors.append(
+                    f"tool '{name}' architecture artifact depNames must be unique"
+                )
+            dep_names.add(dep_name)
+            if isinstance(package_name, str) and dep_name != f"{package_name}-{arch}":
+                errors.append(
+                    f"tool '{name}' artifacts['{arch}'].depName must be "
+                    f"'{package_name}-{arch}'"
+                )
+
+        artifact_package_name = artifact.get("packageName")
+        if artifact_package_name != package_name:
+            errors.append(
+                f"tool '{name}' artifacts['{arch}'].packageName must match "
+                "the tool's depName so Renovate groups the alias and artifact"
+            )
+
+        datasource = artifact.get("datasource")
+        if (
+            not isinstance(datasource, str)
+            or datasource not in _ALLOWED_ARTIFACT_DATASOURCES
+        ):
+            errors.append(
+                f"tool '{name}' artifacts['{arch}'].datasource must be one of: "
+                + ", ".join(sorted(_ALLOWED_ARTIFACT_DATASOURCES))
+            )
+        elif datasource in _CUSTOM_ARTIFACT_DATASOURCE_TOOL_ARCHES:
+            expected_tool, expected_arch = _CUSTOM_ARTIFACT_DATASOURCE_TOOL_ARCHES[
+                datasource
+            ]
+            if (name, arch) != (expected_tool, expected_arch):
+                errors.append(
+                    f"tool '{name}' artifacts['{arch}'].datasource must match the "
+                    f"{expected_tool} architecture-specific datasource"
+                )
 
 
 def _check_agent_skill(name: str, agent_skill: object, errors: list[str]) -> None:
@@ -582,15 +706,24 @@ def _check_agent_skill(name: str, agent_skill: object, errors: list[str]) -> Non
         return
     for field in sorted(set(agent_skill) - _ALLOWED_AGENT_SKILL_FIELDS):
         errors.append(f"tool '{name}' agent_skill has unknown field '{field}'")
-    if "commit" in agent_skill and not (
-        isinstance(agent_skill["commit"], str)
-        and bool(_GIT_COMMIT_PATTERN.fullmatch(agent_skill["commit"]))
-    ):
+    integrity = agent_skill.get("integrity")
+    if not isinstance(integrity, str) or integrity not in _INTEGRITY_POLICIES:
+        errors.append(
+            f"tool '{name}' agent_skill needs an explicit integrity policy of "
+            "'sha256' or 'version-only'"
+        )
+    commit = agent_skill.get("commit")
+    if not isinstance(commit, str) or not _GIT_COMMIT_PATTERN.fullmatch(commit):
         errors.append(
             f"tool '{name}' agent_skill['commit'] must be a 40-char lowercase "
             "Git commit hex"
         )
-    if "sha256" in agent_skill and not _is_sha256(agent_skill["sha256"]):
+    if integrity == "version-only" and "sha256" in agent_skill:
+        errors.append(
+            f"tool '{name}' version-only agent_skill must not declare a stale "
+            "SHA-256 digest"
+        )
+    if integrity == "sha256" and not _is_sha256(agent_skill.get("sha256")):
         errors.append(
             f"tool '{name}' agent_skill['sha256'] must be a 64-char lowercase "
             "SHA-256 hex digest"
@@ -603,8 +736,8 @@ def _check_provenance_block(
     required = _declared_checksummed_fields(spec)
     if not required:
         errors.append(
-            f"tool '{name}' declares 'provenance' but has no checksum or "
-            "agent-skill metadata to verify"
+            f"tool '{name}' declares 'provenance' but has no SHA-256-managed "
+            "artifact or agent-skill digest to verify"
         )
     if not isinstance(provenance, dict):
         errors.append(f"tool '{name}' 'provenance' must be an object")
@@ -644,17 +777,23 @@ def _check_provenance(
     errors: list[str],
 ) -> None:
     for name, spec in tools.items():
-        if "checksums" in spec:
-            _check_checksums(name, spec["checksums"], errors)
+        integrity = spec.get("integrity")
+        if integrity == "sha256":
+            _check_artifacts(name, spec, spec.get("artifacts"), errors)
+        elif integrity == "version-only" and "artifacts" in spec:
+            errors.append(
+                f"tool '{name}' has artifacts despite declaring version-only integrity"
+            )
         if "agent_skill" in spec:
             _check_agent_skill(name, spec["agent_skill"], errors)
-        if "provenance" in spec:
-            _check_provenance_block(name, spec, spec["provenance"], errors)
-        elif _declared_checksummed_fields(spec):
+        required = _declared_checksummed_fields(spec)
+        if required and "provenance" not in spec:
             errors.append(
-                f"tool '{name}' declares checksum/agent-skill metadata but "
-                "has no 'provenance.url_templates' to verify it"
+                f"tool '{name}' declares SHA-256 digests but has no "
+                "'provenance.url_templates' to verify them"
             )
+        elif "provenance" in spec:
+            _check_provenance_block(name, spec, spec["provenance"], errors)
 
 
 def validate_tool_versions(repo_root: Path) -> list[str]:

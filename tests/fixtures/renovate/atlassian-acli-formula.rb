@@ -1,0 +1,47 @@
+# typed: false
+# frozen_string_literal: true
+
+# Snapshot of Atlassian's official homebrew-acli Formula/acli.rb at 1.3.39-stable.
+# It is newer than the 1.3.29-stable manifest pin and serves as the offline
+# Renovate candidate for datasource update tests.
+class Acli < Formula
+  desc "Software to interact with Atlassian Cloud from the terminal"
+  homepage "https://developer.atlassian.com/cloud/acli/reference/commands/"
+  version "1.3.39-stable"
+
+  on_macos do
+    if Hardware::CPU.intel?
+      url "https://acli.atlassian.com/darwin/1.3.39-stable/acli_1.3.39-stable_darwin_amd64.tar.gz", using: CurlDownloadStrategy
+      sha256 "6cc2f9484aeae7fff277657ec8b4f88286d5696b737e03092243b2fbc1db6ac2" # pragma: allowlist secret
+
+      define_method(:install) do
+        bin.install "acli"
+      end
+    end
+    if Hardware::CPU.arm?
+      url "https://acli.atlassian.com/darwin/1.3.39-stable/acli_1.3.39-stable_darwin_arm64.tar.gz", using: CurlDownloadStrategy
+      sha256 "29126bdb8072b126709f2d3ccaac581cd7f91b62afaa9046ae9c1d43b2e5b939" # pragma: allowlist secret
+
+      define_method(:install) do
+        bin.install "acli"
+      end
+    end
+  end
+
+  on_linux do
+    if Hardware::CPU.intel? && Hardware::CPU.is_64_bit?
+      url "https://acli.atlassian.com/linux/1.3.39-stable/acli_1.3.39-stable_linux_amd64.tar.gz", using: CurlDownloadStrategy
+      sha256 "7e0fb4dbedb1bb9100f8dc854d31d43c4b7c2c740e4cfd83b750760f4957b5a5" # pragma: allowlist secret
+      define_method(:install) do
+        bin.install "acli"
+      end
+    end
+    if Hardware::CPU.arm? && Hardware::CPU.is_64_bit?
+      url "https://acli.atlassian.com/linux/1.3.39-stable/acli_1.3.39-stable_linux_arm64.tar.gz", using: CurlDownloadStrategy
+      sha256 "afb3865b4ddf27e4a8e89eae59849632e4bec1754344b10d74eef4332456fa5a" # pragma: allowlist secret
+      define_method(:install) do
+        bin.install "acli"
+      end
+    end
+  end
+end

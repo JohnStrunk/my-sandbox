@@ -231,13 +231,55 @@ def test_probe_checks_readonly_host_agent_mount(repo_root: Path):
 
 
 @pytest.mark.unit
-def test_agent_skill_provenance_is_validated_before_archive_path_use(
+def test_agent_skill_integrity_policy_is_checked_before_archive_path_use(
     repo_root: Path,
 ):
     user_script = _script(repo_root, "provision-user.sh")
 
+    assert "manifest_agent_skill ast_grep integrity" in user_script
     assert '[[ ! "$AST_GREP_COMMIT" =~ ^[0-9a-f]{40}$ ]]' in user_script
     assert '[[ ! "$AST_GREP_SKILL_SHA256" =~ ^[0-9a-f]{64}$ ]]' in user_script
+    assert "  version-only)" in user_script
+    assert "SHA-256 verification is skipped" in user_script
+    assert (
+        'AST_GREP_SKILL_STATE_VALUE="${AST_GREP_COMMIT}|'
+        '${AST_GREP_SKILL_INTEGRITY}|${AST_GREP_SKILL_SHA256:-}"'
+    ) in user_script
+    assert '"$AST_GREP_SKILL_STATE_VALUE"' in user_script
+
+
+@pytest.mark.unit
+def test_binary_integrity_changes_invalidate_installed_version_stamps(
+    repo_root: Path,
+):
+    system_script = _script(repo_root, "provision-system.sh")
+    tool_script = _script(repo_root, "provision-tools.sh")
+    downloaded_tools = (
+        "node",
+        "uv",
+        "hadolint",
+        "go",
+        "limactl",
+        "antigravity_cli",
+        "acli",
+        "kind",
+        "kubectl",
+        "helm",
+        "ast_grep",
+    )
+
+    assert "manifest_integrity_fingerprint()" in system_script
+    assert "artifact_integrity_matches()" in system_script
+    assert "record_artifact_integrity()" in system_script
+    assert "manifest_artifact_version()" in tool_script
+    assert '[[ ! -x "$node_source/bin/node" ]]' in system_script
+    assert 'rm -rf -- "$node_dir"' in system_script
+    for tool in downloaded_tools:
+        assert f"artifact_integrity_matches {tool} " in system_script
+        assert f"record_artifact_integrity {tool} " in system_script
+
+    assert "rustup_fingerprint" in tool_script
+    assert '"$rustup_stamp"' in tool_script
 
 
 @pytest.mark.unit
@@ -377,10 +419,13 @@ def test_external_gcloud_rpm_skips_root_scriptlets(repo_root: Path):
 
 
 @pytest.mark.unit
-def test_system_script_uses_a_stamp_for_limactl_version(repo_root: Path):
+def test_system_script_stamps_limactl_integrity_without_running_it_as_root(
+    repo_root: Path,
+):
     system_script = _script(repo_root, "provision-system.sh")
 
-    assert "limactl_stamp=/usr/local/share/devbox-vm/limactl.version" in system_script
+    assert 'artifact_integrity_matches limactl "$LIMACTL_FINGERPRINT"' in system_script
+    assert 'record_artifact_integrity limactl "$LIMACTL_FINGERPRINT"' in system_script
     assert 'verify_download limactl "$arch"' in system_script
     # limactl refuses to run as root, so provisioning cannot query its version.
     assert "/usr/local/bin/limactl --version" not in system_script

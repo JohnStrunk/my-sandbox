@@ -1,17 +1,12 @@
 #!/usr/bin/env python3
-"""Verify and refresh the release-provenance checksums in the tool manifest.
+"""Verify SHA-256-managed assets in the canonical tool manifest.
 
-The manifest declares, for each tool that carries release checksums or an
-agent-skill archive pin, a ``provenance.url_templates`` block mapping every
-checksummed field to the URL of the upstream asset it must hash to. Renovate
-bumps only ``.version``, so a version-only update can leave the stored
-checksums stale while the change still "looks" buildable.
+Every tool and downloaded agent skill declares an explicit integrity policy.
+This script fetches and hashes only ``sha256`` records; ``version-only`` records
+are intentionally not checksum-verified. Checksum-managed architecture records
+map through ``provenance.url_templates`` to their exact upstream release assets.
 
-* default mode recomputes each declared asset's SHA-256 and reports any field
-  whose stored digest no longer matches (a stale checksum/skill pin).
-* ``--update`` recomputes and rewrites the stale digests in place so that the
-  version, platform checksums, and agent-skill pin are always refreshed as one
-  unit, preserving the file's existing formatting.
+The default mode is check-only, and CI invokes it without a write mode.
 """
 
 from __future__ import annotations
@@ -28,6 +23,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 from urllib.error import URLError
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -60,6 +56,11 @@ def _render_url(template: str, spec: dict[str, Any]) -> str:
         # does not 404 a perfectly good release.
         version = version.removeprefix("v")
     values: dict[str, Any] = {"version": version}
+    artifacts = spec.get("artifacts")
+    if isinstance(artifacts, dict):
+        for arch, artifact in artifacts.items():
+            if isinstance(artifact, dict):
+                values[f"artifacts.{arch}.version"] = artifact.get("version")
     agent_skill = spec.get("agent_skill")
     if isinstance(agent_skill, dict):
         values["agent_skill.commit"] = agent_skill.get("commit")
@@ -71,17 +72,20 @@ def _render_url(template: str, spec: dict[str, Any]) -> str:
             raise ProvenanceError(f"provenance template references unset '{key}'")
         return value
 
-    return _PLACEHOLDER_PATTERN.sub(replace, template)
+    rendered = _PLACEHOLDER_PATTERN.sub(replace, template)
+    parsed = urlsplit(rendered)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise ProvenanceError("provenance URL must be an absolute HTTPS URL")
+    return rendered
 
 
 def _stored_digest(spec: dict[str, Any], field: str) -> str | None:
-    kind, _, sub = field.partition(".")
-    metadata = spec.get(kind)
-    if isinstance(metadata, dict):
-        value = metadata.get(sub)
-        if isinstance(value, str):
-            return value
-    return None
+    value: Any = spec
+    for component in field.split("."):
+        if not isinstance(value, dict):
+            return None
+        value = value.get(component)
+    return value if isinstance(value, str) else None
 
 
 def _iter_entries(
@@ -89,6 +93,13 @@ def _iter_entries(
 ) -> Iterator[tuple[str, dict[str, Any], str, str]]:
     for name, spec in tools.items():
         if not isinstance(spec, dict):
+            continue
+        has_tool_sha256 = spec.get("integrity") == "sha256"
+        agent_skill = spec.get("agent_skill")
+        has_skill_sha256 = (
+            isinstance(agent_skill, dict) and agent_skill.get("integrity") == "sha256"
+        )
+        if not has_tool_sha256 and not has_skill_sha256:
             continue
         provenance = spec.get("provenance")
         if not isinstance(provenance, dict):
@@ -113,7 +124,96 @@ def load_manifest(manifest_path: Path) -> dict[str, Any]:
     tools = data.get("tools")
     if not isinstance(tools, dict):
         raise ProvenanceError(f"{manifest_path} must contain a 'tools' object")
+    _validate_integrity_policies(tools, manifest_path)
     return tools
+
+
+def _validate_integrity_policies(tools: dict[str, Any], manifest_path: Path) -> None:
+    """Reject missing or contradictory policies instead of skipping silently."""
+
+    required_arches = {"amd64", "arm64"}
+    for name, spec in tools.items():
+        if not isinstance(spec, dict):
+            raise ProvenanceError(f"{manifest_path}: tool '{name}' must be an object")
+        policy = spec.get("integrity")
+        if not isinstance(policy, str) or policy not in {"sha256", "version-only"}:
+            raise ProvenanceError(
+                f"{manifest_path}: tool '{name}' has a missing or unknown "
+                "integrity policy; expected 'sha256' or 'version-only'"
+            )
+
+        required: set[str] = set()
+        artifacts = spec.get("artifacts")
+        if policy == "sha256":
+            if not isinstance(artifacts, dict) or set(artifacts) != required_arches:
+                raise ProvenanceError(
+                    f"{manifest_path}: tool '{name}' SHA-256 integrity must declare "
+                    "amd64 and arm64 artifact records"
+                )
+            for arch, artifact in artifacts.items():
+                if not isinstance(artifact, dict) or not isinstance(
+                    artifact.get("sha256"), str
+                ):
+                    raise ProvenanceError(
+                        f"{manifest_path}: tool '{name}' artifacts['{arch}'] is "
+                        "missing its SHA-256 digest"
+                    )
+                required.add(f"artifacts.{arch}.sha256")
+        elif "artifacts" in spec:
+            raise ProvenanceError(
+                f"{manifest_path}: tool '{name}' declares artifacts with "
+                "version-only integrity"
+            )
+
+        agent_skill = spec.get("agent_skill")
+        if agent_skill is not None:
+            if not isinstance(agent_skill, dict):
+                raise ProvenanceError(
+                    f"{manifest_path}: tool '{name}' agent_skill must be an object"
+                )
+            skill_policy = agent_skill.get("integrity")
+            if not isinstance(skill_policy, str) or skill_policy not in {
+                "sha256",
+                "version-only",
+            }:
+                raise ProvenanceError(
+                    f"{manifest_path}: tool '{name}' agent_skill has a missing or "
+                    "unknown integrity policy"
+                )
+            if skill_policy == "sha256":
+                if not isinstance(agent_skill.get("sha256"), str):
+                    raise ProvenanceError(
+                        f"{manifest_path}: tool '{name}' SHA-256 agent_skill is "
+                        "missing its digest"
+                    )
+                required.add("agent_skill.sha256")
+            elif "sha256" in agent_skill:
+                raise ProvenanceError(
+                    f"{manifest_path}: tool '{name}' version-only agent_skill "
+                    "must not declare a SHA-256 digest"
+                )
+
+        provenance = spec.get("provenance")
+        if required:
+            templates = (
+                provenance.get("url_templates")
+                if isinstance(provenance, dict)
+                else None
+            )
+            if not isinstance(templates, dict) or set(templates) != required:
+                raise ProvenanceError(
+                    f"{manifest_path}: tool '{name}' provenance URL templates must "
+                    "match its SHA-256-managed fields exactly"
+                )
+            if any(not isinstance(url, str) for url in templates.values()):
+                raise ProvenanceError(
+                    f"{manifest_path}: tool '{name}' provenance URLs must be strings"
+                )
+        elif "provenance" in spec:
+            raise ProvenanceError(
+                f"{manifest_path}: tool '{name}' has provenance without any "
+                "SHA-256-managed fields"
+            )
 
 
 def _fetch_once(url: str) -> str:
@@ -175,10 +275,17 @@ def verify_provenance(
             )
             continue
         if expected != stored:
+            remediation = (
+                "The agent-skill commit is not Renovate-managed; verify the pinned "
+                "upstream commit, then refresh its digest with "
+                "scripts/verify_provenance.py --update."
+                if field == "agent_skill.sha256"
+                else "The checksum-managed Renovate artifact update should refresh "
+                "it; check that the matching release asset is available."
+            )
             errors.append(
                 f"{name}: {field} is stale for this version. Stored {stored} "
-                f"but the asset at {url} hashes to {expected}. "
-                "Run 'scripts/verify_provenance.py --update' to refresh it."
+                f"but the asset at {url} hashes to {expected}. {remediation}"
             )
     return errors
 
@@ -240,7 +347,7 @@ def update_provenance(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Verify or refresh release-provenance checksums."
+        description="Verify SHA-256-managed artifacts in the tool manifest."
     )
     parser.add_argument(
         "--manifest",
@@ -259,7 +366,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.update:
             changes = update_provenance(args.manifest)
             if not changes:
-                print("Release provenance already current; nothing to update.")
+                print(
+                    "No SHA-256-managed digest needed updating; version-only "
+                    "entries are not checked or refreshed."
+                )
                 return 0
             for name, field, old, new in changes:
                 print(f"Updated {name} {field}: {old[:12]}... -> {new[:12]}...")
@@ -276,7 +386,10 @@ def main(argv: list[str] | None = None) -> int:
             print(f"ERROR: {error}", file=sys.stderr)
         return 1
 
-    print("Release provenance checksums match their pinned versions.")
+    print(
+        "SHA-256-managed artifact digests match their pinned release assets; "
+        "version-only entries are intentionally not checked."
+    )
     return 0
 
 
