@@ -170,17 +170,47 @@ python3 scripts/validate_tool_versions.py
 python3 scripts/verify_provenance.py
 ```
 
-For the manifest, Renovate updates only each tool's `version` field; it cannot
-derive architecture-specific checksums or agent-skill hashes. A version-only
-update to a checksum-backed tool is incomplete until provenance is refreshed
-with `python3 scripts/verify_provenance.py --update`. CI runs the verifier
-without `--update` and blocks changes with stale hashes. The first command
-checks manifest/consumer consistency; the second verifies release checksums and
-agent-skill pins. Before refreshing a PR you did not author, review its
-`provenance.url_templates` against the base branch; they define the assets
-whose hashes are trusted and should not change for a version-only update.
-Manifest-only updates are applied by `devbox --reprovision`; edits to embedded
-Lima provisioning or template files require recreating the VM.
+Every tool and downloaded agent skill in the manifest declares an explicit
+`integrity` policy: `sha256` or `version-only`. The seven checksum-managed
+release binaries—Hadolint, uv, Antigravity CLI, Lima, kind, ast-grep, and
+Atlassian CLI (`acli`)—have separate amd64/arm64 artifact records with exact
+upstream versions and SHA-256 digests. Renovate's regex manager models GitHub
+release assets as `github-release-attachments` dependencies. For acli, separate
+custom datasources extract each Linux URL's version and its following SHA-256
+line from Atlassian's official Homebrew formula. Each checksum group requires
+three updates, so Renovate waits for the version alias and both architectures
+before opening a PR. CI validates the aliases and checks the declared release
+assets; the verifier runs in check-only mode. The ast-grep agent-skill archive
+remains SHA-256-verified at its pinned commit.
+
+The deliberate version-only v1 exceptions for direct downloads are Node, Go,
+rustup, Helm, and kubectl. They remain exact HTTPS version/commit pins, but are
+**not SHA-256-verified**. Go retains Renovate's timestamped `golang-version`
+datasource and the global 10-day release-age gate. Although go.dev's JSON feed
+publishes Linux hashes, it lacks timestamps to join to the version datasource,
+so Go is version-only in v1. Other package-manager tool pins are likewise
+marked `version-only` because the manifest does not carry package artifact
+digests. acli uses Atlassian's official Homebrew formula for its version and
+both architecture digests. Its feeds have no release
+timestamps, so a scoped `timestamp-optional` rule lets the acli group update
+without the global 10-day wait. All other dependencies keep that gate unchanged.
+
+Version-only direct downloads rely on HTTPS and the VM trust store, which
+includes the repository's internal Red Hat CA roots as well as public roots;
+those internal CAs are part of the TLS integrity boundary for these pins.
+
+Offline tests exercise per-architecture regex replacement, GitHub release
+attachment matching, the configured acli JSONata transforms against a formula
+fixture, and provenance verification. A real Mend-hosted Renovate run is still
+required to prove that the hosted bot creates both architecture updates in one
+PR.
+
+Review any change to `provenance.url_templates` against the base branch: those
+URLs select the assets checked by CI, and Renovate should only update the
+artifact version/digest records, not their provenance templates.
+Manifest-only updates are applied by
+`devbox --reprovision`; edits to embedded Lima provisioning or template files
+require recreating the VM.
 
 ## Repository map
 

@@ -10,12 +10,12 @@ from typing import Any
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _MANIFEST_PATH = (_REPO_ROOT / "lima" / "tool-versions.json").resolve()
 _LIMA_SCRIPT_DIR = (_REPO_ROOT / "lima").resolve()
-_CHECKSUM_OBJECT_PATTERN = re.compile(r'"checksums"\s*:\s*\{(?P<body>[^{}]*)\}')
-_CHECKSUM_PAIR_PATTERN = re.compile(
-    r'"[^"]+"\s*:\s*"(?P<digest>[0-9a-f]{64})"',
-    re.IGNORECASE,
+_SHA256_METADATA_BLOCK_PATTERN = re.compile(r'"(?:artifacts|agent_skill)"\s*:\s*\{\s*$')
+_ARTIFACT_SHA256_PATTERN = re.compile(r'"sha256"\s*:\s*"(?P<digest>[0-9a-f]{64})"')
+_TRUST_ANCHOR_PAIR_PATTERN = re.compile(
+    r'"(?:redhat-ipa-ca\.crt|redhat-rhcsv2-ca\.crt|redhat-root-ca\.crt)"'
+    r'\s*:\s*"(?P<digest>[0-9a-f]{64})"'
 )
-_CHECKSUM_BLOCK_PATTERN = re.compile(r'"checksums"\s*:\s*\{\s*$')
 _TRUST_ANCHOR_BLOCK_PATTERN = re.compile(r'"trust_anchors"\s*:\s*\{\s*$')
 _OBJECT_END_PATTERN = re.compile(r"^\s*}\s*,?\s*$")
 
@@ -46,7 +46,7 @@ def _is_hex_detector(plugin: Any) -> bool:
 
 @lru_cache(maxsize=1)
 def _manifest_checksum_lines() -> dict[str, frozenset[str]]:
-    """Return exact manifest lines containing declared integrity digests."""
+    """Return artifact SHA-256 and trust-anchor lines declared by the manifest."""
 
     try:
         lines = _MANIFEST_PATH.read_text(encoding="utf-8").splitlines()
@@ -54,42 +54,44 @@ def _manifest_checksum_lines() -> dict[str, frozenset[str]]:
         return {}
 
     digests_by_line: dict[str, set[str]] = {}
-    in_checksum_block = False
+    sha256_metadata_depth = 0
+    in_trust_anchor_block = False
     for line in lines:
-        checksum_object = _CHECKSUM_OBJECT_PATTERN.search(line)
-        if checksum_object:
+        if sha256_metadata_depth:
             digests = {
-                match.group("digest").lower()
-                for match in _CHECKSUM_PAIR_PATTERN.finditer(
-                    checksum_object.group("body")
-                )
+                match.group("digest")
+                for match in _ARTIFACT_SHA256_PATTERN.finditer(line)
             }
             if digests:
                 digests_by_line.setdefault(line.rstrip(), set()).update(digests)
+            sha256_metadata_depth += line.count("{") - line.count("}")
+            if sha256_metadata_depth <= 0:
+                sha256_metadata_depth = 0
             continue
 
-        if _CHECKSUM_BLOCK_PATTERN.search(line) or _TRUST_ANCHOR_BLOCK_PATTERN.search(
-            line
-        ):
-            in_checksum_block = True
-            continue
-        if in_checksum_block and _OBJECT_END_PATTERN.fullmatch(line):
-            in_checksum_block = False
-            continue
-        if in_checksum_block:
+        if in_trust_anchor_block:
             digests = {
-                match.group("digest").lower()
-                for match in _CHECKSUM_PAIR_PATTERN.finditer(line)
+                match.group("digest")
+                for match in _TRUST_ANCHOR_PAIR_PATTERN.finditer(line)
             }
             if digests:
                 digests_by_line.setdefault(line.rstrip(), set()).update(digests)
+            if _OBJECT_END_PATTERN.fullmatch(line):
+                in_trust_anchor_block = False
+            continue
+
+        if _SHA256_METADATA_BLOCK_PATTERN.search(line):
+            sha256_metadata_depth = line.count("{") - line.count("}")
+            continue
+        if _TRUST_ANCHOR_BLOCK_PATTERN.search(line):
+            in_trust_anchor_block = True
 
     return {line: frozenset(digests) for line, digests in digests_by_line.items()}
 
 
 def _line_contains_checksum(line: str, secret: str) -> bool:
     digests = _manifest_checksum_lines().get(line.rstrip(), ())
-    return secret.lower() in digests
+    return secret in digests
 
 
 def _manifest_release_digests() -> frozenset[str]:
@@ -109,13 +111,13 @@ def is_manifest_release_checksum(
 ) -> bool:
     """Ignore only hex-detector findings for manifest integrity digests.
 
-    Two file shapes carry those checksums:
+    Two file shapes carry those SHA-256 integrity digests:
 
     - the manifest itself, where the finding's line must be one of the
-      parsed checksum/trust-anchor lines (JSON has no comments, so an inline
-      ``pragma: allowlist secret`` is not an option), and
+      parsed architecture-artifact or trust-anchor lines (JSON has no comments,
+      so an inline ``pragma: allowlist secret`` is not an option), and
     - ``lima/*.sh`` provisioning scripts, which embed the manifest's
-      checksums verbatim to verify downloads (kept in sync by
+      digests verbatim to verify downloads (kept in sync by
       ``scripts/validate_tool_versions.py``). Any hex finding there that
       exactly matches a manifest-declared digest is a known false
       positive; anything else still fails the hook.
@@ -128,5 +130,5 @@ def is_manifest_release_checksum(
     if _is_manifest(filename):
         return _line_contains_checksum(line, secret)
     if _is_lima_script(filename):
-        return secret.lower() in _manifest_release_digests()
+        return secret in _manifest_release_digests()
     return False

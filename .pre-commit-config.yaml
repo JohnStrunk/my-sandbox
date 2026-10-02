@@ -125,3 +125,13 @@ repos:
         language: system
         pass_filenames: false
         files: '^(lima/tool-versions\.json|lima/certs/[^/]+\.crt|\.github/workflows/ci-workflow\.yaml|\.pre-commit-config\.yaml|pyproject\.toml|uv\.lock|scripts/validate_tool_versions\.py|lima/[^/]+\.sh)$'
+      - id: test-renovate-datasource-transforms
+        name: Test Renovate JSONata datasource transforms
+        entry: node scripts/test_renovate_transforms.cjs
+        language: node
+        # 2.2.1 fixes critical JSONata RCE advisories CVE-2026-77414/77415.
+        additional_dependencies:
+          - jsonata@2.2.1
+          - json5@2.2.3
+        pass_filenames: false
+        files: '^(\.pre-commit-config\.yaml|\.github/renovate\.json5|tests/fixtures/renovate/.*|scripts/test_renovate_transforms\.cjs)$'

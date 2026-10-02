@@ -41,8 +41,38 @@ export HF_HOME="$HOME/.cache/semble/huggingface"
 mkdir -p "$HOME/.cache/uv" "$HOME/.cache/semble" "$CARGO_HOME" "$RUSTUP_HOME" \
   "$PLAYWRIGHT_BROWSERS_PATH" "$HF_HOME" "$HOME/.local/bin"
 
+declare -A VERSION_ONLY_DIAGNOSTICS=()
+
+manifest_integrity_policy() {
+  local tool="$1" policy
+  if ! policy="$(jq -er --arg tool "$tool" '.tools[$tool].integrity' "$MANIFEST")"; then
+    echo "devbox: missing integrity policy for manifest tool '$tool'" >&2
+    return 1
+  fi
+  case "$policy" in
+    sha256|version-only) ;;
+    *)
+      echo "devbox: unknown integrity policy '$policy' for manifest tool '$tool'" >&2
+      return 1
+      ;;
+  esac
+  printf '%s\n' "$policy"
+}
+
+report_version_only() {
+  local artifact="$1"
+  if [[ -z "${VERSION_ONLY_DIAGNOSTICS[$artifact]:-}" ]]; then
+    echo "devbox: $artifact uses version-only integrity; SHA-256 verification is skipped" >&2
+    VERSION_ONLY_DIAGNOSTICS["$artifact"]=1
+  fi
+}
+
 manifest_version() {
-  local tool="$1" version
+  local tool="$1" version policy
+  policy="$(manifest_integrity_policy "$tool")" || return 1
+  if [[ "$policy" == version-only ]]; then
+    report_version_only "$tool"
+  fi
   version="$(jq -er --arg tool "$tool" '.tools[$tool].version' "$MANIFEST")"
   version="${version#v}"
   if [[ ! "$version" =~ ^[0-9]+(\.[0-9]+){1,3}([+-][A-Za-z0-9.]+)?$ ]]; then
@@ -53,20 +83,64 @@ manifest_version() {
 }
 
 manifest_checksum() {
-  local tool="$1" arch="$2" checksum
+  local tool="$1" arch="$2" checksum policy
+  policy="$(manifest_integrity_policy "$tool")" || return 1
+  if [[ "$policy" != sha256 ]]; then
+    echo "devbox: refusing checksum lookup for version-only tool '$tool'" >&2
+    return 1
+  fi
   checksum="$(jq -er --arg tool "$tool" --arg arch "$arch" \
-    '.tools[$tool].checksums[$arch]' "$MANIFEST")"
+    '.tools[$tool].artifacts[$arch].sha256' "$MANIFEST")"
   if [[ ! "$checksum" =~ ^[0-9a-f]{64}$ ]]; then
-    echo "devbox: invalid checksum for manifest tool '$tool' ($arch)" >&2
+    echo "devbox: invalid SHA-256 digest for manifest tool '$tool' ($arch)" >&2
     return 1
   fi
   printf '%s\n' "$checksum"
 }
 
+manifest_artifact_version() {
+  local tool="$1" arch="$2" policy version artifact_version
+  policy="$(manifest_integrity_policy "$tool")" || return 1
+  if [[ "$policy" != sha256 ]]; then
+    echo "devbox: refusing artifact tag lookup for version-only tool '$tool'" >&2
+    return 1
+  fi
+  version="$(manifest_version "$tool")" || return 1
+  artifact_version="$(jq -er --arg tool "$tool" --arg arch "$arch" \
+    '.tools[$tool].artifacts[$arch].version' "$MANIFEST")" || {
+    echo "devbox: missing $arch release tag for manifest tool '$tool'" >&2
+    return 1
+  }
+  if [[ ! "$artifact_version" =~ ^v?[0-9]+(\.[0-9]+){1,3}([+-][A-Za-z0-9.]+)?$ ]] \
+    || [[ "${artifact_version#v}" != "$version" ]]; then
+    echo "devbox: invalid or unsynchronized $arch release tag for manifest tool '$tool'" >&2
+    return 1
+  fi
+  printf '%s\n' "$artifact_version"
+}
+
 verify_download() {
-  local tool="$1" arch="$2" path="$3" checksum
+  local tool="$1" arch="$2" path="$3" checksum policy
+  policy="$(manifest_integrity_policy "$tool")" || return 1
+  if [[ "$policy" == version-only ]]; then
+    report_version_only "$tool"
+    return 0
+  fi
   checksum="$(manifest_checksum "$tool" "$arch")"
   printf '%s  %s\n' "$checksum" "$path" | sha256sum -c -
+}
+
+manifest_integrity_fingerprint() {
+  local tool="$1" arch="$2" policy version artifact_version checksum
+  policy="$(manifest_integrity_policy "$tool")" || return 1
+  version="$(manifest_version "$tool")" || return 1
+  if [[ "$policy" == version-only ]]; then
+    printf '%s|version-only\n' "$version"
+    return 0
+  fi
+  artifact_version="$(manifest_artifact_version "$tool" "$arch")" || return 1
+  checksum="$(manifest_checksum "$tool" "$arch")" || return 1
+  printf '%s|sha256|%s|%s\n' "$version" "$artifact_version" "$checksum"
 }
 
 ensure_npm_package() {
@@ -111,13 +185,18 @@ fi
 
 rustup_version="$(manifest_version rustup)"
 rust_version="$(manifest_version rust)"
+case "$(uname -m)" in
+  x86_64) rustup_arch=x86_64-unknown-linux-gnu; checksum_arch=amd64 ;;
+  aarch64) rustup_arch=aarch64-unknown-linux-gnu; checksum_arch=arm64 ;;
+  *) echo "devbox: unsupported architecture for rustup: $(uname -m)" >&2; exit 1 ;;
+esac
+rustup_fingerprint="$(manifest_integrity_fingerprint rustup "$checksum_arch")"
 rustup_installed="$(rustup --version 2>/dev/null | awk '{print $2}' || true)"
-if [[ "$rustup_installed" != "$rustup_version" ]]; then
-  case "$(uname -m)" in
-    x86_64) rustup_arch=x86_64-unknown-linux-gnu; checksum_arch=amd64 ;;
-    aarch64) rustup_arch=aarch64-unknown-linux-gnu; checksum_arch=arm64 ;;
-    *) echo "devbox: unsupported architecture for rustup: $(uname -m)" >&2; exit 1 ;;
-  esac
+rustup_stamp="$HOME/.cache/tool-integrity/rustup"
+if [[ "$rustup_installed" != "$rustup_version" ]] \
+  || [[ ! -f "$rustup_stamp" ]] \
+  || [[ "$(cat "$rustup_stamp")" != "$rustup_fingerprint" ]]; then
+  install -d -m 0700 "${rustup_stamp%/*}"
   tmp="$(mktemp -d "$HOME/.cache/rustup.XXXXXX")"
   curl --retry 3 --retry-connrefused -fsSL \
     "https://static.rust-lang.org/rustup/archive/${rustup_version}/${rustup_arch}/rustup-init" \
@@ -126,6 +205,8 @@ if [[ "$rustup_installed" != "$rustup_version" ]]; then
   chmod 0755 "$tmp/rustup-init"
   "$tmp/rustup-init" -y --no-modify-path --default-toolchain none
   rm -rf -- "$tmp"
+  printf '%s\n' "$rustup_fingerprint" >"$rustup_stamp.new"
+  mv -f "$rustup_stamp.new" "$rustup_stamp"
 fi
 if ! rustup toolchain list | grep -q "^${rust_version}-"; then
   rustup toolchain install "$rust_version" --profile minimal

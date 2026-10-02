@@ -43,8 +43,38 @@ if [[ "$(realpath -e -- "$MANIFEST_SOURCE")" != "$MANIFEST_SOURCE" ]]; then
   exit 1
 fi
 
+declare -A VERSION_ONLY_DIAGNOSTICS=()
+
+manifest_integrity_policy() {
+  local tool="$1" policy
+  if ! policy="$(jq -er --arg tool "$tool" '.tools[$tool].integrity' "$MANIFEST")"; then
+    echo "devbox: missing integrity policy for manifest tool '$tool'" >&2
+    return 1
+  fi
+  case "$policy" in
+    sha256|version-only) ;;
+    *)
+      echo "devbox: unknown integrity policy '$policy' for manifest tool '$tool'" >&2
+      return 1
+      ;;
+  esac
+  printf '%s\n' "$policy"
+}
+
+report_version_only() {
+  local artifact="$1"
+  if [[ -z "${VERSION_ONLY_DIAGNOSTICS[$artifact]:-}" ]]; then
+    echo "devbox: $artifact uses version-only integrity; SHA-256 verification is skipped" >&2
+    VERSION_ONLY_DIAGNOSTICS["$artifact"]=1
+  fi
+}
+
 manifest_version() {
-  local tool="$1" version
+  local tool="$1" version policy
+  policy="$(manifest_integrity_policy "$tool")" || return 1
+  if [[ "$policy" == version-only ]]; then
+    report_version_only "$tool"
+  fi
   version="$(jq -er --arg tool "$tool" '.tools[$tool].version' "$MANIFEST")"
   version="${version#v}"
   if [[ ! "$version" =~ ^[0-9]+(\.[0-9]+){1,3}([+-][A-Za-z0-9.]+)?$ ]]; then
@@ -55,14 +85,40 @@ manifest_version() {
 }
 
 manifest_checksum() {
-  local tool="$1" arch="$2" checksum
+  local tool="$1" arch="$2" checksum policy
+  policy="$(manifest_integrity_policy "$tool")" || return 1
+  if [[ "$policy" != sha256 ]]; then
+    echo "devbox: refusing checksum lookup for version-only tool '$tool'" >&2
+    return 1
+  fi
   checksum="$(jq -er --arg tool "$tool" --arg arch "$arch" \
-    '.tools[$tool].checksums[$arch]' "$MANIFEST")"
+    '.tools[$tool].artifacts[$arch].sha256' "$MANIFEST")"
   if [[ ! "$checksum" =~ ^[0-9a-f]{64}$ ]]; then
-    echo "devbox: invalid checksum for manifest tool '$tool' ($arch)" >&2
+    echo "devbox: invalid SHA-256 digest for manifest tool '$tool' ($arch)" >&2
     return 1
   fi
   printf '%s\n' "$checksum"
+}
+
+manifest_artifact_version() {
+  local tool="$1" arch="$2" policy version artifact_version
+  policy="$(manifest_integrity_policy "$tool")" || return 1
+  if [[ "$policy" != sha256 ]]; then
+    echo "devbox: refusing artifact tag lookup for version-only tool '$tool'" >&2
+    return 1
+  fi
+  version="$(manifest_version "$tool")" || return 1
+  artifact_version="$(jq -er --arg tool "$tool" --arg arch "$arch" \
+    '.tools[$tool].artifacts[$arch].version' "$MANIFEST")" || {
+    echo "devbox: missing $arch release tag for manifest tool '$tool'" >&2
+    return 1
+  }
+  if [[ ! "$artifact_version" =~ ^v?[0-9]+(\.[0-9]+){1,3}([+-][A-Za-z0-9.]+)?$ ]] \
+    || [[ "${artifact_version#v}" != "$version" ]]; then
+    echo "devbox: invalid or unsynchronized $arch release tag for manifest tool '$tool'" >&2
+    return 1
+  fi
+  printf '%s\n' "$artifact_version"
 }
 
 manifest_arch() {
@@ -77,9 +133,51 @@ manifest_arch() {
 }
 
 verify_download() {
-  local tool="$1" arch="$2" path="$3" checksum
+  local tool="$1" arch="$2" path="$3" checksum policy
+  policy="$(manifest_integrity_policy "$tool")" || return 1
+  if [[ "$policy" == version-only ]]; then
+    report_version_only "$tool"
+    return 0
+  fi
   checksum="$(manifest_checksum "$tool" "$arch")"
   printf '%s  %s\n' "$checksum" "$path" | sha256sum -c -
+}
+
+manifest_integrity_fingerprint() {
+  local tool="$1" arch="$2" policy version artifact_version checksum
+  policy="$(manifest_integrity_policy "$tool")" || return 1
+  version="$(manifest_version "$tool")" || return 1
+  if [[ "$policy" == version-only ]]; then
+    printf '%s|version-only\n' "$version"
+    return 0
+  fi
+  artifact_version="$(manifest_artifact_version "$tool" "$arch")" || return 1
+  checksum="$(manifest_checksum "$tool" "$arch")" || return 1
+  printf '%s|sha256|%s|%s\n' "$version" "$artifact_version" "$checksum"
+}
+
+artifact_integrity_matches() {
+  local tool="$1" fingerprint="$2" stamp
+  if [[ ! "$tool" =~ ^[a-z][a-z0-9_]*$ ]]; then
+    echo "devbox: invalid tool name for integrity stamp" >&2
+    return 1
+  fi
+  stamp="/var/lib/devbox-vm/integrity/$tool"
+  [[ -f "$stamp" ]] && [[ "$(cat "$stamp")" == "$fingerprint" ]]
+}
+
+record_artifact_integrity() {
+  local tool="$1" fingerprint="$2" stamp tmp
+  if [[ ! "$tool" =~ ^[a-z][a-z0-9_]*$ ]]; then
+    echo "devbox: invalid tool name for integrity stamp" >&2
+    return 1
+  fi
+  stamp="/var/lib/devbox-vm/integrity/$tool"
+  install -d -m 0755 "${stamp%/*}"
+  tmp="$(mktemp "${stamp}.XXXXXX")"
+  printf '%s\n' "$fingerprint" >"$tmp"
+  chmod 0644 "$tmp"
+  mv -f "$tmp" "$stamp"
 }
 
 # Copy a repository input through no-follow directory/file descriptors. The
@@ -737,9 +835,11 @@ case "$arch" in
   amd64) node_arch=x64 ;;
   arm64) node_arch=arm64 ;;
 esac
+NODE_FINGERPRINT="$(manifest_integrity_fingerprint node "$arch")"
 node_version_installed="$(as_toolbuilder /usr/local/node/bin/node --version \
   2>/dev/null || true)"
-if [[ "$node_version_installed" != "v$NODE_VERSION" ]]; then
+if [[ "$node_version_installed" != "v$NODE_VERSION" ]] \
+  || ! artifact_integrity_matches node "$NODE_FINGERPRINT"; then
   node_archive="node-v${NODE_VERSION}-linux-${node_arch}.tar.xz"
   tmp="$(new_temp_dir)"
   curl --retry 3 --retry-connrefused -fsSL \
@@ -748,16 +848,26 @@ if [[ "$node_version_installed" != "v$NODE_VERSION" ]]; then
   verify_download node "$arch" "$tmp/$node_archive"
   tar -C "$tmp" -xJf "$tmp/$node_archive"
   node_dir="/usr/local/lib/devbox-node-v${NODE_VERSION}-${node_arch}"
-  if [[ ! -x "$node_dir/bin/node" ]]; then
-    mv "$tmp/node-v${NODE_VERSION}-linux-${node_arch}" "$node_dir"
+  node_source="$tmp/node-v${NODE_VERSION}-linux-${node_arch}"
+  if [[ ! -x "$node_source/bin/node" ]]; then
+    echo "devbox: downloaded Node archive has no executable binary" >&2
+    exit 1
   fi
+  # A changed digest/policy can require replacing bytes even when the version
+  # string is unchanged; never stamp an old directory as newly verified.
+  rm -rf -- "$node_dir"
+  mv "$node_source" "$node_dir"
   ln -sfnT "$node_dir" /usr/local/node
+  record_artifact_integrity node "$NODE_FINGERPRINT"
 fi
 
 UV_VERSION="$(manifest_version uv)"
+UV_ARTIFACT_VERSION="$(manifest_artifact_version uv "$arch")"
+UV_FINGERPRINT="$(manifest_integrity_fingerprint uv "$arch")"
 uv_installed="$(as_toolbuilder /usr/local/bin/uv --version 2>/dev/null \
   | awk '{print $2}' || true)"
-if [[ "$uv_installed" != "$UV_VERSION" ]]; then
+if [[ "$uv_installed" != "$UV_VERSION" ]] \
+  || ! artifact_integrity_matches uv "$UV_FINGERPRINT"; then
   case "$arch" in
     amd64) uv_arch=x86_64 ;;
     arm64) uv_arch=aarch64 ;;
@@ -765,30 +875,37 @@ if [[ "$uv_installed" != "$UV_VERSION" ]]; then
   uv_dir="uv-${uv_arch}-unknown-linux-gnu"
   tmp="$(new_temp_dir)"
   curl --retry 3 --retry-connrefused -fsSL \
-    "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/${uv_dir}.tar.gz" \
+    "https://github.com/astral-sh/uv/releases/download/${UV_ARTIFACT_VERSION}/${uv_dir}.tar.gz" \
     -o "$tmp/uv.tar.gz"
   verify_download uv "$arch" "$tmp/uv.tar.gz"
   tar -C "$tmp" -xzf "$tmp/uv.tar.gz"
   install -m 0755 "$tmp/$uv_dir/uv" /usr/local/bin/uv
   install -m 0755 "$tmp/$uv_dir/uvx" /usr/local/bin/uvx
+  record_artifact_integrity uv "$UV_FINGERPRINT"
 fi
 
 HADOLINT_VERSION="$(manifest_version hadolint)"
+HADOLINT_ARTIFACT_VERSION="$(manifest_artifact_version hadolint "$arch")"
+HADOLINT_FINGERPRINT="$(manifest_integrity_fingerprint hadolint "$arch")"
 hadolint_installed="$(as_toolbuilder /usr/local/bin/hadolint \
   --version 2>/dev/null | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)"
-if [[ "$hadolint_installed" != "$HADOLINT_VERSION" ]]; then
+if [[ "$hadolint_installed" != "$HADOLINT_VERSION" ]] \
+  || ! artifact_integrity_matches hadolint "$HADOLINT_FINGERPRINT"; then
   tmp="$(new_temp_dir)"
   curl --retry 3 --retry-connrefused -fsSL \
-    "https://github.com/hadolint/hadolint/releases/download/v${HADOLINT_VERSION}/hadolint-linux-${hadolint_arch}" \
+    "https://github.com/hadolint/hadolint/releases/download/${HADOLINT_ARTIFACT_VERSION}/hadolint-linux-${hadolint_arch}" \
     -o "$tmp/hadolint"
   verify_download hadolint "$arch" "$tmp/hadolint"
   install -m 0755 "$tmp/hadolint" /usr/local/bin/hadolint
+  record_artifact_integrity hadolint "$HADOLINT_FINGERPRINT"
 fi
 
 GO_VERSION="$(manifest_version go)"
+GO_FINGERPRINT="$(manifest_integrity_fingerprint go "$arch")"
 go_installed="$(as_toolbuilder /usr/local/go/bin/go version \
   2>/dev/null | sed -n 's/.*go\([0-9.]*\).*/\1/p' || true)"
-if [[ "$go_installed" != "$GO_VERSION" ]]; then
+if [[ "$go_installed" != "$GO_VERSION" ]] \
+  || ! artifact_integrity_matches go "$GO_FINGERPRINT"; then
   tmp="$(new_temp_dir)"
   curl --retry 3 --retry-connrefused -fsSL \
     "https://go.dev/dl/go${GO_VERSION}.linux-${go_arch}.tar.gz" \
@@ -797,6 +914,7 @@ if [[ "$go_installed" != "$GO_VERSION" ]]; then
   tar -C "$tmp" -xzf "$tmp/go.tgz"
   rm -rf /usr/local/go
   mv "$tmp/go" /usr/local/go
+  record_artifact_integrity go "$GO_FINGERPRINT"
 fi
 if [[ ! -L /usr/local/bin/go ]] \
   || [[ "$(readlink /usr/local/bin/go)" != /usr/local/go/bin/go ]]; then
@@ -804,37 +922,42 @@ if [[ ! -L /usr/local/bin/go ]] \
 fi
 
 LIMACTL_VERSION="$(manifest_version limactl)"
-limactl_stamp=/usr/local/share/devbox-vm/limactl.version
-limactl_installed="$(cat "$limactl_stamp" 2>/dev/null || true)"
-if [[ ! -x /usr/local/bin/limactl || "$limactl_installed" != "$LIMACTL_VERSION" ]]; then
+LIMACTL_ARTIFACT_VERSION="$(manifest_artifact_version limactl "$arch")"
+LIMACTL_FINGERPRINT="$(manifest_integrity_fingerprint limactl "$arch")"
+if [[ ! -x /usr/local/bin/limactl ]] \
+  || ! artifact_integrity_matches limactl "$LIMACTL_FINGERPRINT"; then
   tmp="$(new_temp_dir)"
   curl --retry 3 --retry-connrefused -fsSL \
-    "https://github.com/lima-vm/lima/releases/download/v${LIMACTL_VERSION}/lima-${LIMACTL_VERSION}-Linux-${lima_arch}.tar.gz" \
+    "https://github.com/lima-vm/lima/releases/download/${LIMACTL_ARTIFACT_VERSION}/lima-${LIMACTL_VERSION}-Linux-${lima_arch}.tar.gz" \
     -o "$tmp/limactl.tgz"
   verify_download limactl "$arch" "$tmp/limactl.tgz"
   tar -C /usr/local -xzf "$tmp/limactl.tgz"
-  install -d -m 0755 "$(dirname "$limactl_stamp")"
-  printf '%s\n' "$LIMACTL_VERSION" >"$limactl_stamp.new"
-  mv "$limactl_stamp.new" "$limactl_stamp"
+  record_artifact_integrity limactl "$LIMACTL_FINGERPRINT"
 fi
 
 ANTIGRAVITY_VERSION="$(manifest_version antigravity_cli)"
+ANTIGRAVITY_ARTIFACT_VERSION="$(manifest_artifact_version antigravity_cli "$arch")"
+ANTIGRAVITY_FINGERPRINT="$(manifest_integrity_fingerprint antigravity_cli "$arch")"
 agy_installed="$(as_toolbuilder /usr/local/bin/agy --version \
   2>/dev/null | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)"
-if [[ "$agy_installed" != "$ANTIGRAVITY_VERSION" ]]; then
+if [[ "$agy_installed" != "$ANTIGRAVITY_VERSION" ]] \
+  || ! artifact_integrity_matches antigravity_cli "$ANTIGRAVITY_FINGERPRINT"; then
   tmp="$(new_temp_dir)"
   curl --retry 3 --retry-connrefused -fsSL \
-    "https://github.com/google-antigravity/antigravity-cli/releases/download/${ANTIGRAVITY_VERSION}/agy_cli_linux_${agy_arch}.tar.gz" \
+    "https://github.com/google-antigravity/antigravity-cli/releases/download/${ANTIGRAVITY_ARTIFACT_VERSION}/agy_cli_linux_${agy_arch}.tar.gz" \
     -o "$tmp/agy.tgz"
   verify_download antigravity_cli "$arch" "$tmp/agy.tgz"
   tar -C "$tmp" -xzf "$tmp/agy.tgz" antigravity
   install -m 0755 "$tmp/antigravity" /usr/local/bin/agy
+  record_artifact_integrity antigravity_cli "$ANTIGRAVITY_FINGERPRINT"
 fi
 
 ACLI_VERSION="$(manifest_version acli)"
+ACLI_FINGERPRINT="$(manifest_integrity_fingerprint acli "$arch")"
 acli_installed="$(as_toolbuilder /usr/local/bin/acli --version \
   2>/dev/null || true)"
-if [[ "$acli_installed" != *"$ACLI_VERSION"* ]]; then
+if [[ "$acli_installed" != *"$ACLI_VERSION"* ]] \
+  || ! artifact_integrity_matches acli "$ACLI_FINGERPRINT"; then
   tmp="$(new_temp_dir)"
   curl --retry 3 --retry-connrefused -fLsS \
     "https://acli.atlassian.com/linux/${ACLI_VERSION}/acli_${ACLI_VERSION}_linux_${arch}.tar.gz" \
@@ -843,39 +966,49 @@ if [[ "$acli_installed" != *"$ACLI_VERSION"* ]]; then
   tar -C "$tmp" -xzf "$tmp/acli.tgz"
   install -m 0755 "$tmp/acli_${ACLI_VERSION}_linux_${arch}/acli" \
     /usr/local/bin/acli
+  record_artifact_integrity acli "$ACLI_FINGERPRINT"
 fi
 
 KIND_VERSION="$(manifest_version kind)"
+KIND_ARTIFACT_VERSION="$(manifest_artifact_version kind "$arch")"
+KIND_FINGERPRINT="$(manifest_integrity_fingerprint kind "$arch")"
 kind_installed="$(as_toolbuilder /usr/local/bin/kind version \
   2>/dev/null | grep -Eo 'v[0-9]+\.[0-9]+\.[0-9]+' | head -n1 \
   | sed 's/^v//' || true)"
-if [[ "$kind_installed" != "$KIND_VERSION" ]]; then
+if [[ "$kind_installed" != "$KIND_VERSION" ]] \
+  || ! artifact_integrity_matches kind "$KIND_FINGERPRINT"; then
   tmp="$(new_temp_dir)"
   curl --retry 3 --retry-connrefused -fsSL \
-    "https://github.com/kubernetes-sigs/kind/releases/download/v${KIND_VERSION}/kind-linux-${arch}" \
+    "https://github.com/kubernetes-sigs/kind/releases/download/${KIND_ARTIFACT_VERSION}/kind-linux-${arch}" \
     -o "$tmp/kind"
   verify_download kind "$arch" "$tmp/kind"
   install -m 0755 "$tmp/kind" /usr/local/bin/kind
+  record_artifact_integrity kind "$KIND_FINGERPRINT"
 fi
 
 KUBECTL_VERSION="$(manifest_version kubectl)"
+KUBECTL_FINGERPRINT="$(manifest_integrity_fingerprint kubectl "$arch")"
 kubectl_installed="$(as_toolbuilder /usr/local/bin/kubectl \
   version --client -o json 2>/dev/null \
   | jq -r '.clientVersion.gitVersion // ""' | sed 's/^v//' || true)"
-if [[ "$kubectl_installed" != "$KUBECTL_VERSION" ]]; then
+if [[ "$kubectl_installed" != "$KUBECTL_VERSION" ]] \
+  || ! artifact_integrity_matches kubectl "$KUBECTL_FINGERPRINT"; then
   tmp="$(new_temp_dir)"
   curl --retry 3 --retry-connrefused -fsSL \
     "https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/${arch}/kubectl" \
     -o "$tmp/kubectl"
   verify_download kubectl "$arch" "$tmp/kubectl"
   install -m 0755 "$tmp/kubectl" /usr/local/bin/kubectl
+  record_artifact_integrity kubectl "$KUBECTL_FINGERPRINT"
 fi
 
 HELM_VERSION="$(manifest_version helm)"
+HELM_FINGERPRINT="$(manifest_integrity_fingerprint helm "$arch")"
 helm_installed="$(as_toolbuilder /usr/local/bin/helm version --short \
   2>/dev/null | grep -Eo 'v[0-9]+\.[0-9]+\.[0-9]+' | head -n1 \
   | sed 's/^v//' || true)"
-if [[ "$helm_installed" != "$HELM_VERSION" ]]; then
+if [[ "$helm_installed" != "$HELM_VERSION" ]] \
+  || ! artifact_integrity_matches helm "$HELM_FINGERPRINT"; then
   tmp="$(new_temp_dir)"
   curl --retry 3 --retry-connrefused -fsSL \
     "https://get.helm.sh/helm-v${HELM_VERSION}-linux-${arch}.tar.gz" \
@@ -883,25 +1016,30 @@ if [[ "$helm_installed" != "$HELM_VERSION" ]]; then
   verify_download helm "$arch" "$tmp/helm.tgz"
   tar -C "$tmp" -xzf "$tmp/helm.tgz"
   install -m 0755 "$tmp/linux-${arch}/helm" /usr/local/bin/helm
+  record_artifact_integrity helm "$HELM_FINGERPRINT"
 fi
 
 # ast-grep release assets are checksum-verified against the live manifest.
 AST_GREP_VERSION="$(manifest_version ast_grep)"
+AST_GREP_ARTIFACT_VERSION="$(manifest_artifact_version ast_grep "$arch")"
+AST_GREP_FINGERPRINT="$(manifest_integrity_fingerprint ast_grep "$arch")"
 ast_grep_installed="$(as_toolbuilder /usr/local/bin/ast-grep \
   --version 2>/dev/null | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)"
-if [[ "$ast_grep_installed" != "$AST_GREP_VERSION" ]]; then
+if [[ "$ast_grep_installed" != "$AST_GREP_VERSION" ]] \
+  || ! artifact_integrity_matches ast_grep "$AST_GREP_FINGERPRINT"; then
   tmp="$(new_temp_dir)"
   case "$arch" in
     amd64) ast_grep_arch=x86_64 ;;
     arm64) ast_grep_arch=aarch64 ;;
   esac
   curl --retry 3 --retry-connrefused -fsSL \
-    "https://github.com/ast-grep/ast-grep/releases/download/${AST_GREP_VERSION}/app-${ast_grep_arch}-unknown-linux-gnu.zip" \
+    "https://github.com/ast-grep/ast-grep/releases/download/${AST_GREP_ARTIFACT_VERSION}/app-${ast_grep_arch}-unknown-linux-gnu.zip" \
     -o "$tmp/ast-grep.zip"
   verify_download ast_grep "$arch" "$tmp/ast-grep.zip"
   unzip -q "$tmp/ast-grep.zip" -d "$tmp/bin"
   install -m 0755 "$tmp/bin/ast-grep" /usr/local/bin/ast-grep
   install -m 0755 "$tmp/bin/sg" /usr/local/bin/sg
+  record_artifact_integrity ast_grep "$AST_GREP_FINGERPRINT"
 fi
 
 # Run all language-package installers and automatic tool version commands with

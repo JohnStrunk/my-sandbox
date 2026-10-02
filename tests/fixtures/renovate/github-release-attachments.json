@@ -1,0 +1,28 @@
+{
+  "current": {
+    "tag_name": "v1.0.0",
+    "assets": [
+      {
+        "name": "node-v1.0.0-linux-x64.tar.xz",
+        "content": "fake current amd64 Node-like release asset"
+      },
+      {
+        "name": "node-v1.0.0-linux-arm64.tar.xz",
+        "content": "fake current arm64 Node-like release asset"
+      }
+    ]
+  },
+  "candidate": {
+    "tag_name": "v1.1.0",
+    "assets": [
+      {
+        "name": "node-v1.1.0-linux-x64.tar.xz",
+        "content": "fake candidate amd64 Node-like release asset"
+      },
+      {
+        "name": "node-v1.1.0-linux-arm64.tar.xz",
+        "content": "fake candidate arm64 Node-like release asset"
+      }
+    ]
+  }
+}

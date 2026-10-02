@@ -518,8 +518,10 @@ integration work.
 - **Manifest-pinned tools**: OpenCode, Go + `devbox-go`, uv, Rust, Node/npm,
   Playwright CLI + bundled Chromium, ast-grep + its skills, Semble + prefetched
   model, Repomix, Hadolint, markdownlint-cli2, pre-commit, acli, Google
-  Workspace CLI, Antigravity CLI, kind, kubectl, Helm, and Pipenv. Release
-  assets with manifest checksums are verified before installation.
+  Workspace CLI, Antigravity CLI, kind, kubectl, Helm, and Pipenv. Assets
+  declaring SHA-256 integrity are verified before installation; version-only
+  assets are fetched over HTTPS at their exact pinned versions without a
+  manifest-level digest check.
 - **Operator profile**: GNU make, kind, kubectl, Helm, Python/pip, Pipenv, and
   a VM-local `~/.local/share/kubebuilder-envtest` asset-store location.
 - **Additional CLIs/utilities**: `gh`, `glab`, `gcloud`, `gws`, ShellCheck,
@@ -534,9 +536,46 @@ integration work.
 
 Every tool installed at a manifest-pinned version declares a `lima` consumer
 in `lima/tool-versions.json`. Provisioning reads those versions and
-checksummed asset digests at runtime; `scripts/validate_tool_versions.py`
-ensures the scripts consume every declared Lima tool, and
-`lima/check_toolchain.py` verifies the installed versions.
+integrity policies at runtime; `scripts/validate_tool_versions.py` ensures the
+scripts consume every declared Lima tool, and `lima/check_toolchain.py` verifies
+the installed versions.
+
+### Tool artifact integrity
+
+The manifest explicitly marks each downloaded tool or skill `sha256` or
+`version-only`. Checksum-managed releases are **Hadolint**, **uv**,
+**Antigravity CLI**, **limactl**, **kind**, the **ast-grep release binaries**,
+and **acli**. Each has separate amd64 and arm64 records; their exact upstream
+versions and SHA-256 values are verified before installation. The top-level
+`version` remains the provisioning alias, and the validator requires both
+artifact versions to normalize to it. The ast-grep agent-skill archive is also
+verified against its pinned commit's SHA-256.
+
+The v1 direct-download exceptions are **Node**, **Go**, **rustup**, **Helm**,
+and **kubectl**. They retain exact HTTPS version or commit pins but are
+intentionally **not SHA-256-verified**. Other npm, Python, and pre-commit
+package pins also use `version-only` because the manifest does not carry their
+artifact digests. Go retains Renovate's timestamped `golang-version` datasource
+and the global 10-day release-age gate. Although go.dev's JSON feed publishes
+Linux hashes, it lacks timestamps to join to the version datasource, so Go is
+version-only in v1. acli uses Atlassian's official Homebrew formula for its
+version and both architecture digests. Its feeds have no release timestamps,
+so a scoped `timestamp-optional` rule lets the acli group update without the
+global 10-day wait. Other dependencies keep that gate unchanged.
+
+Version-only direct downloads rely on HTTPS and the VM trust store, which
+includes the repository's internal Red Hat CA roots as well as public roots;
+those internal CAs are part of the TLS integrity boundary for these pins.
+
+The Renovate configuration gives each GitHub release architecture a separate
+`github-release-attachments` dependency. For acli, it uses a separate custom
+datasource per architecture to extract the Linux download URL's version and
+following SHA-256 line from the official formula. Each checksum group requires
+three updates, so Renovate waits for the version alias and both architectures
+before opening a PR. Offline regression tests cover the regex replacement,
+release-attachment mapping, configured acli JSONata transforms against a formula
+fixture, and provenance verification. Only a real Mend-hosted Renovate run can
+prove the hosted bot creates both architecture updates in one PR.
 
 ## Deviations from the issue text
 
