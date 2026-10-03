@@ -68,21 +68,21 @@
       }
     },
     "uv": {
-      "version": "0.12.17",
+      "version": "0.12.18",
       "datasource": "github-releases",
       "depName": "astral-sh/uv",
       "integrity": "sha256",
       "artifacts": {
         "amd64": {
-          "version": "0.12.17",
-          "sha256": "fa82fd8dde8e8eefdecada6aa0889666556cfceb690d06e0c3bca49eb3070a63",
+          "version": "0.12.18",
+          "sha256": "89eadd7c76fc063887959510d5ba0ab1264dfd5f1143b925ddb73021a40acf16",
           "depName": "astral-sh/uv-amd64",
           "packageName": "astral-sh/uv",
           "datasource": "github-release-attachments"
         },
         "arm64": {
-          "version": "0.12.17",
-          "sha256": "d636d1b678e9e7f367ecb22b46bd1cabbed234d6bc3b4d96365d2b507f72f86c",
+          "version": "0.12.18",
+          "sha256": "afb6291f3f0a6b4521fc67b947822506c41dde5b60d2189dd8f3695b2ac8c9e7",
           "depName": "astral-sh/uv-arm64",
           "packageName": "astral-sh/uv",
           "datasource": "github-release-attachments"
