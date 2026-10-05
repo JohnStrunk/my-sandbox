@@ -381,7 +381,7 @@
       }
     },
     "ruff": {
-      "version": "0.16.8",
+      "version": "0.16.9",
       "datasource": "pypi",
       "depName": "ruff",
       "integrity": "version-only",
@@ -401,7 +401,7 @@
       }
     },
     "renovatebot_hooks": {
-      "version": "44.107.0",
+      "version": "44.115.1",
       "datasource": "github-tags",
       "depName": "renovatebot/pre-commit-hooks",
       "integrity": "version-only",
