@@ -6,6 +6,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -27,6 +28,49 @@ def make_disposable_paths(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
         encoding="utf-8",
     )
     return runner_temp, host_home, lima_home, data_directory
+
+
+class SyntheticSQLiteError(sqlite3.OperationalError):
+    def __init__(self, code: int, name: str):
+        super().__init__("synthetic SQLite failure")
+        self.sqlite_errorcode = code
+        self.sqlite_errorname = name
+
+
+class TransactionConnection:
+    def __init__(
+        self,
+        fail_operation: str,
+        error: sqlite3.Error,
+        failures: int,
+        *,
+        rollback_error: sqlite3.Error | None = None,
+    ):
+        self.fail_operation = fail_operation
+        self.error = error
+        self.failures = failures
+        self.rollback_error = rollback_error
+        self.statements: list[str] = []
+        self._in_transaction = False
+
+    @property
+    def in_transaction(self) -> bool:
+        return self._in_transaction
+
+    def execute(self, operation: str, _parameters: Any = None) -> None:
+        self.statements.append(operation)
+        normalized_operation = (
+            "INSERT" if operation.startswith("INSERT ") else operation
+        )
+        if normalized_operation == self.fail_operation and self.failures:
+            self.failures -= 1
+            raise self.error
+        if operation == "ROLLBACK" and self.rollback_error is not None:
+            raise self.rollback_error
+        if operation == "BEGIN IMMEDIATE":
+            self._in_transaction = True
+        elif operation in ("COMMIT", "ROLLBACK"):
+            self._in_transaction = False
 
 
 @pytest.mark.unit
@@ -159,6 +203,275 @@ def test_mode_rw_refuses_to_create_a_missing_database(tmp_path: Path):
         validation.connect_existing_database(missing_database)
 
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.unit
+def test_ordinary_transaction_retries_busy_insert_and_restarts_transaction(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    connection = TransactionConnection(
+        "INSERT",
+        SyntheticSQLiteError(sqlite3.SQLITE_BUSY, "SQLITE_BUSY"),
+        failures=1,
+    )
+    delays = []
+    monkeypatch.setattr(validation.time, "sleep", delays.append)
+
+    validation._run_ordinary_transaction(
+        cast(sqlite3.Connection, connection),
+        "run",
+        "l1",
+        0,
+        "l1",
+        "post-contention",
+    )
+
+    insert_statement = (
+        f"INSERT INTO {validation.TABLE_NAME} "
+        "(run_id, writer, sequence, payload) VALUES (?, ?, ?, ?)"
+    )
+    assert connection.statements == [
+        "BEGIN IMMEDIATE",
+        insert_statement,
+        "ROLLBACK",
+        "BEGIN IMMEDIATE",
+        insert_statement,
+        "COMMIT",
+    ]
+    assert delays == [validation.ORDINARY_TRANSACTION_RETRY_DELAY_SECONDS]
+    retry_output = capsys.readouterr().out
+    assert "l1 worker phase=post-contention transaction=0" in retry_output
+    assert "SQL operation=INSERT" in retry_output
+    assert f"sqlite_errorcode={sqlite3.SQLITE_BUSY}" in retry_output
+    assert "sqlite_errorname='SQLITE_BUSY'" in retry_output
+
+
+@pytest.mark.unit
+def test_ordinary_transaction_retries_busy_begin_without_rollback(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    connection = TransactionConnection(
+        "BEGIN IMMEDIATE",
+        SyntheticSQLiteError(sqlite3.SQLITE_BUSY, "SQLITE_BUSY"),
+        failures=1,
+    )
+    delays = []
+    monkeypatch.setattr(validation.time, "sleep", delays.append)
+
+    validation._run_ordinary_transaction(
+        cast(sqlite3.Connection, connection),
+        "run",
+        "host",
+        1,
+        "host",
+        "concurrent-writes",
+    )
+
+    assert connection.statements == [
+        "BEGIN IMMEDIATE",
+        "BEGIN IMMEDIATE",
+        f"INSERT INTO {validation.TABLE_NAME} "
+        "(run_id, writer, sequence, payload) VALUES (?, ?, ?, ?)",
+        "COMMIT",
+    ]
+    assert delays == [validation.ORDINARY_TRANSACTION_RETRY_DELAY_SECONDS]
+
+
+@pytest.mark.unit
+def test_insert_failure_includes_worker_sqlite_context():
+    error = SyntheticSQLiteError(sqlite3.SQLITE_CONSTRAINT, "SQLITE_CONSTRAINT")
+    connection = TransactionConnection("INSERT", error, failures=1)
+
+    with pytest.raises(RuntimeError) as failure:
+        validation._insert_test_row(
+            cast(sqlite3.Connection, connection),
+            "run",
+            "host",
+            3,
+            side="host",
+            phase="concurrent-writes",
+        )
+
+    message = str(failure.value)
+    assert "host worker phase=concurrent-writes transaction=3" in message
+    assert "SQL operation=INSERT" in message
+    assert f"sqlite_errorcode={sqlite3.SQLITE_CONSTRAINT}" in message
+    assert "sqlite_errorname='SQLITE_CONSTRAINT'" in message
+
+
+@pytest.mark.unit
+def test_ordinary_transaction_busy_exhaustion_reports_context_and_sqlite_error(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    error = SyntheticSQLiteError(sqlite3.SQLITE_BUSY, "SQLITE_BUSY")
+    connection = TransactionConnection("INSERT", error, failures=10)
+    monkeypatch.setattr(validation.time, "sleep", lambda _delay: None)
+
+    with pytest.raises(RuntimeError) as failure:
+        validation._run_ordinary_transaction(
+            cast(sqlite3.Connection, connection),
+            "run",
+            "l1",
+            0,
+            "l1",
+            "post-contention",
+        )
+
+    message = str(failure.value)
+    assert "l1 worker phase=post-contention transaction=0" in message
+    assert "SQL operation=INSERT" in message
+    assert f"sqlite_errorcode={sqlite3.SQLITE_BUSY}" in message
+    assert "sqlite_errorname='SQLITE_BUSY'" in message
+    assert "attempt 5/5" in message
+    assert connection.statements.count("BEGIN IMMEDIATE") == 5
+    assert (
+        sum(statement.startswith("INSERT ") for statement in connection.statements) == 5
+    )
+    assert connection.statements.count("ROLLBACK") == 5
+
+
+@pytest.mark.unit
+def test_ordinary_transaction_retry_budget_failure_reports_last_sqlite_error(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    error = SyntheticSQLiteError(sqlite3.SQLITE_BUSY, "SQLITE_BUSY")
+    connection = TransactionConnection("BEGIN IMMEDIATE", error, failures=1)
+    monotonic_values = iter((1.0,))
+    monkeypatch.setattr(validation.time, "monotonic", lambda: next(monotonic_values))
+
+    with pytest.raises(RuntimeError) as failure:
+        validation._run_ordinary_transaction(
+            cast(sqlite3.Connection, connection),
+            "run",
+            "l1",
+            0,
+            "l1",
+            "post-contention",
+            retry_deadline=0.5,
+        )
+
+    message = str(failure.value)
+    assert "l1 worker phase=post-contention transaction=0" in message
+    assert "SQL operation=BEGIN IMMEDIATE" in message
+    assert f"sqlite_errorcode={sqlite3.SQLITE_BUSY}" in message
+    assert "ordinary-write retry budget exhausted before next retry" in message
+    assert connection.statements == ["BEGIN IMMEDIATE"]
+
+
+@pytest.mark.unit
+def test_ordinary_transaction_does_not_fail_slow_success_after_retry_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    connection = TransactionConnection(
+        "BEGIN IMMEDIATE",
+        SyntheticSQLiteError(sqlite3.SQLITE_BUSY, "SQLITE_BUSY"),
+        failures=0,
+    )
+    monkeypatch.setattr(validation.time, "monotonic", lambda: 1.0)
+
+    validation._run_ordinary_transaction(
+        cast(sqlite3.Connection, connection),
+        "run",
+        "host",
+        1,
+        "host",
+        "concurrent-writes",
+        retry_deadline=0.5,
+    )
+
+    assert connection.statements[0] == "BEGIN IMMEDIATE"
+    assert connection.statements[-1] == "COMMIT"
+
+
+@pytest.mark.unit
+def test_ordinary_transaction_does_not_retry_non_busy_sqlite_errors(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    error = SyntheticSQLiteError(sqlite3.SQLITE_LOCKED, "SQLITE_LOCKED")
+    connection = TransactionConnection("BEGIN IMMEDIATE", error, failures=1)
+    delays = []
+    monkeypatch.setattr(validation.time, "sleep", delays.append)
+
+    with pytest.raises(RuntimeError, match="SQL operation=BEGIN IMMEDIATE"):
+        validation._run_ordinary_transaction(
+            cast(sqlite3.Connection, connection),
+            "run",
+            "host",
+            3,
+            "host",
+            "concurrent-writes",
+        )
+
+    assert connection.statements == ["BEGIN IMMEDIATE"]
+    assert not delays
+
+
+@pytest.mark.unit
+def test_ordinary_transaction_retries_busy_commit(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    connection = TransactionConnection(
+        "COMMIT",
+        SyntheticSQLiteError(sqlite3.SQLITE_BUSY, "SQLITE_BUSY"),
+        failures=1,
+    )
+    monkeypatch.setattr(validation.time, "sleep", lambda _delay: None)
+
+    validation._run_ordinary_transaction(
+        cast(sqlite3.Connection, connection),
+        "run",
+        "host",
+        2,
+        "host",
+        "concurrent-writes",
+    )
+
+    insert_statement = (
+        f"INSERT INTO {validation.TABLE_NAME} "
+        "(run_id, writer, sequence, payload) VALUES (?, ?, ?, ?)"
+    )
+    assert connection.statements == [
+        "BEGIN IMMEDIATE",
+        insert_statement,
+        "COMMIT",
+        "ROLLBACK",
+        "BEGIN IMMEDIATE",
+        insert_statement,
+        "COMMIT",
+    ]
+
+
+@pytest.mark.unit
+def test_ordinary_transaction_reports_rollback_failure_with_original_error():
+    busy_error = SyntheticSQLiteError(sqlite3.SQLITE_BUSY, "SQLITE_BUSY")
+    rollback_error = SyntheticSQLiteError(sqlite3.SQLITE_IOERR, "SQLITE_IOERR")
+    connection = TransactionConnection(
+        "INSERT", busy_error, failures=1, rollback_error=rollback_error
+    )
+
+    with pytest.raises(RuntimeError) as failure:
+        validation._run_ordinary_transaction(
+            cast(sqlite3.Connection, connection),
+            "run",
+            "host",
+            4,
+            "host",
+            "concurrent-writes",
+        )
+
+    message = str(failure.value)
+    assert connection.statements == [
+        "BEGIN IMMEDIATE",
+        f"INSERT INTO {validation.TABLE_NAME} "
+        "(run_id, writer, sequence, payload) VALUES (?, ?, ?, ?)",
+        "ROLLBACK",
+    ]
+    assert "SQL operation=ROLLBACK" in message
+    assert f"sqlite_errorcode={sqlite3.SQLITE_IOERR}" in message
+    assert "; while recovering from host worker phase=concurrent-writes" in message
+    assert "SQL operation=INSERT" in message
+    assert f"sqlite_errorcode={sqlite3.SQLITE_BUSY}" in message
+    assert failure.value.__cause__ is rollback_error
 
 
 @pytest.mark.unit
@@ -493,11 +806,20 @@ def test_host_and_l1_workers_contend_and_verify_private_snapshot(
                     env=worker_environment,
                 )
             )
-        validation._wait_for_host_lock_held(
-            processes[0],
-            scratch,
-            time.monotonic() + validation.WORKER_WAIT_TIMEOUT_SECONDS,
-        )
+        try:
+            validation._wait_for_host_lock_held(
+                processes[0],
+                scratch,
+                time.monotonic() + validation.WORKER_WAIT_TIMEOUT_SECONDS,
+            )
+        except (RuntimeError, TimeoutError) as error:
+            stdout_path, stderr_path = log_paths["host"]
+            stdout = validation._read_log(stdout_path)
+            stderr = validation._read_log(stderr_path)
+            raise AssertionError(
+                f"host worker failed before publishing lock-held: {error}\n"
+                f"stdout:\n{stdout}\nstderr:\n{stderr}"
+            ) from error
         side = "l1"
         stdout_path = log_directory / f"unit-{side}.stdout.log"
         stderr_path = log_directory / f"unit-{side}.stderr.log"
@@ -523,28 +845,51 @@ def test_host_and_l1_workers_contend_and_verify_private_snapshot(
             )
         )
 
-        for process in processes:
-            process.wait(timeout=20)
+        for side, process in zip(("host", "l1"), processes, strict=True):
+            try:
+                process.wait(timeout=validation.WORKER_WAIT_TIMEOUT_SECONDS)
+            except subprocess.TimeoutExpired as error:
+                stdout_path, stderr_path = log_paths[side]
+                stdout = validation._read_log(stdout_path)
+                stderr = validation._read_log(stderr_path)
+                raise AssertionError(
+                    f"{side} worker timed out after "
+                    f"{validation.WORKER_WAIT_TIMEOUT_SECONDS}s\n"
+                    f"stdout:\n{stdout}\nstderr:\n{stderr}"
+                ) from error
         output_by_side = {}
         for side, process in zip(("host", "l1"), processes, strict=True):
             stdout_path, stderr_path = log_paths[side]
             stdout = validation._read_log(stdout_path)
             stderr = validation._read_log(stderr_path)
-            assert process.returncode == 0, f"stdout:\n{stdout}\nstderr:\n{stderr}"
-            assert "committed 10 bounded transactions" in stdout
-            assert not stderr
+            assert process.returncode == 0, (
+                f"{side} worker exited with {process.returncode}\n"
+                f"stdout:\n{stdout}\nstderr:\n{stderr}"
+            )
+            assert "committed 10 bounded transactions" in stdout, (
+                f"{side} worker did not report all transactions:\n{stdout}"
+            )
+            assert not stderr, f"{side} worker wrote to stderr:\n{stderr}"
             output_by_side[side] = stdout
 
         contention = re.search(
             r"observed SQLITE_BUSY \(code (\d+)\) after ([0-9.]+)s",
             output_by_side["l1"],
         )
-        assert contention, output_by_side["l1"]
-        assert int(contention.group(1)) == sqlite3.SQLITE_BUSY
+        assert contention, (
+            f"L1 intentional contention diagnostic missing: {output_by_side['l1']}"
+        )
+        assert int(contention.group(1)) == sqlite3.SQLITE_BUSY, (
+            f"L1 intentional contention returned the wrong SQLite code: "
+            f"{output_by_side['l1']}"
+        )
         assert (
             validation.MIN_CONTENTION_WAIT_SECONDS
             <= float(contention.group(2))
             <= validation.MAX_CONTENTION_WAIT_SECONDS
+        ), (
+            "L1 intentional SQLITE_BUSY timing was outside bounds: "
+            f"{output_by_side['l1']}"
         )
 
         monkeypatch.setenv("HOME", str(host_home))
