@@ -168,6 +168,55 @@ project sessions across the same-path `~/src` mount. If credentials change while
 the service is running, stop and restart the service from a `devbox` shell so it
 inherits the updated environment.
 
+### Toggle managed OpenCode debug logging
+
+Use the top-level `devbox` flags before the command to change the persistent
+log level on the shared managed service:
+
+```shell
+devbox --debug opencode                         # enable debug for all service sessions
+devbox --debug opencode run "reproduce the issue" # headless OpenCode run
+devbox --no-debug opencode                      # disable debug logging again
+```
+
+With no stored preference, debug logging is off by default. `--debug` starts
+the managed service with `OPENCODE_LOG_LEVEL=DEBUG`; `--no-debug` starts it
+without that override. With neither flag, devbox leaves the preference and
+active service unchanged. It refuses to launch if the persisted service config
+or an already-running service conflicts with the stored preference, rather than
+silently changing the setting or claiming it is active. The preference is
+stored in the dedicated devbox OpenCode state directory, not the host-shared
+OpenCode configuration, and survives VM recreation. It applies to every project
+session served by this VM-local service and is not a host environment variable,
+so the strict host-to-VM allowlist is unchanged. If the host-shared OpenCode
+service configuration contains a conflicting persisted `OPENCODE_LOG_LEVEL`,
+devbox prints the `opencode service unset env OPENCODE_LOG_LEVEL` recovery
+command rather than claiming the request took effect.
+
+When an explicit flag does not match the running service process's actual log
+level, devbox warns and stops the service; this may interrupt active sessions.
+The OpenCode command being launched then starts it with the requested setting.
+If the service already has the requested level, it stays running. The
+preference persists for later OpenCode invocations until the opposite flag is
+used. When a flag is used with a shell or another command, devbox also exports
+the selected level into that command's guest environment. A debug-only lifecycle
+invocation stores the preference without
+opening a shell; a non-OpenCode command does not start the service, so the
+setting takes effect on the next OpenCode invocation.
+
+The VM writes logs to `~/.local/share/opencode/log/opencode.log`; this directory
+is a writable host mount, so the host-side path is also
+`~/.local/share/opencode/log/opencode.log`. Logs remain on the host after debug
+logging is disabled or the VM is reset/deleted. `--no-debug` does not erase
+existing logs; remove them manually when they are no longer needed. Before
+launching OpenCode, devbox restricts the host-shared log directory to mode
+`0700` and the log file to `0600`. This keeps logs private even if the managed
+daemon creates or replaces a log file with broader default permissions.
+OpenCode logs are sensitive at every log level and may include prompts, process
+arguments, file paths, and file content; debug mode adds more detail.
+Review and redact logs before sharing them; remove credentials, authorization
+headers, and other sensitive data.
+
 The schema-drift test runs against the manifest-pinned VM binary and an isolated
 home/config directory, leaving the mounted global config untouched:
 

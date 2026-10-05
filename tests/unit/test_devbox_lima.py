@@ -347,6 +347,8 @@ def test_opencode_launch_builds_runtime_config_inside_the_vm(
         if call[0] == "shell" and "--workdir" in call
     )
     shell_command = " ".join(shell_call)
+    config_index = shell_call.index(str(repo_root / "lima/opencode_config.py"))
+    assert shell_call[config_index - 1] == "unchanged"
     assert "bash -c" in shell_command
     assert f"{repo_root}/lima/opencode_config.py" in shell_command
     assert "OPENCODE_CONFIG_CONTENT" in shell_command
@@ -355,6 +357,214 @@ def test_opencode_launch_builds_runtime_config_inside_the_vm(
     payload = json.loads(capture.read_text())
     assert payload["block"] == "*"
     assert "OPENCODE_CONFIG_CONTENT" not in payload["allow"]
+    assert "OPENCODE_LOG_LEVEL" not in payload["allow"]
+    assert "export OPENCODE_LOG_LEVEL=DEBUG" in shell_command
+    assert "umask 077" in shell_command
+    assert "unset OPENCODE_LOG_LEVEL" in shell_command
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("flag", "mode", "command"),
+    [
+        ("--debug", "enabled", ["opencode"]),
+        ("--debug", "enabled", ["opencode", "run", "diagnose"]),
+        ("--no-debug", "disabled", ["opencode"]),
+        ("--no-debug", "disabled", ["opencode", "run", "diagnose"]),
+    ],
+)
+def test_opencode_debug_options_reach_the_guest_service_wrapper(
+    flag: str,
+    mode: str,
+    command: list[str],
+    devbox_path: Path,
+    repo_root: Path,
+    isolated_env: dict[str, str],
+    project_dir: Path,
+    tmp_path: Path,
+):
+    calls, capture = _install_lima_shim(
+        tmp_path,
+        isolated_env,
+        fingerprint=expected_lima_provisioning_fingerprint(repo_root),
+    )
+
+    result = run_bash_script(
+        devbox_path,
+        [flag, *command],
+        cwd=project_dir,
+        env=isolated_env,
+        timeout=15,
+    )
+
+    assert result.returncode == 0, result.stderr
+    shell_call = next(
+        call
+        for call in _read_lima_calls(calls)
+        if call[0] == "shell" and "--workdir" in call
+    )
+    config_index = shell_call.index(str(repo_root / "lima/opencode_config.py"))
+    assert shell_call[config_index - 1] == mode
+    assert str(repo_root / "lima/opencode-debug-logs.sh") in shell_call
+    assert "export OPENCODE_LOG_LEVEL=DEBUG" in " ".join(shell_call)
+    assert "unset OPENCODE_LOG_LEVEL" in " ".join(shell_call)
+    assert shell_call[-len(command) :] == command
+    payload = json.loads(capture.read_text())
+    assert payload["block"] == "*"
+    assert "OPENCODE_LOG_LEVEL" not in payload["allow"]
+    assert "OPENCODE_LOG_LEVEL" not in payload["provider_env"]
+
+
+@pytest.mark.unit
+def test_debug_option_exports_level_for_interactive_guest_shell(
+    devbox_path: Path,
+    repo_root: Path,
+    isolated_env: dict[str, str],
+    project_dir: Path,
+    tmp_path: Path,
+):
+    calls, _ = _install_lima_shim(tmp_path, isolated_env)
+
+    result = run_bash_script(
+        devbox_path, ["--debug"], cwd=project_dir, env=isolated_env, timeout=15
+    )
+
+    assert result.returncode == 0, result.stderr
+    shell_call = next(
+        call
+        for call in _read_lima_calls(calls)
+        if call[0] == "shell" and str(repo_root / "lima/opencode-debug-logs.sh") in call
+    )
+    command = " ".join(shell_call)
+    assert str(repo_root / "lima/opencode-debug-logs.sh") in command
+    assert "export OPENCODE_LOG_LEVEL=DEBUG" in command
+    assert "exec bash -l" in command
+    assert command.index("export OPENCODE_LOG_LEVEL=DEBUG") < command.index(
+        'if [[ "${1:-}" == opencode ]]'
+    )
+
+
+@pytest.mark.unit
+def test_double_dash_preserves_internal_looking_user_argv(
+    devbox_path: Path,
+    isolated_env: dict[str, str],
+    project_dir: Path,
+    tmp_path: Path,
+):
+    calls, _ = _install_lima_shim(tmp_path, isolated_env)
+    user_argv = ["--opencode-debug=enabled", "true"]
+
+    result = run_bash_script(
+        devbox_path, ["--", *user_argv], cwd=project_dir, env=isolated_env
+    )
+
+    assert result.returncode == 0, result.stderr
+    shell_call = next(
+        call
+        for call in _read_lima_calls(calls)
+        if call[0] == "shell" and "--workdir" in call
+    )
+    assert shell_call[-len(user_argv) :] == user_argv
+
+
+@pytest.mark.unit
+def test_delete_still_rejects_internal_looking_argv_after_double_dash(
+    devbox_path: Path,
+    isolated_env: dict[str, str],
+    project_dir: Path,
+    tmp_path: Path,
+):
+    calls, _ = _install_lima_shim(tmp_path, isolated_env)
+
+    result = run_bash_script(
+        devbox_path,
+        ["--delete", "--", "--opencode-debug=unchanged"],
+        cwd=project_dir,
+        env=isolated_env,
+    )
+
+    assert result.returncode == 2
+    assert "does not accept a command" in result.stderr
+    assert not calls.exists()
+
+
+@pytest.mark.unit
+def test_debug_options_are_mutually_exclusive(
+    devbox_path: Path,
+    isolated_env: dict[str, str],
+    project_dir: Path,
+    tmp_path: Path,
+):
+    calls, _ = _install_lima_shim(tmp_path, isolated_env)
+
+    result = run_bash_script(
+        devbox_path,
+        ["--debug", "--no-debug", "opencode"],
+        cwd=project_dir,
+        env=isolated_env,
+    )
+
+    assert result.returncode == 2
+    assert "cannot be combined" in result.stderr
+    assert not calls.exists()
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("flags", "mode"),
+    [(["--debug", "--debug"], "enabled"), (["--no-debug", "--no-debug"], "disabled")],
+)
+def test_repeated_identical_debug_options_are_idempotent(
+    devbox_path: Path,
+    repo_root: Path,
+    isolated_env: dict[str, str],
+    project_dir: Path,
+    tmp_path: Path,
+    flags: list[str],
+    mode: str,
+):
+    calls, _ = _install_lima_shim(tmp_path, isolated_env)
+
+    result = run_bash_script(
+        devbox_path, [*flags, "opencode"], cwd=project_dir, env=isolated_env
+    )
+
+    assert result.returncode == 0, result.stderr
+    shell_call = next(
+        call
+        for call in _read_lima_calls(calls)
+        if call[0] == "shell" and "--workdir" in call
+    )
+    config_index = shell_call.index(str(repo_root / "lima/opencode_config.py"))
+    assert shell_call[config_index - 1] == mode
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("lifecycle_flag", "debug_flag"),
+    [("--stop", "--debug"), ("--delete", "--no-debug")],
+)
+def test_debug_options_are_rejected_for_stop_and_delete(
+    devbox_path: Path,
+    isolated_env: dict[str, str],
+    project_dir: Path,
+    tmp_path: Path,
+    lifecycle_flag: str,
+    debug_flag: str,
+):
+    calls, _ = _install_lima_shim(tmp_path, isolated_env)
+
+    result = run_bash_script(
+        devbox_path,
+        [lifecycle_flag, debug_flag],
+        cwd=project_dir,
+        env=isolated_env,
+        timeout=15,
+    )
+
+    assert result.returncode == 2
+    assert "cannot be used with" in result.stderr
+    assert not calls.exists()
 
 
 @pytest.mark.unit
@@ -557,6 +767,46 @@ def test_opencode_state_mounts_map_to_their_guest_mounts(
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize(
+    ("action", "expected_operations"),
+    [
+        ("--reprovision", ("list", "stop", "start", "shell", "shell")),
+        ("--reset", ("list", "factory-reset", "list", "start", "shell")),
+    ],
+)
+def test_debug_option_applies_after_lifecycle_action_without_opening_shell(
+    devbox_path: Path,
+    repo_root: Path,
+    isolated_env: dict[str, str],
+    project_dir: Path,
+    tmp_path: Path,
+    action: str,
+    expected_operations: tuple[str, ...],
+):
+    calls, capture = _install_lima_shim(tmp_path, isolated_env)
+    isolated_env["MOCK_VM_FINGERPRINT_AFTER_START"] = (
+        expected_lima_provisioning_fingerprint(repo_root)
+    )
+
+    result = run_bash_script(
+        devbox_path, [action, "--debug"], cwd=project_dir, env=isolated_env, timeout=15
+    )
+
+    assert result.returncode == 0, result.stderr
+    helper_call = next(
+        call
+        for call in _read_lima_calls(calls)
+        if call[0] == "shell" and str(repo_root / "lima/opencode_config.py") in call
+    )
+    operations = tuple(call[0] for call in _read_lima_calls(calls))
+    assert operations == expected_operations
+    config_index = helper_call.index(str(repo_root / "lima/opencode_config.py"))
+    assert helper_call[config_index - 1] == "enabled"
+    assert helper_call[-1] == "true"
+    assert "--workdir" not in helper_call
+    assert capture.exists()
+
+
 @pytest.mark.parametrize(
     ("args", "expected_calls"),
     [

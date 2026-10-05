@@ -7,6 +7,7 @@ set -euo pipefail
 instance="${DEVBOX_LIMA_INSTANCE:-devbox}"
 repo_root="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 workdir=""
+opencode_debug=unchanged
 start_vm=true
 
 while [[ $# -gt 0 ]]; do
@@ -22,6 +23,21 @@ while [[ $# -gt 0 ]]; do
     --no-start)
       start_vm=false
       shift
+      ;;
+    --opencode-debug)
+      if [[ $# -lt 2 ]]; then
+        echo "devbox: --opencode-debug requires enabled or disabled" >&2
+        exit 2
+      fi
+      opencode_debug="$2"
+      case "$opencode_debug" in
+        enabled | disabled) ;;
+        *)
+          echo "devbox: invalid internal OpenCode debug mode" >&2
+          exit 2
+          ;;
+      esac
+      shift 2
       ;;
     --)
       shift
@@ -229,12 +245,38 @@ fi
 # mounted global OpenCode config. Every OpenCode CLI form (including `run`)
 # enters through this path, so the first command starts the shared service with
 # the same config that subsequent project sessions receive.
+if [[ "$opencode_debug" != unchanged || "${1:-}" == opencode ]]; then
+  # Resolve the guest-local service preference before starting OpenCode; the
+  # runtime config is still generated immediately before each OpenCode client.
+  # shellcheck disable=SC2016 # This command string is evaluated inside the VM.
+  remote_command='
+set -euo pipefail
+debug_mode="$1"
+config_script="$2"
+debug_script="$3"
+shift 3
+effective_debug="$(bash "$debug_script" "$debug_mode")"
+if [[ "$effective_debug" == enabled ]]; then
+  export OPENCODE_LOG_LEVEL=DEBUG
+else
+  unset OPENCODE_LOG_LEVEL
+fi
 if [[ "${1:-}" == opencode ]]; then
   shift
-  # shellcheck disable=SC2016 # This command string is evaluated inside the VM.
-  remote_command='set -euo pipefail; config_script="$1"; shift; OPENCODE_CONFIG_CONTENT="$(python3 "$config_script")"; export OPENCODE_CONFIG_CONTENT; exec opencode "$@"'
-  exec limactl "${shell_args[@]}" "$instance" bash -c "$remote_command" \
-    bash "$repo_root/lima/opencode_config.py" "$@"
+  if [[ "$effective_debug" == enabled ]]; then
+    umask 077
+  fi
+  OPENCODE_CONFIG_CONTENT="$(python3 "$config_script")"
+  export OPENCODE_CONFIG_CONTENT
+  exec opencode "$@"
 fi
-
+if (($# == 0)); then
+  exec bash -l
+fi
+exec "$@"
+'
+  exec limactl "${shell_args[@]}" "$instance" bash -c "$remote_command" \
+    bash "$opencode_debug" "$repo_root/lima/opencode_config.py" \
+    "$repo_root/lima/opencode-debug-logs.sh" "$@"
+fi
 exec limactl "${shell_args[@]}" "$instance" "$@"
