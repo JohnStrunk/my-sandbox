@@ -6,7 +6,28 @@ HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 instance="${DEVBOX_LIMA_INSTANCE:-devbox}"
 action="${1:-run}"
 shift || true
+opencode_debug=unchanged
+if [[ "${1:-}" == --opencode-debug=* ]]; then
+  opencode_debug="${1#--opencode-debug=}"
+  case "$opencode_debug" in
+    unchanged | enabled | disabled) ;;
+    *)
+      echo "devbox: invalid internal OpenCode debug mode" >&2
+      exit 2
+      ;;
+  esac
+  shift
+  if [[ "${1:-}" != -- ]]; then
+    echo "devbox: internal OpenCode debug option is missing its argument delimiter" >&2
+    exit 2
+  fi
+  shift
+fi
 command=("$@")
+if [[ "$opencode_debug" != unchanged && ( "$action" == stop || "$action" == delete ) ]]; then
+  echo "devbox: OpenCode debug flags cannot be used with --stop or --delete" >&2
+  exit 2
+fi
 guest_workdir=""
 delete_restore_protection=false
 
@@ -356,6 +377,17 @@ resolve_guest_workdir() {
   return 1
 }
 
+run_guest_command() {
+  local shell_args=(--no-start)
+  if [[ -n "$guest_workdir" ]]; then
+    shell_args+=(--workdir "$guest_workdir")
+  fi
+  if [[ "$opencode_debug" != unchanged ]]; then
+    shell_args+=(--opencode-debug "$opencode_debug")
+  fi
+  exec "$HERE/devbox-shell" "${shell_args[@]}" -- "${command[@]}"
+}
+
 run_launcher() {
   local initial_status
   guest_workdir="$(resolve_guest_workdir)" || return 1
@@ -371,8 +403,7 @@ run_launcher() {
   release_lima_lock
   # The VM is already running under the lifecycle lock. Do not ask the shell
   # helper to start it again after unlocking: a concurrent --stop must win.
-  exec "$HERE/devbox-shell" --no-start --workdir "$guest_workdir" -- \
-    "${command[@]}"
+  run_guest_command
 }
 
 prepare_lifecycle_command() {
@@ -384,12 +415,16 @@ prepare_lifecycle_command() {
 }
 
 run_lifecycle_command() {
-  if [[ ${#command[@]} -gt 0 ]]; then
+  if [[ ${#command[@]} -gt 0 || "$opencode_debug" != unchanged ]]; then
     release_lima_lock
-    # Keep the user's argv behind a second delimiter so the helper cannot
+    # A debug-only lifecycle invocation updates the service without opening
+    # the default shell after the lifecycle operation.
+    if [[ ${#command[@]} -eq 0 ]]; then
+      command=(true)
+    fi
+    # Keep the command argv behind a second delimiter so the helper cannot
     # mistake option-like commands (such as --workdir) for its own options.
-    exec "$HERE/devbox-shell" --no-start --workdir "$guest_workdir" -- \
-      "${command[@]}"
+    run_guest_command
   fi
 }
 

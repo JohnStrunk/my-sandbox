@@ -18,6 +18,8 @@ from a project under `~/src`:
 cd ~/src/my-project
 devbox                 # open a shell at this project path in the VM
 devbox opencode        # start OpenCode in this project
+devbox --debug opencode # enable debug logs for all managed-service sessions
+devbox --no-debug opencode # disable managed-service debug logs
 devbox --stop          # gracefully stop the shared VM
 devbox --reprovision   # restart and apply current tool/provisioning changes
 devbox --reset         # factory-reset VM-local state and reprovision

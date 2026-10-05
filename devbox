@@ -9,8 +9,8 @@ export XDG_DATA_HOME=
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") [--stop|--reset|--reprovision|-d|--delete] [-h|--help]
-       [--] [command [arg ...]]
+Usage: $(basename "$0") [--stop|--reset|--reprovision|-d|--delete]
+       [--debug|--no-debug] [-h|--help] [--] [command [arg ...]]
 
 Open a shell or run a command in the shared Lima VM at the current project
 directory. On first use, the VM is created from this checkout's Lima template.
@@ -19,6 +19,8 @@ Options:
       --stop          Gracefully stop the shared Lima VM (no command)
       --reset         Factory-reset and reprovision, then optionally run a command
       --reprovision   Restart and reprovision, then optionally run a command
+      --debug         Enable debug logging for the managed OpenCode service
+      --no-debug      Disable debug logging for the managed OpenCode service
       -d, --delete    Explicitly unprotect and delete the VM; do not recreate it
   -h, --help          Show this help message
 
@@ -35,7 +37,18 @@ EOF
 
 action=run
 action_option=""
+debug_mode=unchanged
 command=()
+
+set_debug_mode() {
+  local option="$1" mode="$2"
+  if [[ "$debug_mode" != unchanged && "$debug_mode" != "$mode" ]]; then
+    echo "devbox: $option cannot be combined with another debug option" >&2
+    usage >&2
+    exit 2
+  fi
+  debug_mode="$mode"
+}
 
 set_lifecycle_action() {
   local option="$1"
@@ -67,6 +80,14 @@ while [[ $# -gt 0 ]]; do
       set_lifecycle_action "$1" delete
       shift
       ;;
+    --debug)
+      set_debug_mode "$1" enabled
+      shift
+      ;;
+    --no-debug)
+      set_debug_mode "$1" disabled
+      shift
+      ;;
     --container)
       echo "devbox: --container is no longer supported; devbox uses the shared Lima VM" >&2
       exit 2
@@ -92,4 +113,4 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-exec "$HERE/lima/devbox" "$action" "${command[@]}"
+exec "$HERE/lima/devbox" "$action" "--opencode-debug=$debug_mode" -- "${command[@]}"
