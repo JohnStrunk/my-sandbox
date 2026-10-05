@@ -38,6 +38,10 @@ ROWS_PER_WORKER = 10
 BUSY_TIMEOUT_SECONDS = 2.0
 BUSY_TIMEOUT_MILLISECONDS = 2_000
 TRANSACTION_HOLD_SECONDS = 0.01
+ORDINARY_TRANSACTION_MAX_ATTEMPTS = 5
+ORDINARY_TRANSACTION_RETRY_DELAY_SECONDS = 0.05
+# Shared across ordinary writes; only BUSY failures consume this retry budget.
+ORDINARY_TRANSACTION_RETRY_BUDGET_SECONDS = 8.0
 CONTENTION_BUSY_TIMEOUT_MILLISECONDS = 250
 MIN_CONTENTION_WAIT_SECONDS = 0.15
 MAX_CONTENTION_WAIT_SECONDS = 1.5
@@ -586,25 +590,136 @@ def _wait_for_marker(
 
 
 def _insert_test_row(
-    connection: sqlite3.Connection, run_id: str, writer: str, sequence: int
+    connection: sqlite3.Connection,
+    run_id: str,
+    writer: str,
+    sequence: int,
+    *,
+    side: str | None = None,
+    phase: str | None = None,
 ) -> None:
-    connection.execute(
-        f"INSERT INTO {TABLE_NAME} "
-        "(run_id, writer, sequence, payload) VALUES (?, ?, ?, ?)",
-        (
-            run_id,
-            writer,
-            sequence,
-            f"issue-287-test-only:{run_id}:{writer}:{sequence}",
-        ),
+    try:
+        connection.execute(
+            f"INSERT INTO {TABLE_NAME} "
+            "(run_id, writer, sequence, payload) VALUES (?, ?, ?, ?)",
+            (
+                run_id,
+                writer,
+                sequence,
+                f"issue-287-test-only:{run_id}:{writer}:{sequence}",
+            ),
+        )
+    except sqlite3.Error as error:
+        if side is None or phase is None:
+            raise
+        raise RuntimeError(
+            _format_sqlite_failure(side, phase, sequence, "INSERT", error)
+        ) from error
+
+
+def _format_sqlite_failure(
+    side: str,
+    phase: str,
+    sequence: int | str,
+    operation: str,
+    error: sqlite3.Error,
+) -> str:
+    return (
+        f"{side} worker phase={phase} transaction={sequence} "
+        f"SQL operation={operation} failed: {error} "
+        f"(sqlite_errorcode={getattr(error, 'sqlite_errorcode', None)!r}, "
+        f"sqlite_errorname={getattr(error, 'sqlite_errorname', None)!r})"
     )
+
+
+def _is_sqlite_busy(error: sqlite3.Error) -> bool:
+    code = getattr(error, "sqlite_errorcode", None)
+    return isinstance(code, int) and (code & 0xFF) == sqlite3.SQLITE_BUSY
+
+
+def _run_ordinary_transaction(
+    connection: sqlite3.Connection,
+    run_id: str,
+    writer: str,
+    sequence: int,
+    side: str,
+    phase: str,
+    *,
+    hold_seconds: float = 0,
+    retry_deadline: float | None = None,
+) -> None:
+    """Retry a normal write transaction a bounded number of times on SQLITE_BUSY."""
+    for attempt in range(1, ORDINARY_TRANSACTION_MAX_ATTEMPTS + 1):
+        operation = "BEGIN IMMEDIATE"
+        try:
+            connection.execute(operation)
+            operation = "INSERT"
+            # Keep side/phase unset so a busy sqlite3.Error reaches this retry loop.
+            _insert_test_row(connection, run_id, writer, sequence)
+            if hold_seconds:
+                time.sleep(hold_seconds)
+            operation = "COMMIT"
+            connection.execute(operation)
+            return
+        except sqlite3.Error as error:
+            if connection.in_transaction:
+                try:
+                    connection.execute("ROLLBACK")
+                except sqlite3.Error as rollback_error:
+                    raise RuntimeError(
+                        _format_sqlite_failure(
+                            side, phase, sequence, "ROLLBACK", rollback_error
+                        )
+                        + "; while recovering from "
+                        + _format_sqlite_failure(
+                            side, phase, sequence, operation, error
+                        )
+                    ) from rollback_error
+            if (
+                not _is_sqlite_busy(error)
+                or attempt == ORDINARY_TRANSACTION_MAX_ATTEMPTS
+            ):
+                raise RuntimeError(
+                    _format_sqlite_failure(side, phase, sequence, operation, error)
+                    + f" (attempt {attempt}/{ORDINARY_TRANSACTION_MAX_ATTEMPTS})"
+                ) from error
+            delay = ORDINARY_TRANSACTION_RETRY_DELAY_SECONDS * attempt
+            if retry_deadline is not None:
+                # Do not fail a slow operation that completed successfully. The
+                # shared deadline limits only additional BUSY retries.
+                remaining = retry_deadline - time.monotonic()
+                if remaining <= delay:
+                    raise RuntimeError(
+                        _format_sqlite_failure(side, phase, sequence, operation, error)
+                        + f" (attempt {attempt}/{ORDINARY_TRANSACTION_MAX_ATTEMPTS}; "
+                        "ordinary-write retry budget exhausted before next retry)"
+                    ) from error
+            print(
+                _format_sqlite_failure(side, phase, sequence, operation, error)
+                + f"; retrying attempt {attempt + 1}/"
+                f"{ORDINARY_TRANSACTION_MAX_ATTEMPTS}",
+                flush=True,
+            )
+            time.sleep(delay)
 
 
 def _run_host_lock_holder(
     connection: sqlite3.Connection, scratch: ScratchDatabase
 ) -> None:
-    connection.execute("BEGIN IMMEDIATE")
-    _insert_test_row(connection, scratch.name, "host", 0)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+    except sqlite3.Error as error:
+        raise RuntimeError(
+            _format_sqlite_failure("host", "lock-holder", 0, "BEGIN IMMEDIATE", error)
+        ) from error
+    _insert_test_row(
+        connection,
+        scratch.name,
+        "host",
+        0,
+        side="host",
+        phase="lock-holder",
+    )
     _write_barrier_file(scratch, "lock-held", "host holds BEGIN IMMEDIATE\n")
     try:
         deadline = time.monotonic() + CONTENTION_TIMEOUT_SECONDS
@@ -624,10 +739,25 @@ def _run_host_lock_holder(
             deadline,
             "demonstrated SQLite lock contention",
         )
-        connection.execute("COMMIT")
+        try:
+            connection.execute("COMMIT")
+        except sqlite3.Error as error:
+            raise RuntimeError(
+                _format_sqlite_failure("host", "lock-holder", 0, "COMMIT", error)
+            ) from error
     except BaseException:
         if connection.in_transaction:
-            connection.execute("ROLLBACK")
+            try:
+                connection.execute("ROLLBACK")
+            except sqlite3.Error as rollback_error:
+                # Preserve the contextual transaction failure that caused this
+                # cleanup path rather than replacing it with a bare rollback error.
+                print(
+                    _format_sqlite_failure(
+                        "host", "lock-holder", 0, "ROLLBACK", rollback_error
+                    ),
+                    file=sys.stderr,
+                )
         raise
     _write_barrier_file(
         scratch, "lock-released", "host committed lock-holder transaction\n"
@@ -636,7 +766,7 @@ def _run_host_lock_holder(
 
 def _run_l1_lock_contender(
     connection: sqlite3.Connection, scratch: ScratchDatabase
-) -> tuple[float, int]:
+) -> tuple[float, int, float]:
     _wait_for_marker(
         scratch,
         "lock-held",
@@ -660,24 +790,39 @@ def _run_l1_lock_contender(
         sqlite_error_code = getattr(error, "sqlite_errorcode", None)
         if sqlite_error_code is None:
             raise RuntimeError(
-                f"L1 BEGIN IMMEDIATE error lacks sqlite_errorcode after {waited:.3f}s"
+                _format_sqlite_failure(
+                    "l1", "intentional-contention", 0, "BEGIN IMMEDIATE", error
+                )
+                + f" after {waited:.3f}s; error lacks sqlite_errorcode"
             ) from error
         if sqlite_error_code != sqlite3.SQLITE_BUSY:
             raise RuntimeError(
-                "L1 BEGIN IMMEDIATE failed without SQLITE_BUSY: "
-                f"code={sqlite_error_code!r}, "
-                f"name={getattr(error, 'sqlite_errorname', None)!r}, "
-                f"wait={waited:.3f}s"
+                _format_sqlite_failure(
+                    "l1", "intentional-contention", 0, "BEGIN IMMEDIATE", error
+                )
+                + f"; expected SQLITE_BUSY, wait={waited:.3f}s"
             ) from error
         if not MIN_CONTENTION_WAIT_SECONDS <= waited <= MAX_CONTENTION_WAIT_SECONDS:
             raise RuntimeError(
-                f"L1 SQLITE_BUSY wait was outside the expected range: {waited:.3f}s"
+                _format_sqlite_failure(
+                    "l1", "intentional-contention", 0, "BEGIN IMMEDIATE", error
+                )
+                + f"; SQLITE_BUSY wait was outside the expected range: {waited:.3f}s"
             ) from error
     else:
         if connection.in_transaction:
-            connection.execute("ROLLBACK")
+            try:
+                connection.execute("ROLLBACK")
+            except sqlite3.Error as error:
+                raise RuntimeError(
+                    _format_sqlite_failure(
+                        "l1", "intentional-contention", 0, "ROLLBACK", error
+                    )
+                ) from error
         raise RuntimeError(
-            "L1 BEGIN IMMEDIATE succeeded while the host lock holder was active"
+            "l1 worker phase=intentional-contention transaction=0 "
+            "SQL operation=BEGIN IMMEDIATE succeeded while the host lock holder "
+            "was active"
         )
 
     if connection.in_transaction:
@@ -699,18 +844,17 @@ def _run_l1_lock_contender(
     ).fetchone()
     if normal_timeout != (BUSY_TIMEOUT_MILLISECONDS,):
         raise RuntimeError("L1 could not restore the normal SQLite busy timeout")
-    connection.execute("BEGIN IMMEDIATE")
-    try:
-        _insert_test_row(connection, scratch.name, "l1", 0)
-        connection.execute("COMMIT")
-    except BaseException:
-        if connection.in_transaction:
-            try:
-                connection.execute("ROLLBACK")
-            except sqlite3.Error:
-                pass
-        raise
-    return waited, sqlite_error_code
+    retry_deadline = time.monotonic() + ORDINARY_TRANSACTION_RETRY_BUDGET_SECONDS
+    _run_ordinary_transaction(
+        connection,
+        scratch.name,
+        "l1",
+        0,
+        "l1",
+        "post-contention",
+        retry_deadline=retry_deadline,
+    )
+    return waited, sqlite_error_code, retry_deadline
 
 
 def run_worker(side: str, scratch_name: str) -> None:
@@ -726,29 +870,31 @@ def run_worker(side: str, scratch_name: str) -> None:
         contention_result = None
         if side == "host":
             _run_host_lock_holder(connection, scratch)
+            retry_deadline = (
+                time.monotonic() + ORDINARY_TRANSACTION_RETRY_BUDGET_SECONDS
+            )
         else:
             contention_result = _run_l1_lock_contender(connection, scratch)
+            retry_deadline = contention_result[2]
 
         for sequence in range(1, ROWS_PER_WORKER):
             if _marker_matches(scratch, "abort", ABORT_CONTENT):
                 raise RuntimeError(
                     f"{side} worker observed the coordinator abort marker"
                 )
-            try:
-                connection.execute("BEGIN IMMEDIATE")
-                _insert_test_row(connection, scratch_name, side, sequence)
-                time.sleep(TRANSACTION_HOLD_SECONDS)
-                connection.execute("COMMIT")
-            except BaseException:
-                if connection.in_transaction:
-                    try:
-                        connection.execute("ROLLBACK")
-                    except sqlite3.Error:
-                        pass
-                raise
+            _run_ordinary_transaction(
+                connection,
+                scratch_name,
+                side,
+                sequence,
+                side,
+                "concurrent-writes",
+                hold_seconds=TRANSACTION_HOLD_SECONDS,
+                retry_deadline=retry_deadline,
+            )
         message = f"{side} worker committed {ROWS_PER_WORKER} bounded transactions"
         if contention_result is not None:
-            contention_wait, sqlite_error_code = contention_result
+            contention_wait, sqlite_error_code, _ = contention_result
             message += (
                 f"; observed SQLITE_BUSY (code {sqlite_error_code}) after "
                 f"{contention_wait:.3f}s"
@@ -758,8 +904,13 @@ def run_worker(side: str, scratch_name: str) -> None:
         if connection is not None and connection.in_transaction:
             try:
                 connection.execute("ROLLBACK")
-            except sqlite3.Error:
-                pass
+            except sqlite3.Error as rollback_error:
+                print(
+                    _format_sqlite_failure(
+                        side, "worker-cleanup", "unknown", "ROLLBACK", rollback_error
+                    ),
+                    file=sys.stderr,
+                )
         _request_abort(scratch)
         raise
     finally:
