@@ -28,6 +28,8 @@ _EXPECTED_GUEST_ENV_NAMES = {
     "GITLAB_HOST",
     "GITLAB_TOKEN",
     "LITEMAAS_API_KEY",
+    "ENMAAS_URL",
+    "ENMAAS_API_KEY",
     "OPENAI_API_KEY",
     "OCTO_OPEN_URL",
     "OCTO_OPEN_KEY",
@@ -80,8 +82,16 @@ payload = {
     "block": os.environ.get("LIMA_SHELLENV_BLOCK"),
     "allow": names,
     "provider_env": {
-        name: os.environ[name] for name in names if name in os.environ
+        name: os.environ[name]
+        for name in names
+        if name in os.environ and name != "ENMAAS_API_KEY"
     },
+    "enmaas_var_present": "ENMAAS_API_KEY" in os.environ,
+    "enmaas_value_matches": (
+        "MOCK_EXPECTED_ENMAAS_API_KEY" in os.environ
+        and os.environ.get("ENMAAS_API_KEY")
+        == os.environ["MOCK_EXPECTED_ENMAAS_API_KEY"]
+    ),
 }
 with open(sys.argv[1], "w") as output:
     json.dump(payload, output)
@@ -238,6 +248,143 @@ def test_lima_shell_forwards_complete_provider_credential_groups(
     assert forwarded["SSL_CERT_FILE"] == "/etc/ssl/certs/ca-certificates.crt"
     assert forwarded["REQUESTS_CA_BUNDLE"] == "/etc/ssl/certs/ca-certificates.crt"
     assert forwarded["NODE_EXTRA_CA_CERTS"] == "/etc/ssl/certs/ca-certificates.crt"
+
+
+@pytest.mark.unit
+def test_lima_shell_forwards_complete_enmaas_pair_without_logging_api_key(
+    repo_root: Path,
+    isolated_env: dict[str, str],
+    tmp_path: Path,
+):
+    bin_dir, capture_file, calls_file = _install_lima_mocks(tmp_path)
+    env = isolated_env.copy()
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    env["MOCK_LIMACTL_CAPTURE"] = str(capture_file)
+    env["MOCK_LIMACTL_CALLS"] = str(calls_file)
+    enmaas_url = "https://enmaas.example/v1"
+    enmaas_api_key = "enmaas-test-secret-sentinel"  # pragma: allowlist secret
+    env["ENMAAS_URL"] = enmaas_url
+    env["ENMAAS_API_KEY"] = enmaas_api_key
+    env["MOCK_EXPECTED_ENMAAS_API_KEY"] = enmaas_api_key
+    env["MOCK_LIMA_STATUS"] = "Stopped"
+
+    result = run_bash_script(
+        repo_root / "lima" / "devbox-shell",
+        env=env,
+        cwd=repo_root,
+    )
+
+    if result.returncode != 0:
+        pytest.fail("Lima shell failed with a complete EnMaaS environment pair")
+    mock_calls = calls_file.read_text()
+    if any(
+        enmaas_api_key in output
+        for output in (result.stdout, result.stderr, mock_calls)
+    ):
+        pytest.fail("EnMaaS API key appeared in launcher output or command logs")
+
+    captured_call = capture_file.read_text()
+    if enmaas_api_key in captured_call:
+        pytest.fail("EnMaaS API key appeared in the mock capture")
+    payload = json.loads(captured_call)
+    forwarded = payload["provider_env"]
+    if enmaas_api_key in " ".join(payload["args"]):
+        pytest.fail("EnMaaS API key appeared in Lima command arguments")
+    if forwarded.get("ENMAAS_URL") != enmaas_url:
+        pytest.fail("EnMaaS endpoint was not forwarded")
+    if not payload["enmaas_var_present"] or not payload["enmaas_value_matches"]:
+        pytest.fail("EnMaaS API key was not forwarded")
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("present_name", ["ENMAAS_URL", "ENMAAS_API_KEY"])
+def test_lima_shell_omits_incomplete_enmaas_pair_without_logging_api_key(
+    present_name: str,
+    repo_root: Path,
+    isolated_env: dict[str, str],
+    tmp_path: Path,
+):
+    bin_dir, capture_file, calls_file = _install_lima_mocks(tmp_path)
+    env = isolated_env.copy()
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    env["MOCK_LIMACTL_CAPTURE"] = str(capture_file)
+    env["MOCK_LIMACTL_CALLS"] = str(calls_file)
+    enmaas_api_key = "enmaas-test-secret-sentinel"  # pragma: allowlist secret
+    if present_name == "ENMAAS_URL":
+        env["ENMAAS_URL"] = "https://enmaas.example/v1"
+    else:
+        env["ENMAAS_API_KEY"] = enmaas_api_key
+        env["MOCK_EXPECTED_ENMAAS_API_KEY"] = enmaas_api_key
+    env["MOCK_LIMA_STATUS"] = "Stopped"
+
+    result = run_bash_script(
+        repo_root / "lima" / "devbox-shell",
+        env=env,
+        cwd=repo_root,
+    )
+
+    if result.returncode != 0:
+        pytest.fail("Lima shell failed while testing an incomplete EnMaaS pair")
+    mock_calls = calls_file.read_text()
+    if any(
+        enmaas_api_key in output
+        for output in (result.stdout, result.stderr, mock_calls)
+    ):
+        pytest.fail("EnMaaS API key appeared in launcher output or command logs")
+
+    captured_call = capture_file.read_text()
+    if enmaas_api_key in captured_call:
+        pytest.fail("EnMaaS API key appeared in the mock capture")
+    payload = json.loads(captured_call)
+    forwarded = payload["provider_env"]
+    if "ENMAAS_URL" in forwarded or "ENMAAS_API_KEY" in forwarded:
+        pytest.fail("Incomplete EnMaaS credential pair was forwarded")
+    if payload["enmaas_var_present"] or payload["enmaas_value_matches"]:
+        pytest.fail("Incomplete EnMaaS API key was forwarded")
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("empty_name", ["ENMAAS_URL", "ENMAAS_API_KEY"])
+def test_lima_shell_omits_enmaas_pair_with_empty_value(
+    empty_name: str,
+    repo_root: Path,
+    isolated_env: dict[str, str],
+    tmp_path: Path,
+):
+    bin_dir, capture_file, calls_file = _install_lima_mocks(tmp_path)
+    env = isolated_env.copy()
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    env["MOCK_LIMACTL_CAPTURE"] = str(capture_file)
+    env["MOCK_LIMACTL_CALLS"] = str(calls_file)
+    enmaas_api_key = "enmaas-test-secret-sentinel"  # pragma: allowlist secret
+    env["MOCK_EXPECTED_ENMAAS_API_KEY"] = enmaas_api_key
+    env["ENMAAS_URL"] = "https://enmaas.example/v1"
+    env["ENMAAS_API_KEY"] = enmaas_api_key
+    env[empty_name] = ""
+    env["MOCK_LIMA_STATUS"] = "Stopped"
+
+    result = run_bash_script(
+        repo_root / "lima" / "devbox-shell",
+        env=env,
+        cwd=repo_root,
+    )
+
+    if result.returncode != 0:
+        pytest.fail("Lima shell failed while testing an empty EnMaaS pair value")
+    mock_calls = calls_file.read_text()
+    captured_call = capture_file.read_text()
+    if any(
+        enmaas_api_key in output
+        for output in (result.stdout, result.stderr, mock_calls, captured_call)
+    ):
+        pytest.fail("EnMaaS API key appeared in output or captured test data")
+
+    payload = json.loads(captured_call)
+    forwarded = payload["provider_env"]
+    if "ENMAAS_URL" in forwarded or "ENMAAS_API_KEY" in forwarded:
+        pytest.fail("Empty EnMaaS credential value was forwarded")
+    if payload["enmaas_var_present"] or payload["enmaas_value_matches"]:
+        pytest.fail("Empty EnMaaS credential pair was forwarded")
 
 
 @pytest.mark.unit

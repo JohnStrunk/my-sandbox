@@ -117,6 +117,8 @@ DEVBOX_ENV_VARS=(
   GITLAB_HOST
   GITLAB_TOKEN
   LITEMAAS_API_KEY
+  ENMAAS_URL
+  ENMAAS_API_KEY
   OPENAI_API_KEY
   OCTO_OPEN_URL
   OCTO_OPEN_KEY
@@ -182,6 +184,14 @@ if [[ -z "${OCTO_OPEN_URL:-}" || -z "${OCTO_OPEN_KEY:-}" ]]; then
 fi
 if [[ "$octo_open_complete" != true ]]; then
   unset OCTO_OPEN_URL OCTO_OPEN_KEY
+fi
+
+enmaas_complete=true
+if [[ -z "${ENMAAS_URL:-}" || -z "${ENMAAS_API_KEY:-}" ]]; then
+  enmaas_complete=false
+fi
+if [[ "$enmaas_complete" != true ]]; then
+  unset ENMAAS_URL ENMAAS_API_KEY
 fi
 
 igloo_env_vars=(

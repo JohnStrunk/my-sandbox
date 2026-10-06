@@ -127,6 +127,9 @@ allowlist. Unrelated host environment variables are not forwarded. The
 allowlist contains the supported provider names and credential-group rules.
 For a low-level host-side shell, `lima/devbox-shell`
 uses the same filtered environment and starts the VM if needed.
+EnMaaS is forwarded only when both `ENMAAS_URL` and `ENMAAS_API_KEY` are
+non-empty. This makes the endpoint and key available in the guest; it does not
+migrate or translate OpenCode provider configuration.
 
 After creating and validating the VM, enable optional host-login autostart to
 avoid starting it manually after reboot:
