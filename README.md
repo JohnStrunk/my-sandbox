@@ -88,6 +88,11 @@ configuration.
 | Anthropic | `ANTHROPIC_API_KEY`; optionally `ANTHROPIC_BASE_URL`. |
 | PriceTag | The relevant endpoint plus `PRICETAG_API_KEY`. |
 | OCTO Open | Both `OCTO_OPEN_URL` and `OCTO_OPEN_KEY`. |
+| EnMaaS | Both `ENMAAS_URL` and `ENMAAS_API_KEY`. |
+
+EnMaaS forwarding requires non-empty values for both variables and makes the
+endpoint and key available in the VM; it does not migrate OpenCode provider
+configuration.
 
 The launcher passes a strict allowlist of supported provider credentials. The
 VM mounts only selected project, knowledge-base, and configuration paths; see
