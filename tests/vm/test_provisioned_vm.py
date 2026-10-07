@@ -106,9 +106,13 @@ trap restore_services EXIT
 systemctl --user stop podman.socket
 systemctl --user stop podman.service
 if systemctl --user is-active --quiet podman.socket \
-  || systemctl --user is-active --quiet podman.service \
-  || [[ -S "$podman_socket" ]]; then
+  || systemctl --user is-active --quiet podman.service; then
   echo "Podman service or socket remained available during Docker smoke test" >&2
+  exit 1
+fi
+if curl --fail --silent --show-error --max-time 3 \
+  --unix-socket "$podman_socket" http://d/_ping >/dev/null 2>&1; then
+  echo "Podman's API remained reachable during Docker smoke test" >&2
   exit 1
 fi
 
