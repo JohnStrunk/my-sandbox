@@ -31,11 +31,8 @@ _EXPECTED_GUEST_ENV_NAMES = {
     "ENMAAS_URL",
     "ENMAAS_API_KEY",
     "OPENAI_API_KEY",
-    "OCTO_OPEN_URL",
-    "OCTO_OPEN_KEY",
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_BASE_URL",
-    "PRICETAG_ANTHROPIC_URL",
     "PRICETAG_HOSTED_URL",
     "PRICETAG_OPENAI_URL",
     "PRICETAG_API_KEY",
@@ -221,10 +218,7 @@ def test_lima_shell_forwards_complete_provider_credential_groups(
         "IGLOO_MCP_APP_ID": "mock-app-id",
         "IGLOO_MCP_USERNAME": "mock-username",
         "IGLOO_MCP_PASSWORD": "mock-password",  # pragma: allowlist secret
-        "OCTO_OPEN_URL": "https://octo.example/v1",
-        "OCTO_OPEN_KEY": "mock-octo-key",  # pragma: allowlist secret
         "PRICETAG_API_KEY": "mock-pricetag-key",  # pragma: allowlist secret
-        "PRICETAG_ANTHROPIC_URL": "https://pricetag.example/anthropic",
         "PRICETAG_HOSTED_URL": "https://pricetag.example/hosted",
         "PRICETAG_OPENAI_URL": "https://pricetag.example/openai",
         "ANTHROPIC_API_KEY": "mock-anthropic-key",  # pragma: allowlist secret
@@ -266,6 +260,12 @@ def test_lima_shell_forwards_complete_enmaas_pair_without_logging_api_key(
     env["ENMAAS_URL"] = enmaas_url
     env["ENMAAS_API_KEY"] = enmaas_api_key
     env["MOCK_EXPECTED_ENMAAS_API_KEY"] = enmaas_api_key
+    direct_provider_secrets = {
+        "OPENAI_API_KEY": "direct-openai-secret",  # pragma: allowlist secret
+        "ANTHROPIC_API_KEY": "direct-anthropic-secret",  # pragma: allowlist secret
+        "ANTHROPIC_BASE_URL": "https://direct-anthropic.example/v1",
+    }
+    env.update(direct_provider_secrets)
     env["MOCK_LIMA_STATUS"] = "Stopped"
 
     result = run_bash_script(
@@ -286,14 +286,57 @@ def test_lima_shell_forwards_complete_enmaas_pair_without_logging_api_key(
     captured_call = capture_file.read_text()
     if enmaas_api_key in captured_call:
         pytest.fail("EnMaaS API key appeared in the mock capture")
+    mock_calls = calls_file.read_text()
+    for value in direct_provider_secrets.values():
+        if any(
+            value in output
+            for output in (result.stdout, result.stderr, mock_calls, captured_call)
+        ):
+            pytest.fail("Direct provider credentials appeared in launcher output")
     payload = json.loads(captured_call)
     forwarded = payload["provider_env"]
+    for name in direct_provider_secrets:
+        assert name not in forwarded
     if enmaas_api_key in " ".join(payload["args"]):
         pytest.fail("EnMaaS API key appeared in Lima command arguments")
     if forwarded.get("ENMAAS_URL") != enmaas_url:
         pytest.fail("EnMaaS endpoint was not forwarded")
     if not payload["enmaas_var_present"] or not payload["enmaas_value_matches"]:
         pytest.fail("EnMaaS API key was not forwarded")
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("url", ["http://enmaas.example/v1", "ftp://enmaas.example/v1"])
+def test_lima_shell_refuses_non_https_enmaas_pair_without_logging_api_key(
+    url: str,
+    repo_root: Path,
+    isolated_env: dict[str, str],
+    tmp_path: Path,
+):
+    bin_dir, capture_file, calls_file = _install_lima_mocks(tmp_path)
+    env = isolated_env.copy()
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    env["MOCK_LIMACTL_CAPTURE"] = str(capture_file)
+    env["MOCK_LIMACTL_CALLS"] = str(calls_file)
+    enmaas_api_key = "enmaas-test-secret-sentinel"  # pragma: allowlist secret
+    env["ENMAAS_URL"] = url
+    env["ENMAAS_API_KEY"] = enmaas_api_key
+    env["MOCK_EXPECTED_ENMAAS_API_KEY"] = enmaas_api_key
+    env["MOCK_LIMA_STATUS"] = "Stopped"
+
+    result = run_bash_script(
+        repo_root / "lima" / "devbox-shell",
+        env=env,
+        cwd=repo_root,
+    )
+
+    assert result.returncode != 0
+    assert not capture_file.exists()
+    if enmaas_api_key in result.stdout or enmaas_api_key in result.stderr:
+        pytest.fail("EnMaaS API key appeared in output or captured test data")
+    if calls_file.exists() and enmaas_api_key in calls_file.read_text():
+        pytest.fail("EnMaaS API key appeared in Lima command logs")
+    assert "ENMAAS_URL must use HTTPS" in result.stderr
 
 
 @pytest.mark.unit

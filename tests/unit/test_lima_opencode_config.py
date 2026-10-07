@@ -49,6 +49,7 @@ def test_vm_config_baseline_and_no_github_mcp(
     assert {"action": "websearch", "resource": "*", "effect": "allow"} in config[
         "permissions"
     ]
+    assert "providers" not in config
     assert config["mcp"]["servers"] == {
         "semble": {"type": "local", "command": ["semble"], "disabled": False}
     }
@@ -67,9 +68,8 @@ def test_vm_config_gates_credentials_and_serializes_references_only(
         "IGLOO_MCP_APP_ID": "mock-app-id",
         "IGLOO_MCP_USERNAME": "mock-user",
         "IGLOO_MCP_PASSWORD": "mock-password",  # pragma: allowlist secret
-        "OCTO_OPEN_URL": "https://octo.example/v1",
-        "OCTO_OPEN_KEY": "mock-octo-secret",  # pragma: allowlist secret
-        "PRICETAG_ANTHROPIC_URL": "https://price-anthropic.example/v1",
+        "ENMAAS_URL": "https://enmaas.example/v1",
+        "ENMAAS_API_KEY": "mock-enmaas-secret",  # pragma: allowlist secret
         "PRICETAG_HOSTED_URL": "https://price-hosted.example/v1",
         "PRICETAG_OPENAI_URL": "https://price-openai.example/v1",
         "PRICETAG_API_KEY": "mock-pricetag-secret",  # pragma: allowlist secret
@@ -91,37 +91,91 @@ def test_vm_config_gates_credentials_and_serializes_references_only(
     assert config["websearch"] == {"provider": "tavily"}
 
     providers = config["providers"]
-    assert providers["octo-open"]["settings"] == {
-        "baseURL": "{env:OCTO_OPEN_URL}",
-        "apiKey": "{env:OCTO_OPEN_KEY}",
+    assert set(providers) == {"anthropic", "openai"}
+    expected_enmaas_settings = {
+        "baseURL": "{env:ENMAAS_URL}",
+        "apiKey": "{env:ENMAAS_API_KEY}",
     }
-    assert providers["anthropic"]["env"] == []
-    assert providers["anthropic"]["settings"]["apiKey"] == "{env:PRICETAG_API_KEY}"
-    assert providers["openai"]["env"] == []
-    assert providers["pricetag-hosted"]["settings"]["apiKey"] == (
-        "{env:PRICETAG_API_KEY}"
-    )
+    for provider in providers.values():
+        assert provider["env"] == []
+        assert provider["settings"] == expected_enmaas_settings
+    assert providers["openai"]["models"] == {
+        "rits/zai-org/glm-5-3": {"name": "GLM 5.3 (curvebender)"}
+    }
     assert all(value not in serialized for value in secrets.values())
+    assert "pricetag-hosted" not in serialized
     assert "github" not in config["mcp"]["servers"]
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("present_name", ["ENMAAS_URL", "ENMAAS_API_KEY"])
 def test_vm_config_requires_complete_credential_groups(
-    repo_root: Path, isolated_env: dict[str, str]
+    present_name: str, repo_root: Path, isolated_env: dict[str, str]
 ):
+    partial_value = (
+        "https://enmaas.example/v1"
+        if present_name == "ENMAAS_URL"
+        else "partial-enmaas-key"  # pragma: allowlist secret
+    )
     env = isolated_env | {
         "IGLOO_MCP_COMMUNITY": "community",
         "IGLOO_MCP_PASSWORD": "partial-password",  # pragma: allowlist secret
-        "OCTO_OPEN_URL": "https://octo.example/v1",
-        "PRICETAG_OPENAI_URL": "https://price.example/v1",
+        present_name: partial_value,
     }
 
     config, serialized = _generated_config(repo_root, env)
 
     assert "the-source" not in config["mcp"]["servers"]
-    assert "octo-open" not in config.get("providers", {})
-    assert "openai" not in config.get("providers", {})
-    assert "PRICETAG_API_KEY" not in serialized
+    assert "providers" not in config
+    assert "ENMAAS_API_KEY" not in serialized
+    assert partial_value not in serialized
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://enmaas.example/v1",
+        "https://",
+        "https://enmaas.example:bad/v1",
+        "https://enmaas.example:65536/v1",
+        "https://enmaas.example:0/v1",
+        "https://bad host/v1",
+        "https://[::::]/v1",
+        "https://[127.0.0.1]/v1",
+        "https://[fe80::1%25eth0]/v1",
+        "https://enmaas.example/v1 path",
+        "https://enmaas.example/v1%zz",
+        "https://enmaas.example/v1?query=%G0",
+        "https://enmaas.example/v1\tpath",
+        "https://enmaas.example/v1\u00a0path",
+        "https://enmaas.example/v1\u0085path",
+        "https://2130706433/v1",
+        "https://0177.0.0.1/v1",
+        "https://0x7f000001/v1",
+        "https://enmaas.123/v1",
+        "https://enmaas.0x12/v1",
+        "https://0x/v1",
+        "https://0x.0.0.1/v1",
+    ],
+)
+def test_vm_config_rejects_non_https_or_invalid_enmaas_endpoint(
+    url: str, repo_root: Path, isolated_env: dict[str, str]
+):
+    api_key = "insecure-endpoint-key"  # pragma: allowlist secret
+    env = isolated_env | {"ENMAAS_URL": url, "ENMAAS_API_KEY": api_key}
+    result = subprocess.run(
+        ["python3", str(repo_root / "lima/opencode_config.py")],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode != 0
+    assert "ENMAAS_URL must be a valid HTTPS URL" in result.stderr
+    assert api_key not in result.stdout
+    assert api_key not in result.stderr
 
 
 @pytest.mark.unit
@@ -239,27 +293,32 @@ def test_the_source_lock_pins_the_full_dependency_graph(repo_root: Path):
 
 
 @pytest.mark.unit
-def test_price_tag_gateway_key_overrides_direct_provider_key(
+def test_enmaas_gateway_key_overrides_direct_provider_keys(
     repo_root: Path, isolated_env: dict[str, str]
 ):
     env = isolated_env | {
         "ANTHROPIC_API_KEY": "direct-anthropic-secret",  # pragma: allowlist secret
         "OPENAI_API_KEY": "direct-openai-secret",  # pragma: allowlist secret
-        "PRICETAG_API_KEY": "gateway-secret",  # pragma: allowlist secret
-        "PRICETAG_ANTHROPIC_URL": "https://price-anthropic.example/v1",
-        "PRICETAG_OPENAI_URL": "https://price-openai.example/v1",
+        "ENMAAS_URL": "https://enmaas.example/v1",
+        "ENMAAS_API_KEY": "gateway-secret",  # pragma: allowlist secret
     }
 
     config, serialized = _generated_config(repo_root, env)
 
-    assert config["providers"]["anthropic"]["env"] == []
-    assert config["providers"]["openai"]["env"] == []
+    assert set(config["providers"]) == {"anthropic", "openai"}
+    for provider in config["providers"].values():
+        assert provider["env"] == []
+        assert provider["settings"] == {
+            "baseURL": "{env:ENMAAS_URL}",
+            "apiKey": "{env:ENMAAS_API_KEY}",
+        }
     assert all(
         value not in serialized
         for value in (
             "direct-anthropic-secret",
             "direct-openai-secret",
             "gateway-secret",
+            "https://enmaas.example/v1",
         )
     )
 
@@ -289,9 +348,8 @@ def test_installed_vm_opencode_accepts_generated_config_schema(
         "IGLOO_MCP_APP_ID": "schema-app-id",
         "IGLOO_MCP_USERNAME": "schema-user",
         "IGLOO_MCP_PASSWORD": "schema-password",  # pragma: allowlist secret
-        "OCTO_OPEN_URL": "https://octo.example/v1",
-        "OCTO_OPEN_KEY": "schema-octo-key",  # pragma: allowlist secret
-        "PRICETAG_ANTHROPIC_URL": "https://price-anthropic.example/v1",
+        "ENMAAS_URL": "https://enmaas.example/v1",
+        "ENMAAS_API_KEY": "schema-enmaas-key",  # pragma: allowlist secret
         "PRICETAG_HOSTED_URL": "https://price-hosted.example/v1",
         "PRICETAG_OPENAI_URL": "https://price-openai.example/v1",
         "PRICETAG_API_KEY": "schema-pricetag-key",  # pragma: allowlist secret
@@ -396,10 +454,9 @@ def test_installed_vm_opencode_accepts_generated_config_schema(
         "context7",
         "the-source",
     }
-    assert set(generated["providers"]) == {
-        "octo-open",
-        "anthropic",
-        "pricetag-hosted",
-        "openai",
-    }
+    assert set(generated["providers"]) == {"anthropic", "openai"}
+    assert (
+        generated["providers"]["openai"]["models"]["rits/zai-org/glm-5-3"]["name"]
+        == "GLM 5.3 (curvebender)"
+    )
     assert "github" not in generated["mcp"]["servers"]

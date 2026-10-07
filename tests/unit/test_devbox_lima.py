@@ -334,7 +334,7 @@ def test_opencode_launch_builds_runtime_config_inside_the_vm(
 
     result = run_bash_script(
         devbox_path,
-        ["opencode", "run", "--agent", "build", "--model", "octo-open/test"],
+        ["opencode", "run", "--agent", "build", "--model", "openai/test"],
         cwd=project_dir,
         env=isolated_env,
         timeout=15,
@@ -353,7 +353,7 @@ def test_opencode_launch_builds_runtime_config_inside_the_vm(
     assert f"{repo_root}/lima/opencode_config.py" in shell_command
     assert "OPENCODE_CONFIG_CONTENT" in shell_command
     assert 'exec opencode "$@"' in shell_command
-    assert "run --agent build --model octo-open/test" in shell_command
+    assert "run --agent build --model openai/test" in shell_command
     payload = json.loads(capture.read_text())
     assert payload["block"] == "*"
     assert "OPENCODE_CONFIG_CONTENT" not in payload["allow"]
@@ -599,7 +599,7 @@ def test_do_one_issue_runs_git_and_headless_opencode_through_vm_launcher(
             "--agent",
             "build",
             "--model",
-            "pricetag-hosted/Inferact/Qwen3.8-Flash-Next-NVFP4#xhigh",
+            "openai/rits/zai-org/glm-5-3",
             "--file",
             ".opencode/commands/grab-issue.md",
             "Execute the task list in the attached file.",
@@ -907,7 +907,7 @@ def test_reprovision_opencode_command_uses_runtime_config_wrapper(
     isolated_env["MOCK_VM_FINGERPRINT_AFTER_START"] = (
         expected_lima_provisioning_fingerprint(repo_root)
     )
-    command = ["opencode", "run", "--agent", "build", "--model", "octo-open/test"]
+    command = ["opencode", "run", "--agent", "build", "--model", "openai/test"]
 
     result = run_bash_script(
         devbox_path,
