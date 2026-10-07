@@ -230,7 +230,7 @@
       }
     },
     "docker_ce": {
-      "version": "29.8.1",
+      "version": "29.8.2",
       "datasource": "github-releases",
       "depName": "moby/moby",
       "integrity": "version-only",

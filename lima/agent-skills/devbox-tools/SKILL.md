@@ -186,7 +186,7 @@ shared repository `AGENTS.md` or README.
 - Podman remains available through the `podman` command and its separate
   `$XDG_RUNTIME_DIR/podman/podman.sock` API socket. Select a kind backend
   explicitly with `KIND_EXPERIMENTAL_PROVIDER=docker` or `podman`;
-  `lima/validate-kind.sh` defaults to Podman but assigns the socket for the
+  `lima/validate-kind.sh` defaults to Docker but assigns the socket for the
   selected provider rather than inheriting a possibly mismatched `DOCKER_HOST`.
 - kind's Podman provider invokes the `podman` CLI directly; its Docker provider
   uses the Docker CLI and the default Docker CE `DOCKER_HOST`.
@@ -206,7 +206,7 @@ shared repository `AGENTS.md` or README.
   Pipenv, and the VM-local `~/.local/share/kubebuilder-envtest` asset store.
 - Select kind's experimental `docker` or `podman` provider explicitly. The
   Docker provider uses the Docker CE socket; the Podman provider uses Podman's
-  socket. `lima/validate-kind.sh` defaults to Podman, exercises repeated
+  socket. `lima/validate-kind.sh` defaults to Docker, exercises repeated
   create/delete cycles, and cleans up any cluster left by a failed attempt.
 - Use `devbox-toolchain-check` to verify manifest-pinned tools and report the
   operator versions.

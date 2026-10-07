@@ -419,7 +419,7 @@ its exact version, plus `make`, Python/pip, and ShellCheck.
 
 The VM provisions **Docker CE Engine, its official CLI, Docker's rootless
 extras, and `containerd.io`** from Docker's Fedora stable RPM repository. The
-manifest pins Docker CE 29.8.1 and containerd 2.3.6 for both supported
+manifest pins Docker CE 29.8.2 and containerd 2.3.6 for both supported
 architectures. The RPM release suffix is resolved from the official repo for
 Fedora 44; package versions and epochs are checked after installation. DNF
 verifies repository metadata and package signatures with a committed,
@@ -450,8 +450,8 @@ Podman remains a separately supported rootless runtime. Its API socket is
 `$XDG_RUNTIME_DIR/podman/podman.sock`; invoking `podman` talks to Podman
 directly.
 Do not point Docker at that socket or expect Docker to fall back to Podman.
-`lima/validate-kind.sh` explicitly selects the matching socket for
-`KIND_EXPERIMENTAL_PROVIDER=podman` (its default) or `docker`.
+`lima/validate-kind.sh` defaults to the Docker provider and selects the
+matching socket when `KIND_EXPERIMENTAL_PROVIDER=podman` is explicitly set.
 For direct kind commands, select the provider explicitly; kind's Podman
 provider invokes the `podman` CLI directly, while its Docker provider uses the
 Docker CLI and the default Docker CE socket.
@@ -868,8 +868,8 @@ passes, verify from inside the VM (opened with
       operator tools; `make --version`, `kind version`, `kubectl version
       --client`, `helm version`, and `pipenv --version` all succeed.
 - [ ] `~/src/my-sandbox/lima/validate-kind.sh` completes ten consecutive
-      create/delete cycles with the explicit Podman provider; selecting
-      `KIND_EXPERIMENTAL_PROVIDER=docker` uses the separate Docker CE socket.
+      create/delete cycles with the Docker provider; setting
+      `KIND_EXPERIMENTAL_PROVIDER=podman` exercises the separate Podman socket.
 - [ ] `docker version` reports the manifest-pinned client and server, and the
       Docker smoke test succeeds while Podman's service/socket are stopped.
 - [ ] `~/.agents/skills/devbox-tools/SKILL.md` and the ast-grep skills are

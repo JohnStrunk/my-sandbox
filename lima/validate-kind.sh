@@ -9,7 +9,7 @@ if [[ ! "$runs" =~ ^[1-9][0-9]*$ || "$runs" -gt 100 ]]; then
   exit 2
 fi
 
-provider="${KIND_EXPERIMENTAL_PROVIDER:-podman}"
+provider="${KIND_EXPERIMENTAL_PROVIDER:-docker}"
 runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 case "$provider" in
   podman)

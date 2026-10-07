@@ -49,8 +49,8 @@ def test_kind_validation_script_runs_ten_create_delete_cycles(
     creates = [line for line in calls if line.startswith("create cluster")]
     deletes = [line for line in calls if line.startswith("delete cluster")]
     assert len(creates) == len(deletes) == 10
-    expected_podman_host = f"unix:///run/user/{os.getuid()}/podman/podman.sock"
-    assert all(call.endswith(f"|{expected_podman_host}|podman") for call in calls)
+    expected_docker_host = f"unix:///run/user/{os.getuid()}/docker.sock"
+    assert all(call.endswith(f"|{expected_docker_host}|docker") for call in calls)
     create_names = [line.split("--name ", 1)[1].split()[0] for line in creates]
     delete_names = [line.split("--name ", 1)[1].split()[0] for line in deletes]
     assert create_names == delete_names
@@ -75,20 +75,20 @@ def test_kind_validation_script_runs_ten_create_delete_cycles(
     assert all_create_names[10] not in all_create_names[:10]
     assert all_delete_names[10] == all_create_names[10]
 
-    docker_run = subprocess.run(
+    podman_run = subprocess.run(
         ["bash", str(repo_root / "lima/validate-kind.sh"), "1"],
         check=False,
         capture_output=True,
         text=True,
-        env={**env, "KIND_EXPERIMENTAL_PROVIDER": "docker"},
+        env={**env, "KIND_EXPERIMENTAL_PROVIDER": "podman"},
         timeout=10,
     )
 
-    assert docker_run.returncode == 0, docker_run.stderr
-    docker_call = log_path.read_text().splitlines()[-2]
-    expected_docker_host = f"unix:///run/user/{os.getuid()}/docker.sock"
-    assert docker_call.startswith("create cluster")
-    assert docker_call.endswith(f"|{expected_docker_host}|docker")
+    assert podman_run.returncode == 0, podman_run.stderr
+    podman_call = log_path.read_text().splitlines()[-2]
+    expected_podman_host = f"unix:///run/user/{os.getuid()}/podman/podman.sock"
+    assert podman_call.startswith("create cluster")
+    assert podman_call.endswith(f"|{expected_podman_host}|podman")
 
     runtime_dir = str(tmp_path / "xdg-runtime")
     custom_runtime_run = subprocess.run(

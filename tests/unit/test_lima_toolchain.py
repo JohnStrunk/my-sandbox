@@ -108,7 +108,7 @@ def test_lima_toolchain_check_verifies_the_docker_ce_client_version(
     _, errors = check_toolchain(manifest_path, runner)
 
     assert any(
-        "docker_ce: installed version 29.8.0, expected 29.8.1" in error
+        "docker_ce: installed version 29.8.0, expected 29.8.2" in error
         for error in errors
     )
 

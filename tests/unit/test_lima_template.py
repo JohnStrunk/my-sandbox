@@ -456,6 +456,10 @@ def test_docker_ce_uses_pinned_signature_checked_rpms_and_rootless_service(
     assert "assert_rpm_owner /usr/bin/dockerd docker-ce" in system_script
     assert "assert_rpm_owner /usr/bin/containerd containerd.io" in system_script
     assert "rpm -q podman-docker" in system_script
+    assert (
+        'KIND_EXPERIMENTAL_PROVIDER="${KIND_EXPERIMENTAL_PROVIDER:-docker}"'
+        in system_script
+    )
     assert 'systemctl disable --now "$unit"' in system_script
     assert 'XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"' in user_script
     assert "export XDG_RUNTIME_DIR" in user_script
