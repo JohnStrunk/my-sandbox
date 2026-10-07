@@ -55,7 +55,7 @@ export DOCKER_HOST="unix://${docker_socket}"
 [[ "$docker_cli_path" == /usr/bin/docker ]]
 [[ "$(rpm -qf --queryformat '%{NAME}' "$docker_cli_path")" == docker-ce-cli ]]
 [[ "$(rpm -qf --queryformat '%{NAME}' /usr/bin/dockerd)" == docker-ce ]]
-[[ "$(rpm -qf --queryformat '%{NAME}' /usr/bin/dockerd-rootless-setuptool.sh)" \
+[[ "$(rpm -qf --queryformat '%{NAME}' /usr/bin/dockerd-rootless.sh)" \
   == docker-ce-rootless-extras ]]
 [[ "$(rpm -q --queryformat '%{VERSION}' docker-ce)" == "$expected_version" ]]
 [[ "$(rpm -q --queryformat '%{VERSION}' docker-ce-cli)" == "$expected_version" ]]

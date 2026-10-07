@@ -618,7 +618,7 @@ assert_rpm_owner() {
 }
 assert_rpm_owner /usr/bin/docker docker-ce-cli
 assert_rpm_owner /usr/bin/dockerd docker-ce
-assert_rpm_owner /usr/bin/dockerd-rootless-setuptool.sh docker-ce-rootless-extras
+assert_rpm_owner /usr/bin/dockerd-rootless.sh docker-ce-rootless-extras
 if rpm -q podman-docker >/dev/null 2>&1; then
   echo "devbox: refusing podman-docker; Docker must use Docker CE" >&2
   exit 1

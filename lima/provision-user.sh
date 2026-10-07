@@ -291,8 +291,8 @@ if [[ -n "$host_agents" && -d "$host_agents" ]]; then
   fi
 fi
 
-# Docker CE's official helper installs the per-user rootless service unit. Do
-# not enable the rootful system service or add the guest to the docker group.
+# Install Docker's documented rootless user unit directly instead of running
+# the vendor setup helper as the guest, which can read host-mounted credentials.
 XDG_RUNTIME_DIR="/run/user/$(id -u)"
 export XDG_RUNTIME_DIR
 export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
@@ -309,14 +309,55 @@ if [[ "$user_manager_ready" != true ]]; then
   exit 1
 fi
 
-docker_user_unit="$HOME/.config/systemd/user/docker.service"
-if [[ -L "$docker_user_unit" ]]; then
-  echo "devbox: refusing symlinked rootless Docker user service" >&2
+docker_user_unit_dir="$HOME/.config/systemd/user"
+docker_user_unit="$docker_user_unit_dir/docker.service"
+if [[ -L "$HOME/.config" || -L "$HOME/.config/systemd" \
+  || -L "$docker_user_unit_dir" || -L "$docker_user_unit" ]]; then
+  echo "devbox: refusing symlinked rootless Docker user service path" >&2
   exit 1
 fi
-if [[ ! -f "$docker_user_unit" ]]; then
-  dockerd-rootless-setuptool.sh install
+install -d -m 0700 "$docker_user_unit_dir"
+docker_user_unit_tmp="$(mktemp "$docker_user_unit_dir/docker.service.XXXXXX")"
+cat >"$docker_user_unit_tmp" <<'EOF'
+[Unit]
+Description=Docker Application Container Engine (Rootless)
+Documentation=https://docs.docker.com/go/rootless/
+Requires=dbus.socket
+
+[Service]
+Environment=PATH=/usr/bin:/sbin:/usr/sbin:/usr/local/bin
+ExecStart=/usr/bin/dockerd-rootless.sh
+ExecReload=/bin/kill -s HUP $MAINPID
+TimeoutSec=0
+RestartSec=2
+Restart=always
+StartLimitBurst=3
+StartLimitInterval=60s
+LimitNOFILE=infinity
+LimitNPROC=infinity
+LimitCORE=infinity
+TasksMax=infinity
+Delegate=yes
+Type=notify
+NotifyAccess=all
+KillMode=mixed
+
+[Install]
+WantedBy=default.target
+EOF
+if [[ -e "$docker_user_unit" ]]; then
+  if [[ ! -f "$docker_user_unit" ]] \
+    || ! cmp -s "$docker_user_unit_tmp" "$docker_user_unit"; then
+    rm -f -- "$docker_user_unit_tmp"
+    echo "devbox: refusing to replace a non-managed Docker user service" >&2
+    exit 1
+  fi
+  rm -f -- "$docker_user_unit_tmp"
+else
+  install -m 0644 "$docker_user_unit_tmp" "$docker_user_unit"
+  rm -f -- "$docker_user_unit_tmp"
 fi
+systemctl --user daemon-reload
 systemctl --user enable --now docker.service
 
 # Podman remains an independent rootless runtime with its own API socket.

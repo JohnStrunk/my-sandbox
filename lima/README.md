@@ -428,6 +428,9 @@ DNF verifies the package signatures (`gpgcheck=1`) and the
 provisioner requests exact Engine/CLI/rootless-package RPM versions. It skips
 third-party RPM scriptlets as root. Docker CE is not a Podman alias, wrapper, or
 `podman-docker` package.
+The provisioner writes Docker's documented per-user systemd unit directly
+instead of running the vendor setup utility with the guest's host-mounted
+credentials.
 
 Docker uses a rootless **per-user systemd service**. Provisioning enables
 `docker.service`; Lima's user lingering lets it start at VM boot and survive

@@ -453,7 +453,13 @@ def test_docker_ce_uses_pinned_signature_checked_rpms_and_rootless_service(
         in user_script
     )
     assert "systemctl --user show-environment" in user_script
-    assert "dockerd-rootless-setuptool.sh install" in user_script
+    assert "dockerd-rootless-setuptool.sh install" not in user_script
+    assert "ExecStart=/usr/bin/dockerd-rootless.sh" in user_script
+    assert "Requires=dbus.socket" in user_script
+    assert "Type=notify" in user_script
+    assert "Delegate=yes" in user_script
+    assert "WantedBy=default.target" in user_script
+    assert "systemctl --user daemon-reload" in user_script
     assert "systemctl --user enable --now docker.service" in user_script
     assert "systemctl --user enable --now podman.socket" in user_script
     assert "docker" in manifest["probes"][0]["description"].lower()
