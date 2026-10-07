@@ -293,6 +293,22 @@ fi
 
 # Docker CE's official helper installs the per-user rootless service unit. Do
 # not enable the rootful system service or add the guest to the docker group.
+XDG_RUNTIME_DIR="/run/user/$(id -u)"
+export XDG_RUNTIME_DIR
+export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+user_manager_ready=false
+for _ in {1..30}; do
+  if systemctl --user show-environment >/dev/null 2>&1; then
+    user_manager_ready=true
+    break
+  fi
+  sleep 1
+done
+if [[ "$user_manager_ready" != true ]]; then
+  echo "devbox: systemd user manager is unavailable for rootless runtimes" >&2
+  exit 1
+fi
+
 docker_user_unit="$HOME/.config/systemd/user/docker.service"
 if [[ -L "$docker_user_unit" ]]; then
   echo "devbox: refusing symlinked rootless Docker user service" >&2

@@ -446,6 +446,13 @@ def test_docker_ce_uses_pinned_signature_checked_rpms_and_rootless_service(
     assert "assert_rpm_owner /usr/bin/dockerd docker-ce" in system_script
     assert "rpm -q podman-docker" in system_script
     assert 'systemctl disable --now "$unit"' in system_script
+    assert 'XDG_RUNTIME_DIR="/run/user/$(id -u)"' in user_script
+    assert "export XDG_RUNTIME_DIR" in user_script
+    assert (
+        'export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"'
+        in user_script
+    )
+    assert "systemctl --user show-environment" in user_script
     assert "dockerd-rootless-setuptool.sh install" in user_script
     assert "systemctl --user enable --now docker.service" in user_script
     assert "systemctl --user enable --now podman.socket" in user_script
