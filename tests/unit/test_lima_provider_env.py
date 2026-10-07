@@ -270,6 +270,7 @@ def test_lima_shell_forwards_complete_enmaas_pair_without_logging_api_key(
 
     result = run_bash_script(
         repo_root / "lima" / "devbox-shell",
+        args=["opencode", "run", "test prompt"],
         env=env,
         cwd=repo_root,
     )
@@ -295,6 +296,7 @@ def test_lima_shell_forwards_complete_enmaas_pair_without_logging_api_key(
             pytest.fail("Direct provider credentials appeared in launcher output")
     payload = json.loads(captured_call)
     forwarded = payload["provider_env"]
+    assert payload["args"][-3:] == ["opencode", "run", "test prompt"]
     for name in direct_provider_secrets:
         assert name not in forwarded
     if enmaas_api_key in " ".join(payload["args"]):

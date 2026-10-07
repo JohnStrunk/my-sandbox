@@ -25,6 +25,44 @@ def _generated_config(repo_root: Path, env: dict[str, str]) -> tuple[dict, str]:
     return json.loads(result.stdout), result.stdout
 
 
+def _user_global_enmaas_config() -> dict[str, object]:
+    return {
+        "$schema": "https://opencode.ai/config.json",
+        "providers": {
+            "anthropic": {
+                "env": [],
+                "settings": {
+                    "baseURL": "{env:ENMAAS_URL}",
+                    "apiKey": "{env:ENMAAS_API_KEY}",
+                },
+            },
+            "openai": {
+                "env": [],
+                "settings": {
+                    "baseURL": "{env:ENMAAS_URL}",
+                    "apiKey": "{env:ENMAAS_API_KEY}",
+                },
+                "models": {
+                    "rits/zai-org/glm-5-3": {
+                        "name": "GLM 5.3 (curvebender)",
+                        "limit": {"context": 262000, "output": 128000},
+                        "capabilities": {
+                            "tools": True,
+                            "input": ["text"],
+                            "output": ["text"],
+                        },
+                        "variants": [
+                            {"id": "low", "settings": {"effort": "low"}},
+                            {"id": "high", "settings": {"effort": "high"}},
+                            {"id": "max", "settings": {"effort": "max"}},
+                        ],
+                    }
+                },
+            },
+        },
+    }
+
+
 @pytest.mark.unit
 def test_vm_config_baseline_and_no_github_mcp(
     repo_root: Path, isolated_env: dict[str, str]
@@ -89,19 +127,8 @@ def test_vm_config_gates_credentials_and_serializes_references_only(
     ]
     assert source_env["IGLOO_MCP_PASSWORD"] == "{env:IGLOO_MCP_PASSWORD}"
     assert config["websearch"] == {"provider": "tavily"}
-
-    providers = config["providers"]
-    assert set(providers) == {"anthropic", "openai"}
-    expected_enmaas_settings = {
-        "baseURL": "{env:ENMAAS_URL}",
-        "apiKey": "{env:ENMAAS_API_KEY}",
-    }
-    for provider in providers.values():
-        assert provider["env"] == []
-        assert provider["settings"] == expected_enmaas_settings
-    assert providers["openai"]["models"] == {
-        "rits/zai-org/glm-5-3": {"name": "GLM 5.3 (curvebender)"}
-    }
+    assert "providers" not in config
+    assert "rits/zai-org/glm-5-3" not in serialized
     assert all(value not in serialized for value in secrets.values())
     assert "pricetag-hosted" not in serialized
     assert "github" not in config["mcp"]["servers"]
@@ -293,7 +320,7 @@ def test_the_source_lock_pins_the_full_dependency_graph(repo_root: Path):
 
 
 @pytest.mark.unit
-def test_enmaas_gateway_key_overrides_direct_provider_keys(
+def test_complete_enmaas_pair_does_not_generate_provider_or_model_config(
     repo_root: Path, isolated_env: dict[str, str]
 ):
     env = isolated_env | {
@@ -305,13 +332,10 @@ def test_enmaas_gateway_key_overrides_direct_provider_keys(
 
     config, serialized = _generated_config(repo_root, env)
 
-    assert set(config["providers"]) == {"anthropic", "openai"}
-    for provider in config["providers"].values():
-        assert provider["env"] == []
-        assert provider["settings"] == {
-            "baseURL": "{env:ENMAAS_URL}",
-            "apiKey": "{env:ENMAAS_API_KEY}",
-        }
+    assert "providers" not in config
+    assert "rits/zai-org/glm-5-3" not in serialized
+    assert "{env:ENMAAS_URL}" not in serialized
+    assert "{env:ENMAAS_API_KEY}" not in serialized
     assert all(
         value not in serialized
         for value in (
@@ -324,7 +348,8 @@ def test_enmaas_gateway_key_overrides_direct_provider_keys(
 
 
 @pytest.mark.unit
-def test_installed_vm_opencode_accepts_generated_config_schema(
+@pytest.mark.vm
+def test_installed_vm_opencode_accepts_overlay_and_global_enmaas_config_schema(
     repo_root: Path, isolated_env: dict[str, str], tmp_path: Path
 ):
     """Run against the VM's pinned OpenCode, not the host-global config."""
@@ -365,6 +390,11 @@ def test_installed_vm_opencode_accepts_generated_config_schema(
     state_home = home / ".local/state"
     for path in (config_home, data_home, state_home):
         path.mkdir(parents=True)
+    user_config_dir = config_home / "opencode"
+    user_config_dir.mkdir()
+    (user_config_dir / "opencode.jsonc").write_text(
+        json.dumps(_user_global_enmaas_config())
+    )
     env = {
         name: value
         for name, value in isolated_env.items()
@@ -376,6 +406,8 @@ def test_installed_vm_opencode_accepts_generated_config_schema(
             "XDG_CONFIG_HOME": str(config_home),
             "XDG_DATA_HOME": str(data_home),
             "XDG_STATE_HOME": str(state_home),
+            "ENMAAS_URL": schema_env["ENMAAS_URL"],
+            "ENMAAS_API_KEY": schema_env["ENMAAS_API_KEY"],
             "OPENCODE_CONFIG_CONTENT": json.dumps(config),
             "OPENCODE_SERVER_PASSWORD": (
                 "schema-test-password"  # pragma: allowlist secret
@@ -443,10 +475,14 @@ def test_installed_vm_opencode_accepts_generated_config_schema(
     assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
     sources = json.loads(result.stdout)
     generated = next(
-        source["info"]
-        for source in sources
-        if source.get("info", {}).get("experimental", {}).get("policies")
+        (
+            source["info"]
+            for source in sources
+            if source.get("info", {}).get("experimental", {}).get("policies")
+        ),
+        None,
     )
+    assert generated is not None, "OpenCode omitted the generated runtime overlay"
     assert generated["experimental"]["policies"] == config["experimental"]["policies"]
     assert generated["mcp"]["servers"]["semble"]["command"] == ["semble"]
     assert set(generated["mcp"]["servers"]) == {
@@ -454,9 +490,37 @@ def test_installed_vm_opencode_accepts_generated_config_schema(
         "context7",
         "the-source",
     }
-    assert set(generated["providers"]) == {"anthropic", "openai"}
-    assert (
-        generated["providers"]["openai"]["models"]["rits/zai-org/glm-5-3"]["name"]
-        == "GLM 5.3 (curvebender)"
-    )
+    assert "providers" not in generated
+    assert "rits/zai-org/glm-5-3" not in json.dumps(generated)
     assert "github" not in generated["mcp"]["servers"]
+    global_config = next(
+        (
+            source["info"]
+            for source in sources
+            if source.get("info", {})
+            .get("providers", {})
+            .get("openai", {})
+            .get("models", {})
+            .get("rits/zai-org/glm-5-3")
+        ),
+        None,
+    )
+    assert global_config is not None, "OpenCode omitted the user-managed config"
+    providers = global_config["providers"]
+    assert set(providers) == {"anthropic", "openai"}
+    for provider in providers.values():
+        assert provider["env"] == []
+        assert set(provider["settings"]) == {"baseURL", "apiKey"}
+    model = providers["openai"]["models"]["rits/zai-org/glm-5-3"]
+    assert model["name"] == "GLM 5.3 (curvebender)"
+    assert model["limit"] == {"context": 262000, "output": 128000}
+    assert model["capabilities"] == {
+        "tools": True,
+        "input": ["text"],
+        "output": ["text"],
+    }
+    assert {variant["id"] for variant in model["variants"]} == {
+        "low",
+        "high",
+        "max",
+    }

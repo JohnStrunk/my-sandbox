@@ -86,13 +86,12 @@ def test_pricetag_openai_gateway_credential_precedence_e2e(tmp_path):
 
     OpenCode v2 resolves a built-in provider's credential from its
     environment connection (OPENAI_API_KEY) in preference to a provider
-    override's settings.apiKey. The devbox launcher therefore clears the
-    provider's environment credential list ("env": []) in the override it
-    generates for the PriceTag OpenAI gateway. This test runs OpenCode with
-    that exact override shape plus a deliberately invalid OPENAI_API_KEY
-    and asserts inference still succeeds; without the cleared list every
-    request fails with HTTP 401 because the direct key is sent to the
-    gateway.
+    override's settings.apiKey. This test supplies an explicit
+    OPENCODE_CONFIG_CONTENT override with an empty provider environment list
+    ("env": []) for the PriceTag OpenAI gateway, plus a deliberately invalid
+    OPENAI_API_KEY, and asserts inference still succeeds. Without the cleared
+    list every request fails with HTTP 401 because the direct key is sent to
+    the gateway.
     """
     api_key = os.getenv("PRICETAG_API_KEY")
     base_url = os.getenv("PRICETAG_OPENAI_URL")
