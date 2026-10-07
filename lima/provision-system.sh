@@ -555,6 +555,7 @@ fi
 
 # Pin Docker's RPM signing key independently from the package-download origin.
 # The key is public, committed, and SHA-256 verified before DNF trusts it.
+# Docker Release (CE rpm) fingerprint: 060A 61C5 1B55 8A7F 742B 77AA C52F EB6B 621E 9F35
 DOCKER_GPG_KEY_SHA256=e6c650e0700b1bf4868b693b30761b926844befc8a0acb7ac0dd9b1faf1b7423
 docker_gpg_key_file=/etc/pki/rpm-gpg/RPM-GPG-KEY-docker-ce
 docker_gpg_key_tmp="$(new_temp_dir)/docker-ce.asc"

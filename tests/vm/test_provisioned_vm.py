@@ -92,12 +92,14 @@ for plugin in docker-buildx-plugin docker-compose-plugin; do
   fi
 done
 if systemctl is-active --quiet docker.service \
-  || systemctl is-active --quiet docker.socket; then
-  echo "rootful Docker services must remain disabled" >&2
+  || systemctl is-active --quiet docker.socket \
+  || systemctl is-active --quiet containerd.service; then
+  echo "rootful Docker/containerd services must remain inactive" >&2
   exit 1
 fi
 if systemctl is-enabled --quiet docker.service \
-  || systemctl is-enabled --quiet docker.socket; then
+  || systemctl is-enabled --quiet docker.socket \
+  || systemctl is-enabled --quiet containerd.service; then
   echo "rootful Docker services must not be enabled" >&2
   exit 1
 fi

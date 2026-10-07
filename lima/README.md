@@ -440,8 +440,9 @@ vendor setup utility with the guest's host-mounted credentials. The optional
 Docker uses a rootless **per-user systemd service**. Provisioning enables
 `docker.service`; Lima's user lingering lets it start at VM boot and survive
 logout. The default `DOCKER_HOST` is
-`unix:///run/user/<uid>/docker.sock`. The rootful system `docker.service` and
-`docker.socket` remain disabled, and the guest is not added to a `docker` group.
+`unix:///run/user/<uid>/docker.sock`. The rootful system `docker.service`,
+`docker.socket`, and `containerd.service` remain disabled, and the guest is not
+added to a `docker` group.
 The daemon runs with the guest user's privileges, not host-root privileges, and
 can access files and credentials available to that guest user.
 
@@ -451,6 +452,11 @@ directly.
 Do not point Docker at that socket or expect Docker to fall back to Podman.
 `lima/validate-kind.sh` explicitly selects the matching socket for
 `KIND_EXPERIMENTAL_PROVIDER=podman` (its default) or `docker`.
+For direct kind commands, select the provider explicitly; kind's Podman
+provider invokes the `podman` CLI directly, while its Docker provider uses the
+Docker CLI and the default Docker CE socket.
+Docker and Podman keep separate image, container, and network stores; repull or
+explicitly save/load images when moving between runtimes.
 
 Verify both runtimes and their separation with:
 

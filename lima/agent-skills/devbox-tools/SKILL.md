@@ -188,6 +188,10 @@ shared repository `AGENTS.md` or README.
   explicitly with `KIND_EXPERIMENTAL_PROVIDER=docker` or `podman`;
   `lima/validate-kind.sh` defaults to Podman but assigns the socket for the
   selected provider rather than inheriting a possibly mismatched `DOCKER_HOST`.
+- kind's Podman provider invokes the `podman` CLI directly; its Docker provider
+  uses the Docker CLI and the default Docker CE `DOCKER_HOST`.
+- Docker and Podman do not share image, container, or network state; repull or
+  explicitly save/load an image when switching runtimes.
 - Minikube's Docker and Podman drivers are distinct modes. Once Minikube is
   provisioned by #318, use `--driver=docker` for Docker CE and `--driver=podman`
   for Podman. Neither mode falls back to the other; strict recurring matrix

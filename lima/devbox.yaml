@@ -167,8 +167,6 @@ probes:
       PODMAN_SOCKET="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock"
       [[ "$DOCKER_SOCKET" != "$PODMAN_SOCKET" ]] \
         || fail "Docker and Podman must use different API sockets"
-      DOCKER_HOST="unix://${DOCKER_SOCKET}"
-      export DOCKER_HOST
 
       OPENCODE_TMP=/tmp/opencode
       OPENCODE_TMP_PROBE_DIR=""
@@ -342,6 +340,12 @@ probes:
       if systemctl is-enabled --quiet docker.service \
         || systemctl is-enabled --quiet docker.socket; then
         fail "rootful Docker system services must remain disabled"
+      fi
+      if systemctl is-active --quiet containerd.service; then
+        fail "the rootful system containerd service must remain inactive"
+      fi
+      if systemctl is-enabled --quiet containerd.service; then
+        fail "the rootful system containerd service must remain disabled"
       fi
       if id -nG | tr ' ' '\n' | grep -qx docker; then
         fail "the guest user must not be a member of the rootful docker group"

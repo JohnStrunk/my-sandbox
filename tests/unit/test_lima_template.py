@@ -489,10 +489,11 @@ def test_readiness_checks_distinct_docker_ce_and_podman_endpoints(
         'PODMAN_SOCKET="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock"'
         in probe
     )
-    assert 'DOCKER_HOST="unix://${DOCKER_SOCKET}"' in probe
     assert "systemctl --user is-active --quiet docker.service" in probe
     assert "rootful Docker system services must remain inactive" in probe
     assert "rootful Docker system services must remain disabled" in probe
+    assert "the rootful system containerd service must remain inactive" in probe
+    assert "the rootful system containerd service must remain disabled" in probe
     assert "the guest user must not be a member of the rootful docker group" in probe
     assert "http://d/version" in probe
     assert ".tools.docker_ce.version" in probe
