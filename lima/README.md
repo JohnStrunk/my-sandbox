@@ -127,9 +127,17 @@ allowlist. Unrelated host environment variables are not forwarded. The
 allowlist contains the supported provider names and credential-group rules.
 For a low-level host-side shell, `lima/devbox-shell`
 uses the same filtered environment and starts the VM if needed.
-EnMaaS is forwarded only when both `ENMAAS_URL` and `ENMAAS_API_KEY` are
-non-empty. This makes the endpoint and key available in the guest; it does not
-migrate or translate OpenCode provider configuration.
+The host launcher forwards EnMaaS only when `ENMAAS_URL` and `ENMAAS_API_KEY`
+are non-empty and the URL uses HTTPS. The guest config generator validates the
+full URL before generating providers; malformed HTTPS URLs fail closed before
+OpenCode starts. The endpoint must be an ASCII URL with a valid DNS or IP
+literal hostname. Numeric or hexadecimal-looking DNS suffixes and scoped IPv6
+addresses are rejected to avoid URL-parser interpretation differences. With
+the complete pair, the generated OpenCode
+config routes its built-in Anthropic and OpenAI providers through EnMaaS and
+removes direct provider keys/base URL from the guest environment. It adds
+OpenAI model `rits/zai-org/glm-5-3` with the display name
+`GLM 5.3 (curvebender)`.
 
 After creating and validating the VM, enable optional host-login autostart to
 avoid starting it manually after reboot:
@@ -150,12 +158,21 @@ When the command is `opencode` (including `opencode run`), the helper builds
 `OPENCODE_CONFIG_CONTENT` inside the VM immediately before starting the CLI.
 The generated overlay keeps the baseline provider-use policies and permission
 rules, always enables the local Semble MCP, and gates Context7, The Source,
-Tavily websearch, OCTO Open, and PriceTag on their complete credential groups.
-Provider credentials appear only as `{env:NAME}` references in the JSON; the
-secret values stay in the allowlisted process environment. PriceTag's built-in
-OpenAI and Anthropic overrides keep `"env": []` so direct-provider keys cannot
-take precedence over the gateway key. The overlay is in-memory only and does
-not edit the host-shared `~/.config/opencode` configuration.
+Tavily websearch, and EnMaaS provider overrides on their complete credential
+groups. Provider credentials appear only as `{env:NAME}` references in the
+JSON; secret values stay in the allowlisted process environment. EnMaaS's
+built-in OpenAI and Anthropic overrides keep `"env": []` so direct-provider
+keys cannot take precedence over the gateway key. PriceTag credentials remain
+available only for separate utilities such as `list-models.sh` and the opt-in
+gateway inference test; they do not generate OpenCode providers. The overlay is
+in-memory only and does not edit the host-shared `~/.config/opencode`
+configuration.
+
+The dedicated L1 OpenCode state preserves model favorites across VM recreation.
+Favorites that refer to the removed `pricetag-hosted` or `octo-open` providers
+are not rewritten and will no longer resolve; remove those stale favorites and
+select an available model under the EnMaaS-backed `openai` or `anthropic`
+provider instead.
 
 The Source MCP uses the committed `lima/the-source/uv.lock` dependency graph
 and an immutable source commit. Its wrapper installs that locked environment
@@ -169,7 +186,15 @@ This gh-only policy is recorded in
 OpenCode's one VM-local service loads the runtime config at startup and serves
 project sessions across the same-path `~/src` mount. If credentials change while
 the service is running, stop and restart the service from a `devbox` shell so it
-inherits the updated environment.
+inherits the updated environment. Generated provider configuration changes also
+require a restart for the new overlay to take effect. After deploying this
+EnMaaS migration, restart the service once to discard the old PriceTag/OCTO
+provider config; this interrupts active sessions:
+
+```shell
+devbox bash -lc 'opencode service stop'
+devbox opencode
+```
 
 ### Toggle managed OpenCode debug logging
 

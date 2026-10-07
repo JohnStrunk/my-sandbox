@@ -7,13 +7,81 @@ credential values are used for gate checks and never serialized.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
+import re
 from pathlib import Path
+from urllib.parse import urlsplit
 
 
 def present(name: str) -> bool:
     return bool(os.environ.get(name))
+
+
+def enmaas_credentials_ready() -> bool:
+    if not present("ENMAAS_URL") or not present("ENMAAS_API_KEY"):
+        return False
+    enmaas_url = os.environ["ENMAAS_URL"]
+    if (
+        any(
+            not char.isascii() or ord(char) <= 0x20 or ord(char) == 0x7F
+            for char in enmaas_url
+        )
+        or "\\" in enmaas_url
+        or re.search(r"%(?![0-9a-fA-F]{2})", enmaas_url)
+    ):
+        raise ValueError("ENMAAS_URL must be a valid HTTPS URL")
+    try:
+        endpoint = urlsplit(enmaas_url)
+    except ValueError:
+        raise ValueError("ENMAAS_URL must be a valid HTTPS URL") from None
+
+    try:
+        port = endpoint.port  # Validate a supplied port before using the URL.
+        hostname = endpoint.hostname
+    except ValueError:
+        raise ValueError("ENMAAS_URL must be a valid HTTPS URL") from None
+
+    if (
+        endpoint.scheme.lower() != "https"
+        or not hostname
+        or endpoint.username is not None
+        or endpoint.password is not None
+        or not valid_enmaas_hostname(hostname, endpoint.netloc.startswith("["))
+    ):
+        raise ValueError("ENMAAS_URL must be a valid HTTPS URL")
+    if port == 0:
+        raise ValueError("ENMAAS_URL must be a valid HTTPS URL")
+    return True
+
+
+def valid_enmaas_hostname(hostname: str, bracketed: bool) -> bool:
+    if bracketed:
+        if "%" in hostname:
+            return False
+        try:
+            return ipaddress.ip_address(hostname).version == 6
+        except ValueError:
+            return False
+
+    try:
+        ipaddress.ip_address(hostname)
+        return True
+    except ValueError:
+        pass
+
+    dns_name = hostname[:-1] if hostname.endswith(".") else hostname
+    labels = dns_name.split(".")
+    # WHATWG URL parsers treat a numeric final DNS label as an IPv4 literal.
+    if re.fullmatch(r"(?:[0-9]+|0x[0-9a-f]*)", labels[-1], re.IGNORECASE):
+        return False
+    return len(dns_name) <= 253 and all(
+        0 < len(label) <= 63
+        and re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", label, re.IGNORECASE)
+        is not None
+        for label in labels
+    )
 
 
 def build_config() -> dict[str, object]:
@@ -98,107 +166,31 @@ def build_config() -> dict[str, object]:
             },
         }
 
-    if present("OCTO_OPEN_URL") and present("OCTO_OPEN_KEY"):
-        config["providers"] = {
-            "octo-open": {
-                "package": "aisdk:@ai-sdk/openai-compatible",
-                "name": "OCTO Open Models",
-                "settings": {
-                    "baseURL": "{env:OCTO_OPEN_URL}",
-                    "apiKey": "{env:OCTO_OPEN_KEY}",
-                },
-                "models": {
-                    "qwen38-27b-frontier": {
-                        "name": "Qwen 3.8 27B FP8 (Frontier)",
-                        "limit": {"context": 131072, "output": 8192},
-                        "capabilities": {
-                            "tools": True,
-                            "input": ["text"],
-                            "output": ["text"],
-                        },
-                    },
-                    "qwen38-flash-next": {
-                        "name": "Qwen 3.8 Flash Next NVFP4 (Core)",
-                        "limit": {"context": 262144, "output": 8192},
-                        "capabilities": {
-                            "tools": True,
-                            "input": ["text"],
-                            "output": ["text"],
-                        },
-                    },
-                    "qwen38-27b-fast": {
-                        "name": "Qwen 3.8 27B NVFP4 (Bulk)",
-                        "limit": {"context": 32768, "output": 8192},
-                        "capabilities": {
-                            "tools": True,
-                            "input": ["text"],
-                            "output": ["text"],
-                        },
-                    },
-                },
-            }
+    if enmaas_credentials_ready():
+        enmaas_settings = {
+            "baseURL": "{env:ENMAAS_URL}",
+            "apiKey": "{env:ENMAAS_API_KEY}",
         }
-
-    if present("PRICETAG_API_KEY"):
-        providers = config.setdefault("providers", {})
-        if present("PRICETAG_ANTHROPIC_URL"):
-            providers["anthropic"] = {
+        config["providers"] = {
+            "anthropic": {
+                # An empty env list prevents OpenCode from preferring the
+                # provider's direct API-key environment variable.
                 "env": [],
-                "settings": {
-                    "baseURL": "{env:PRICETAG_ANTHROPIC_URL}",
-                    "apiKey": "{env:PRICETAG_API_KEY}",
-                },
-            }
-        if present("PRICETAG_HOSTED_URL"):
-            providers["pricetag-hosted"] = {
-                "package": "aisdk:@ai-sdk/anthropic",
-                "name": "PriceTag (Hosted)",
-                "settings": {
-                    "baseURL": "{env:PRICETAG_HOSTED_URL}",
-                    "apiKey": "{env:PRICETAG_API_KEY}",
-                },
-                "models": {
-                    "Inferact/Qwen3.8-Flash-Next-NVFP4": {
-                        "name": "Qwen 3.8 Flash Next (hosted, $0.15/$0.47 per MTok)",
-                        "limit": {"context": 262144, "output": 128000},
-                        "capabilities": {
-                            "tools": True,
-                            "input": ["text", "image"],
-                            "output": ["text"],
-                        },
-                        "variants": [
-                            {"id": "low", "settings": {"effort": "low"}},
-                            {"id": "medium", "settings": {"effort": "medium"}},
-                            {"id": "xhigh", "settings": {"effort": "xhigh"}},
-                        ],
-                    },
-                    "rits/zai-org/glm-5-3": {
-                        "name": "GLM 5.3 (hosted via curvebender)",
-                        "limit": {"context": 262144, "output": 128000},
-                        "capabilities": {
-                            "tools": True,
-                            "input": ["text"],
-                            "output": ["text"],
-                        },
-                        "variants": [
-                            {"id": "low", "settings": {"effort": "low"}},
-                            {"id": "high", "settings": {"effort": "high"}},
-                            {"id": "max", "settings": {"effort": "max"}},
-                        ],
-                    },
-                },
-            }
-        if present("PRICETAG_OPENAI_URL"):
-            providers["openai"] = {
+                "settings": enmaas_settings,
+            },
+            "openai": {
                 "env": [],
-                "settings": {
-                    "baseURL": "{env:PRICETAG_OPENAI_URL}",
-                    "apiKey": "{env:PRICETAG_API_KEY}",
-                },
-            }
+                "settings": enmaas_settings,
+                "models": {"rits/zai-org/glm-5-3": {"name": "GLM 5.3 (curvebender)"}},
+            },
+        }
 
     return config
 
 
 if __name__ == "__main__":
-    print(json.dumps(build_config(), separators=(",", ":")))
+    try:
+        generated_config = build_config()
+    except ValueError as error:
+        raise SystemExit(str(error)) from None
+    print(json.dumps(generated_config, separators=(",", ":")))

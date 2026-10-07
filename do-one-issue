@@ -9,11 +9,10 @@ devbox bash -c 'git switch main && git pull --ff-only'
 
 # OpenCode v2 dropped `run --command` (and `--variant`); commands are only
 # expanded by the interactive clients. Attach the command file to a headless
-# `opencode run` instead, and select the effort variant with the
-# provider/model#variant model reference syntax.
+# `opencode run` instead and specify its model explicitly.
 devbox opencode run \
   --agent build \
-  --model pricetag-hosted/Inferact/Qwen3.8-Flash-Next-NVFP4#xhigh \
+  --model openai/rits/zai-org/glm-5-3 \
   --file .opencode/commands/grab-issue.md \
   "Execute the task list in the attached file."
 

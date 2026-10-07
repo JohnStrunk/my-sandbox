@@ -120,11 +120,8 @@ DEVBOX_ENV_VARS=(
   ENMAAS_URL
   ENMAAS_API_KEY
   OPENAI_API_KEY
-  OCTO_OPEN_URL
-  OCTO_OPEN_KEY
   ANTHROPIC_API_KEY
   ANTHROPIC_BASE_URL
-  PRICETAG_ANTHROPIC_URL
   PRICETAG_HOSTED_URL
   PRICETAG_OPENAI_URL
   PRICETAG_API_KEY
@@ -178,19 +175,15 @@ else
   unset GITLAB_HOST GITLAB_TOKEN
 fi
 
-octo_open_complete=true
-if [[ -z "${OCTO_OPEN_URL:-}" || -z "${OCTO_OPEN_KEY:-}" ]]; then
-  octo_open_complete=false
-fi
-if [[ "$octo_open_complete" != true ]]; then
-  unset OCTO_OPEN_URL OCTO_OPEN_KEY
-fi
-
-enmaas_complete=true
-if [[ -z "${ENMAAS_URL:-}" || -z "${ENMAAS_API_KEY:-}" ]]; then
-  enmaas_complete=false
-fi
-if [[ "$enmaas_complete" != true ]]; then
+enmaas_url_lower="${ENMAAS_URL:-}"
+enmaas_url_lower="${enmaas_url_lower,,}"
+if [[ -n "${ENMAAS_URL:-}" && -n "${ENMAAS_API_KEY:-}" ]]; then
+  if [[ "$enmaas_url_lower" != https://* ]]; then
+    printf 'devbox: ENMAAS_URL must use HTTPS; refusing to start OpenCode\n' >&2
+    exit 1
+  fi
+  unset OPENAI_API_KEY ANTHROPIC_API_KEY ANTHROPIC_BASE_URL
+else
   unset ENMAAS_URL ENMAAS_API_KEY
 fi
 
@@ -214,7 +207,6 @@ fi
 
 pricetag_has_endpoint=false
 for name in \
-  PRICETAG_ANTHROPIC_URL \
   PRICETAG_HOSTED_URL \
   PRICETAG_OPENAI_URL; do
   if [[ -n "${!name:-}" ]]; then
@@ -226,7 +218,6 @@ done
 if [[ -z "${PRICETAG_API_KEY:-}" || "$pricetag_has_endpoint" != true ]]; then
   unset \
     PRICETAG_API_KEY \
-    PRICETAG_ANTHROPIC_URL \
     PRICETAG_HOSTED_URL \
     PRICETAG_OPENAI_URL
 fi

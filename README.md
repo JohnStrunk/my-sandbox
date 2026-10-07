@@ -85,14 +85,15 @@ configuration.
 | Context7 | `CONTEXT7_API_KEY`. |
 | Tavily search | `TAVILY_API_KEY`, through OpenCode's built-in web search. |
 | The Source | `IGLOO_MCP_*` credentials; VM trusts the internal CA roots. |
-| Anthropic | `ANTHROPIC_API_KEY`; optionally `ANTHROPIC_BASE_URL`. |
-| PriceTag | The relevant endpoint plus `PRICETAG_API_KEY`. |
-| OCTO Open | Both `OCTO_OPEN_URL` and `OCTO_OPEN_KEY`. |
-| EnMaaS | Both `ENMAAS_URL` and `ENMAAS_API_KEY`. |
+| Built-in Anthropic/OpenAI | With a valid ASCII HTTPS `ENMAAS_URL` and `ENMAAS_API_KEY`, the generated config routes both providers through EnMaaS and disables direct provider-key fallback. Without the complete pair, normal OpenCode provider credentials apply. |
+| PriceTag utilities | `PRICETAG_HOSTED_URL` or `PRICETAG_OPENAI_URL` plus `PRICETAG_API_KEY`; used by `list-models.sh` and the opt-in gateway inference test. |
 
-EnMaaS forwarding requires non-empty values for both variables and makes the
-endpoint and key available in the VM; it does not migrate OpenCode provider
-configuration.
+EnMaaS requires a valid ASCII HTTPS `ENMAAS_URL` and non-empty
+`ENMAAS_API_KEY`. The generated overlay uses environment references only;
+credential values are not serialized. When EnMaaS is active, direct
+OpenAI/Anthropic keys and the direct Anthropic base URL are removed from the
+guest environment. It also adds OpenAI model `rits/zai-org/glm-5-3` as **GLM 5.3
+(curvebender)**.
 
 The launcher passes a strict allowlist of supported provider credentials. The
 VM mounts only selected project, knowledge-base, and configuration paths; see
