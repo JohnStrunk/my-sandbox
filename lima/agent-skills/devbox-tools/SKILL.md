@@ -167,8 +167,9 @@ shared repository `AGENTS.md` or README.
 ### Docker CE and Podman runtimes (Lima)
 
 - Both runtimes are available independently. Docker CE Engine, its official
-  `docker` CLI, and rootless setup package are installed from Docker's
-  signature-checked Fedora repository at the `docker_ce` manifest pin.
+  `docker` CLI, `docker-ce-rootless-extras`, and pinned `containerd.io` are
+  installed from Docker's signature-checked Fedora repository. The Docker CE
+  and containerd versions are manifest-pinned.
 - The `docker` CLI uses the rootless per-user Docker service at
   `unix:///run/user/$(id -u)/docker.sock` by default. Use `docker version` to
   inspect its client and server and `devbox-toolchain-check` to check the pinned
@@ -176,6 +177,8 @@ shared repository `AGENTS.md` or README.
 - Rootless Docker requires `newuidmap`/`newgidmap`, cgroup v2, and at least
   65,536 subordinate UIDs and GIDs. Lima provisions these prerequisites; the
   readiness probe checks them.
+- The optional Buildx and Compose plugin RPMs are not installed; `docker buildx`
+  and `docker compose` are not available by default.
 - Docker CE is not a Podman alias or wrapper. Do not point `DOCKER_HOST` at
   Podman's API socket, install `podman-docker`, or add the guest to the rootful
   `docker` group. The Docker daemon runs as the guest user and can access data

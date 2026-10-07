@@ -335,6 +335,17 @@ probes:
         || fail "the rootless Docker user service is not enabled"
       systemctl --user is-active --quiet docker.service \
         || fail "the rootless Docker user service is not active"
+      if systemctl is-active --quiet docker.service \
+        || systemctl is-active --quiet docker.socket; then
+        fail "rootful Docker system services must remain inactive"
+      fi
+      if systemctl is-enabled --quiet docker.service \
+        || systemctl is-enabled --quiet docker.socket; then
+        fail "rootful Docker system services must remain disabled"
+      fi
+      if id -nG | tr ' ' '\n' | grep -qx docker; then
+        fail "the guest user must not be a member of the rootful docker group"
+      fi
       test -S "$DOCKER_SOCKET" \
         || fail "the rootless Docker socket is not available"
       test -S "$PODMAN_SOCKET" \
@@ -377,10 +388,12 @@ probes:
       )"; then
         fail "the Docker CE API did not report a server version"
       fi
-      expected_docker_version="$(
+      if ! expected_docker_version="$(
         jq -er '.tools.docker_ce.version | sub("^v"; "")' \
           /etc/devbox/tool-versions.json
-      )"
+      )"; then
+        fail "the Docker CE version pin is missing from the tool manifest"
+      fi
       [[ "$docker_server_version" == "$expected_docker_version" ]] \
         || fail "Docker server is $docker_server_version; "\
           "expected Docker CE $expected_docker_version"

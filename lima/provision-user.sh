@@ -150,7 +150,8 @@ fingerprint="$(printf '%s\n%s\n%s\n%s\n%s\n%s\n' \
   | sha256sum | awk '{print $1}')"
 fingerprint_file="$HOME/.local/share/devbox-toolchain/provisioning.fingerprint"
 previous_fingerprint="$(cat "$fingerprint_file" 2>/dev/null || true)"
-if [[ -n "$previous_fingerprint" && "$previous_fingerprint" != "$fingerprint" ]]; then
+if [[ -n "$previous_fingerprint" \
+  && "$previous_fingerprint" != "$fingerprint" ]]; then
   echo "devbox: toolchain fingerprint changed; applying updated manifest pins" >&2
 fi
 
@@ -293,7 +294,7 @@ fi
 
 # Install Docker's documented rootless user unit directly instead of running
 # the vendor setup helper as the guest, which can read host-mounted credentials.
-XDG_RUNTIME_DIR="/run/user/$(id -u)"
+XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 export XDG_RUNTIME_DIR
 export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
 user_manager_ready=false
@@ -323,6 +324,8 @@ cat >"$docker_user_unit_tmp" <<'EOF'
 Description=Docker Application Container Engine (Rootless)
 Documentation=https://docs.docker.com/go/rootless/
 Requires=dbus.socket
+StartLimitIntervalSec=60s
+StartLimitBurst=3
 
 [Service]
 Environment=PATH=/usr/bin:/sbin:/usr/sbin:/usr/local/bin
@@ -331,8 +334,6 @@ ExecReload=/bin/kill -s HUP $MAINPID
 TimeoutSec=0
 RestartSec=2
 Restart=always
-StartLimitBurst=3
-StartLimitInterval=60s
 LimitNOFILE=infinity
 LimitNPROC=infinity
 LimitCORE=infinity
@@ -358,7 +359,13 @@ else
   rm -f -- "$docker_user_unit_tmp"
 fi
 systemctl --user daemon-reload
-systemctl --user enable --now docker.service
+systemctl --user enable docker.service
+# Linger may have started the previous daemon before the RPM pin was applied.
+if systemctl --user is-active --quiet docker.service; then
+  systemctl --user restart docker.service
+else
+  systemctl --user start docker.service
+fi
 
 # Podman remains an independent rootless runtime with its own API socket.
 systemctl --user enable --now podman.socket

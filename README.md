@@ -3,8 +3,9 @@
 A secure, VM-native development environment for AI-assisted coding and modern
 software projects. `devbox` enters one shared Fedora Lima VM at the current
 project directory; OpenCode and the pinned development toolchain run inside that
-VM. Rootless Podman is available in the guest as a project tool for workflows
-such as kind and nested builds.
+VM. Docker CE and Podman are available as separate rootless runtimes in the
+guest. The Docker CLI uses its own Engine by default; Podman remains available
+for explicitly selected workflows such as kind and nested builds.
 
 The VM template, host requirements, mounts, provisioning, and lifecycle details
 are documented in [`lima/README.md`](lima/README.md).

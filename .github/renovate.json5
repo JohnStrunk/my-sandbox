@@ -91,6 +91,7 @@
       "description": "Keep canonical tool versions and their consumers together",
       "matchPackageNames": [
         "@opencode/cli",
+        "containerd/containerd",
         "moby/moby",
         "golang",
         "helm/helm",
@@ -114,6 +115,13 @@
         "zizmorcore/zizmor-pre-commit",
       ],
       "groupName": "devbox tool versions",
+    },
+    {
+      "description": "Normalize Docker Engine release tags for the manifest pin",
+      "matchPackageNames": [
+        "moby/moby",
+      ],
+      "extractVersion": "^docker-v(?<version>\\d+\\.\\d+\\.\\d+)$",
     },
     {
       "description": "Use loose versioning for ShellCheck's four-part tags",

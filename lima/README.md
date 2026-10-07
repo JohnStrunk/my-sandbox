@@ -417,20 +417,23 @@ its exact version, plus `make`, Python/pip, and ShellCheck.
 
 ### Docker CE and Podman runtimes
 
-The VM provisions **Docker CE Engine, its official CLI, and Docker's rootless
-setup package** from Docker's Fedora stable RPM repository. Rootless mode
-requires `newuidmap`/`newgidmap`, cgroup v2, and at least 65,536 subordinate
-UIDs and GIDs. Lima supplies the subordinate-ID ranges and cgroup delegation;
-the readiness probe checks the prerequisites. The `docker_ce` entry in
-`lima/tool-versions.json` pins Docker CE 29.8.1 for both supported
-architectures.
-DNF verifies the package signatures (`gpgcheck=1`) and the
-provisioner requests exact Engine/CLI/rootless-package RPM versions. It skips
-third-party RPM scriptlets as root. Docker CE is not a Podman alias, wrapper, or
-`podman-docker` package.
-The provisioner writes Docker's documented per-user systemd unit directly
-instead of running the vendor setup utility with the guest's host-mounted
-credentials.
+The VM provisions **Docker CE Engine, its official CLI, Docker's rootless
+extras, and `containerd.io`** from Docker's Fedora stable RPM repository. The
+manifest pins Docker CE 29.8.1 and containerd 2.3.6 for both supported
+architectures. The RPM release suffix is resolved from the official repo for
+Fedora 44; package versions and epochs are checked after installation. DNF
+verifies package signatures with a committed, SHA-256-pinned Docker key
+(`060A 61C5 1B55 8A7F 742B 77AA C52F EB6B 621E 9F35`, `gpgcheck=1`).
+Provisioning skips third-party RPM scriptlets as root. Docker CE is not a Podman
+alias, wrapper, or `podman-docker` package.
+
+Rootless mode requires `newuidmap`/`newgidmap`, cgroup v2, and at least 65,536
+subordinate UIDs and GIDs. Lima supplies the subordinate-ID ranges and cgroup
+delegation; the readiness probe checks the prerequisites. The provisioner writes
+Docker's documented per-user systemd unit directly instead of running the
+vendor setup utility with the guest's host-mounted credentials. The optional
+`docker-buildx-plugin` and `docker-compose-plugin` RPMs are not installed, so
+`docker buildx` and `docker compose` are unavailable by default.
 
 Docker uses a rootless **per-user systemd service**. Provisioning enables
 `docker.service`; Lima's user lingering lets it start at VM boot and survive
@@ -476,7 +479,21 @@ silently substitute one backend for the other.
 
 Changes to embedded provisioning scripts or `lima/devbox.yaml` require
 [recreating the VM](#recreating-the-vm). A manifest-only Docker version bump is
-applied on VM restart.
+applied on VM restart; user provisioning enables and restarts the Docker service
+after root provisioning so its server uses the installed package pin. VMs
+created before Docker CE support must be recreated before
+`devbox-toolchain-check` can verify the new live manifest; `--reprovision` alone
+does not update their embedded scripts or checker.
+
+If provisioning refuses to replace a non-managed
+`~/.config/systemd/user/docker.service`, inspect the file and
+`systemctl --user cat docker.service` before changing it. If it is safe to give
+that unit name to devbox, stop and disable it, remove only the conflicting unit
+file, then run `devbox --reprovision` so provisioning can install its managed
+rootless unit. Do not overwrite an existing service you still need. VMs created
+before Docker CE support must instead be recreated from the current template:
+run `devbox --delete`, then `devbox`; `--reprovision` cannot replace their
+embedded provisioners or toolchain checker.
 
 The VM keeps `net.ipv4.conf.default.route_localnet=0` to preserve the loopback
 routing boundary; a rootless Podman published-port smoke test passed with it
@@ -740,8 +757,8 @@ integration work.
 - **Rootless Docker CE and Podman**: Lima's boot scripts provide static
   `/etc/subuid` and `/etc/subgid` ranges (65,536 IDs), cgroup-v2 delegation,
   and linger. Provisioning installs Docker CE from its official
-  signature-checked Fedora repository and
-  enables its separate rootless user service/socket. Podman/netavark remains
+  signature-checked Fedora repository, separately pins `containerd.io`, and
+  enables its rootless user service/socket. Podman/netavark remains
   independently available with its own API socket and bridge configuration;
   neither runtime aliases or falls back to the other.
 - **Manifest-pinned tools**: OpenCode, Go + `devbox-go`, uv, Rust, Node/npm,
@@ -772,8 +789,9 @@ the installed versions.
 ### Tool artifact integrity
 
 The manifest explicitly marks each downloaded tool or skill `sha256` or
-`version-only`. Docker CE uses a version-only manifest pin but its official RPM
-packages are signature-checked by DNF. Checksum-managed releases are
+`version-only`. Docker CE and containerd use version-only manifest pins, with
+their official RPM packages signature-checked by DNF against the pinned Docker
+key. Checksum-managed releases are
 **Hadolint**, **uv**, **Antigravity CLI**, **limactl**, **kind**, the
 **ast-grep release binaries**, and **acli**. Each has separate amd64 and arm64
 records; their exact upstream versions and SHA-256 values are verified before

@@ -553,11 +553,29 @@ if ((${#missing[@]})); then
   rm -rf /var/cache/dnf
 fi
 
-# Docker CE comes from Docker's official, GPG-checked Fedora repository. Keep
-# the Engine, official CLI, and rootless setup package on the same manifest pin.
-# The upstream RPMs use distinct epochs for Engine and CLI; include them in the
-# NEVRA requests so DNF cannot select an unpinned version. Skip all RPM
-# scriptlets: system provisioning does not run third-party package code as root.
+# Pin Docker's RPM signing key independently from the package-download origin.
+# The key is public, committed, and SHA-256 verified before DNF trusts it.
+DOCKER_GPG_KEY_SHA256=e6c650e0700b1bf4868b693b30761b926844befc8a0acb7ac0dd9b1faf1b7423
+docker_gpg_key_file=/etc/pki/rpm-gpg/RPM-GPG-KEY-docker-ce
+docker_gpg_key_tmp="$(new_temp_dir)/docker-ce.asc"
+copy_repo_file lima/keys/docker-ce.asc "$docker_gpg_key_tmp"
+printf '%s  %s\n' "$DOCKER_GPG_KEY_SHA256" "$docker_gpg_key_tmp" \
+  | sha256sum -c -
+install -d -m 0755 /etc/pki/rpm-gpg
+if [[ -L "$docker_gpg_key_file" ]]; then
+  echo "devbox: refusing symlinked Docker CE RPM key" >&2
+  exit 1
+fi
+if ! cmp -s "$docker_gpg_key_tmp" "$docker_gpg_key_file"; then
+  install -m 0644 "$docker_gpg_key_tmp" "$docker_gpg_key_file"
+fi
+rpm --import "$docker_gpg_key_file"
+
+# Docker CE comes from Docker's official Fedora repository. Keep Engine, CLI,
+# rootless extras, and containerd.io on canonical version pins. Engine and CLI
+# use distinct RPM epochs; request exact name/epoch/version but let the repo
+# select the current Fedora release build. Skip RPM scriptlets; the Docker units
+# are configured explicitly below and in user provisioning.
 docker_repo_file=/etc/yum.repos.d/docker-ce.repo
 docker_repo_tmp="$(new_temp_dir)/docker-ce.repo"
 cat >"$docker_repo_tmp" <<'EOF'
@@ -566,42 +584,42 @@ name=Docker CE Stable - $basearch
 baseurl=https://download.docker.com/linux/fedora/$releasever/$basearch/stable
 enabled=1
 gpgcheck=1
-gpgkey=https://download.docker.com/linux/fedora/gpg
+repo_gpgcheck=0
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-docker-ce
 EOF
 if ! cmp -s "$docker_repo_tmp" "$docker_repo_file"; then
   install -m 0644 "$docker_repo_tmp" "$docker_repo_file"
 fi
 
 docker_version="$(manifest_version docker_ce)"
-fedora_version="$(rpm -E '%fedora')"
-if [[ ! "$fedora_version" =~ ^[0-9]+$ ]]; then
-  echo "devbox: could not determine the Fedora release for Docker CE" >&2
-  exit 1
-fi
-docker_release="1.fc${fedora_version}"
-docker_ce_expected="docker-ce 3 ${docker_version} ${docker_release}"
-docker_cli_expected="docker-ce-cli 1 ${docker_version} ${docker_release}"
-docker_rootless_expected="docker-ce-rootless-extras 0 ${docker_version} ${docker_release}"
+containerd_version="$(manifest_version containerd_io)"
+docker_ce_expected="docker-ce 3 ${docker_version}"
+docker_cli_expected="docker-ce-cli 1 ${docker_version}"
+docker_rootless_expected="docker-ce-rootless-extras 0 ${docker_version}"
+containerd_expected="containerd.io 0 ${containerd_version}"
 docker_rpm_identity() {
-  rpm -q --queryformat '%{NAME} %{EPOCHNUM} %{VERSION} %{RELEASE}' "$1" \
+  rpm -q --queryformat '%{NAME} %{EPOCHNUM} %{VERSION}' "$1" \
     2>/dev/null || true
 }
 if [[ "$(docker_rpm_identity docker-ce)" != "$docker_ce_expected" ]] \
   || [[ "$(docker_rpm_identity docker-ce-cli)" != "$docker_cli_expected" ]] \
   || [[ "$(docker_rpm_identity docker-ce-rootless-extras)" \
-    != "$docker_rootless_expected" ]]; then
+    != "$docker_rootless_expected" ]] \
+  || [[ "$(docker_rpm_identity containerd.io)" != "$containerd_expected" ]]; then
   dnf install -y --setopt=install_weak_deps=False --setopt=tsflags=noscripts \
-    "docker-ce-3:${docker_version}-${docker_release}" \
-    "docker-ce-cli-1:${docker_version}-${docker_release}" \
-    "docker-ce-rootless-extras-${docker_version}-${docker_release}"
+    "docker-ce-3:${docker_version}" \
+    "docker-ce-cli-1:${docker_version}" \
+    "docker-ce-rootless-extras-${docker_version}" \
+    "containerd.io-${containerd_version}"
   dnf clean all
   rm -rf /var/cache/dnf
 fi
 if [[ "$(docker_rpm_identity docker-ce)" != "$docker_ce_expected" ]] \
   || [[ "$(docker_rpm_identity docker-ce-cli)" != "$docker_cli_expected" ]] \
   || [[ "$(docker_rpm_identity docker-ce-rootless-extras)" \
-    != "$docker_rootless_expected" ]]; then
-  echo "devbox: Docker CE RPMs do not match the manifest pin" >&2
+    != "$docker_rootless_expected" ]] \
+  || [[ "$(docker_rpm_identity containerd.io)" != "$containerd_expected" ]]; then
+  echo "devbox: Docker CE/containerd RPMs do not match the manifest pins" >&2
   exit 1
 fi
 
@@ -619,6 +637,7 @@ assert_rpm_owner() {
 assert_rpm_owner /usr/bin/docker docker-ce-cli
 assert_rpm_owner /usr/bin/dockerd docker-ce
 assert_rpm_owner /usr/bin/dockerd-rootless.sh docker-ce-rootless-extras
+assert_rpm_owner /usr/bin/containerd containerd.io
 if rpm -q podman-docker >/dev/null 2>&1; then
   echo "devbox: refusing podman-docker; Docker must use Docker CE" >&2
   exit 1

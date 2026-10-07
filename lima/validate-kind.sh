@@ -10,12 +10,13 @@ if [[ ! "$runs" =~ ^[1-9][0-9]*$ || "$runs" -gt 100 ]]; then
 fi
 
 provider="${KIND_EXPERIMENTAL_PROVIDER:-podman}"
+runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 case "$provider" in
   podman)
-    DOCKER_HOST="unix:///run/user/$(id -u)/podman/podman.sock"
+    DOCKER_HOST="unix://${runtime_dir}/podman/podman.sock"
     ;;
   docker)
-    DOCKER_HOST="unix:///run/user/$(id -u)/docker.sock"
+    DOCKER_HOST="unix://${runtime_dir}/docker.sock"
     ;;
   *)
     echo "unsupported kind provider '$provider'; choose podman or docker" >&2

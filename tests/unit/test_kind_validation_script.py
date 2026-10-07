@@ -90,6 +90,24 @@ def test_kind_validation_script_runs_ten_create_delete_cycles(
     assert docker_call.startswith("create cluster")
     assert docker_call.endswith(f"|{expected_docker_host}|docker")
 
+    runtime_dir = str(tmp_path / "xdg-runtime")
+    custom_runtime_run = subprocess.run(
+        ["bash", str(repo_root / "lima/validate-kind.sh"), "1"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            **env,
+            "KIND_EXPERIMENTAL_PROVIDER": "docker",
+            "XDG_RUNTIME_DIR": runtime_dir,
+        },
+        timeout=10,
+    )
+
+    assert custom_runtime_run.returncode == 0, custom_runtime_run.stderr
+    custom_runtime_call = log_path.read_text().splitlines()[-2]
+    assert custom_runtime_call.endswith(f"|unix://{runtime_dir}/docker.sock|docker")
+
 
 @pytest.mark.unit
 def test_kind_validation_script_rejects_an_invalid_run_count(repo_root: Path):
@@ -104,3 +122,21 @@ def test_kind_validation_script_rejects_an_invalid_run_count(repo_root: Path):
 
     assert result.returncode == 2
     assert "usage:" in result.stderr
+
+
+@pytest.mark.unit
+def test_kind_validation_script_rejects_unsupported_provider(repo_root: Path):
+    result = subprocess.run(
+        ["bash", str(repo_root / "lima/validate-kind.sh"), "1"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "KIND_EXPERIMENTAL_PROVIDER": "docker-desktop",
+        },
+        timeout=10,
+    )
+
+    assert result.returncode == 2
+    assert "unsupported kind provider 'docker-desktop'" in result.stderr

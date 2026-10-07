@@ -11,8 +11,27 @@ from tests.conftest import (
 )
 
 
+def _skip_if_guest_provisioning_is_stale(repo_root: Path, devbox_vm: LimaVM) -> None:
+    if devbox_vm.name is not None or os.environ.get("MY_SANDBOX_VM_TEST_FRESH") == "1":
+        return
+    fingerprint_path = (
+        f"{devbox_vm.guest_home}/.local/share/devbox-toolchain/provisioning.fingerprint"
+    )
+    guest_fingerprint = devbox_vm.run(["cat", fingerprint_path], timeout=30)
+    if (
+        guest_fingerprint.returncode != 0
+        or guest_fingerprint.stdout.strip()
+        != expected_lima_provisioning_fingerprint(repo_root)
+    ):
+        pytest.skip(
+            "the current guest has stale provisioning inputs; use a fresh VM "
+            "or recreate it before checking the current toolchain"
+        )
+
+
 @pytest.mark.vm
-def test_provisioned_vm_toolchain_matches_manifest(devbox_vm: LimaVM):
+def test_provisioned_vm_toolchain_matches_manifest(repo_root: Path, devbox_vm: LimaVM):
+    _skip_if_guest_provisioning_is_stale(repo_root, devbox_vm)
     result = devbox_vm.run(["devbox-toolchain-check"], timeout=300)
 
     assert result.returncode == 0, (
@@ -26,27 +45,25 @@ def test_provisioned_vm_toolchain_matches_manifest(devbox_vm: LimaVM):
 def test_docker_ce_and_kind_run_while_podman_is_stopped(
     repo_root: Path, devbox_vm: LimaVM
 ):
-    if devbox_vm.name is None and os.environ.get("MY_SANDBOX_VM_TEST_FRESH") != "1":
-        embedded_script = devbox_vm.run(
-            ["cat", "/var/lib/devbox-vm/system-provision.sha256"], timeout=30
-        )
-        if (
-            embedded_script.returncode != 0
-            or embedded_script.stdout.strip()
-            != expected_lima_system_script_sha256(repo_root)
-        ):
-            pytest.skip(
-                "the current guest embeds an older Docker provisioner; "
-                "use a fresh VM to validate Docker CE"
-            )
+    _skip_if_guest_provisioning_is_stale(repo_root, devbox_vm)
 
     command = r"""
 set -euo pipefail
 repo_path="$1"
 docker_socket="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/docker.sock"
 podman_socket="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock"
-expected_version="$(jq -er '.tools.docker_ce.version' /etc/devbox/tool-versions.json)"
+expected_version="$(
+  jq -er '.tools.docker_ce.version | sub("^v"; "")' \
+    /etc/devbox/tool-versions.json
+)"
+expected_containerd_version="$(
+  jq -er '.tools.containerd_io.version | sub("^v"; "")' \
+    /etc/devbox/tool-versions.json
+)"
 docker_cli_path="$(command -v docker)"
+# shellcheck disable=SC1091
+source /etc/profile.d/devbox-toolchain.sh
+[[ "$DOCKER_HOST" == "unix://${docker_socket}" ]]
 export DOCKER_HOST="unix://${docker_socket}"
 
 [[ "$docker_socket" != "$podman_socket" ]]
@@ -57,8 +74,13 @@ export DOCKER_HOST="unix://${docker_socket}"
 [[ "$(rpm -qf --queryformat '%{NAME}' /usr/bin/dockerd)" == docker-ce ]]
 [[ "$(rpm -qf --queryformat '%{NAME}' /usr/bin/dockerd-rootless.sh)" \
   == docker-ce-rootless-extras ]]
+[[ "$(rpm -qf --queryformat '%{NAME}' /usr/bin/containerd)" == containerd.io ]]
 [[ "$(rpm -q --queryformat '%{VERSION}' docker-ce)" == "$expected_version" ]]
 [[ "$(rpm -q --queryformat '%{VERSION}' docker-ce-cli)" == "$expected_version" ]]
+[[ "$(rpm -q --queryformat '%{VERSION}' docker-ce-rootless-extras)" \
+  == "$expected_version" ]]
+[[ "$(rpm -q --queryformat '%{VERSION}' containerd.io)" \
+  == "$expected_containerd_version" ]]
 if rpm -q podman-docker >/dev/null 2>&1; then
   echo "podman-docker must not provide the Docker CLI" >&2
   exit 1
@@ -66,6 +88,15 @@ fi
 if systemctl is-active --quiet docker.service \
   || systemctl is-active --quiet docker.socket; then
   echo "rootful Docker services must remain disabled" >&2
+  exit 1
+fi
+if systemctl is-enabled --quiet docker.service \
+  || systemctl is-enabled --quiet docker.socket; then
+  echo "rootful Docker services must not be enabled" >&2
+  exit 1
+fi
+if id -nG | tr ' ' '\n' | grep -qx docker; then
+  echo "the guest must not be a member of the rootful docker group" >&2
   exit 1
 fi
 
@@ -116,7 +147,11 @@ if curl --fail --silent --show-error --max-time 3 \
   exit 1
 fi
 
-container_id="$(docker create --pull=missing docker.io/library/busybox:1.37.0 \
+# Pin Docker Hub's multi-architecture OCI index, not a mutable tag or amd64 child.
+smoke_digest_prefix="bdf57e528e45e4433820e045b29b4597" # pragma: allowlist secret
+smoke_digest_suffix="825a1c9e38353532d90a01445013f82e" # pragma: allowlist secret
+smoke_image="docker.io/library/busybox:1.37.0@sha256:${smoke_digest_prefix}${smoke_digest_suffix}"
+container_id="$(docker create --pull=missing "$smoke_image" \
   sh -c 'printf "docker-ce-smoke\\n"')"
 docker start --attach "$container_id" | grep -qx 'docker-ce-smoke'
 docker rm "$container_id" >/dev/null

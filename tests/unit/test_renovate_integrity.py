@@ -374,6 +374,38 @@ def test_go_version_only_policy_keeps_timestamped_source(repo_root: Path):
 
 
 @pytest.mark.unit
+def test_docker_ce_renovate_pin_normalizes_moby_release_tags(repo_root: Path):
+    manifest = json.loads((repo_root / "lima" / "tool-versions.json").read_text())
+    docker_ce = manifest["tools"]["docker_ce"]
+    containerd_io = manifest["tools"]["containerd_io"]
+    config = (repo_root / ".github" / "renovate.json5").read_text()
+    version_group = _config_object(config, '"groupName": "devbox tool versions"')
+    extract_rule = _config_object(
+        config,
+        '"description": "Normalize Docker Engine release tags for the manifest pin"',
+    )
+
+    assert docker_ce["datasource"] == "github-releases"
+    assert docker_ce["depName"] == "moby/moby"
+    assert re.fullmatch(r"\d+\.\d+\.\d+", docker_ce["version"])
+    assert containerd_io["datasource"] == "github-releases"
+    assert containerd_io["depName"] == "containerd/containerd"
+    assert re.fullmatch(r"\d+\.\d+\.\d+", containerd_io["version"])
+    assert '"moby/moby"' in version_group
+    assert '"containerd/containerd"' in version_group
+    assert (
+        r'"extractVersion": "^docker-v(?<version>\\d+\\.\\d+\\.\\d+)$"' in extract_rule
+    )
+    parsed_tag = re.fullmatch(r"docker-v(?P<version>\d+\.\d+\.\d+)", "docker-v29.8.2")
+    assert parsed_tag
+    assert parsed_tag.group("version") == "29.8.2"
+    assert (
+        re.fullmatch(r"docker-v(?P<version>\d+\.\d+\.\d+)", "docker-v29.9.0-rc.1")
+        is None
+    )
+
+
+@pytest.mark.unit
 def test_acli_uses_scoped_timestamp_exception(repo_root: Path):
     """Check both base and candidate states; CI verifies live artifact bytes.
 
