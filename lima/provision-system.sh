@@ -584,7 +584,7 @@ name=Docker CE Stable - $basearch
 baseurl=https://download.docker.com/linux/fedora/$releasever/$basearch/stable
 enabled=1
 gpgcheck=1
-repo_gpgcheck=0
+repo_gpgcheck=1
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-docker-ce
 EOF
 if ! cmp -s "$docker_repo_tmp" "$docker_repo_file"; then
@@ -601,11 +601,14 @@ docker_rpm_identity() {
   rpm -q --queryformat '%{NAME} %{EPOCHNUM} %{VERSION}' "$1" \
     2>/dev/null || true
 }
-if [[ "$(docker_rpm_identity docker-ce)" != "$docker_ce_expected" ]] \
-  || [[ "$(docker_rpm_identity docker-ce-cli)" != "$docker_cli_expected" ]] \
-  || [[ "$(docker_rpm_identity docker-ce-rootless-extras)" \
-    != "$docker_rootless_expected" ]] \
-  || [[ "$(docker_rpm_identity containerd.io)" != "$containerd_expected" ]]; then
+docker_rpms_match_pins() {
+  [[ "$(docker_rpm_identity docker-ce)" == "$docker_ce_expected" ]] \
+    && [[ "$(docker_rpm_identity docker-ce-cli)" == "$docker_cli_expected" ]] \
+    && [[ "$(docker_rpm_identity docker-ce-rootless-extras)" \
+      == "$docker_rootless_expected" ]] \
+    && [[ "$(docker_rpm_identity containerd.io)" == "$containerd_expected" ]]
+}
+if ! docker_rpms_match_pins; then
   dnf install -y --setopt=install_weak_deps=False --setopt=tsflags=noscripts \
     "docker-ce-3:${docker_version}" \
     "docker-ce-cli-1:${docker_version}" \
@@ -614,11 +617,7 @@ if [[ "$(docker_rpm_identity docker-ce)" != "$docker_ce_expected" ]] \
   dnf clean all
   rm -rf /var/cache/dnf
 fi
-if [[ "$(docker_rpm_identity docker-ce)" != "$docker_ce_expected" ]] \
-  || [[ "$(docker_rpm_identity docker-ce-cli)" != "$docker_cli_expected" ]] \
-  || [[ "$(docker_rpm_identity docker-ce-rootless-extras)" \
-    != "$docker_rootless_expected" ]] \
-  || [[ "$(docker_rpm_identity containerd.io)" != "$containerd_expected" ]]; then
+if ! docker_rpms_match_pins; then
   echo "devbox: Docker CE/containerd RPMs do not match the manifest pins" >&2
   exit 1
 fi

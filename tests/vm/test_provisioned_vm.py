@@ -85,6 +85,12 @@ if rpm -q podman-docker >/dev/null 2>&1; then
   echo "podman-docker must not provide the Docker CLI" >&2
   exit 1
 fi
+for plugin in docker-buildx-plugin docker-compose-plugin; do
+  if rpm -q "$plugin" >/dev/null 2>&1; then
+    echo "$plugin is not part of the supported Docker CE profile" >&2
+    exit 1
+  fi
+done
 if systemctl is-active --quiet docker.service \
   || systemctl is-active --quiet docker.socket; then
   echo "rootful Docker services must remain disabled" >&2

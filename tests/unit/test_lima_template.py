@@ -435,7 +435,7 @@ def test_docker_ce_uses_pinned_signature_checked_rpms_and_rootless_service(
     assert f"DOCKER_GPG_KEY_SHA256={docker_key_sha256}" in system_script
     assert "copy_repo_file lima/keys/docker-ce.asc" in system_script
     assert 'rpm --import "$docker_gpg_key_file"' in system_script
-    assert "repo_gpgcheck=0" in system_script
+    assert "repo_gpgcheck=1" in system_script
     assert "file:///etc/pki/rpm-gpg/RPM-GPG-KEY-docker-ce" in system_script
     assert "[docker-ce-stable]" in system_script
     assert (

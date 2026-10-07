@@ -422,8 +422,10 @@ extras, and `containerd.io`** from Docker's Fedora stable RPM repository. The
 manifest pins Docker CE 29.8.1 and containerd 2.3.6 for both supported
 architectures. The RPM release suffix is resolved from the official repo for
 Fedora 44; package versions and epochs are checked after installation. DNF
-verifies package signatures with a committed, SHA-256-pinned Docker key
-(`060A 61C5 1B55 8A7F 742B 77AA C52F EB6B 621E 9F35`, `gpgcheck=1`).
+verifies repository metadata and package signatures with a committed,
+SHA-256-pinned Docker key
+(`060A 61C5 1B55 8A7F 742B 77AA C52F EB6B 621E 9F35`, `gpgcheck=1`,
+`repo_gpgcheck=1`).
 Provisioning skips third-party RPM scriptlets as root. Docker CE is not a Podman
 alias, wrapper, or `podman-docker` package.
 
