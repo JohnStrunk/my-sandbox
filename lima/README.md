@@ -1,9 +1,10 @@
 # devbox Lima VM
 
 This directory holds the Lima template for the **VM-only devbox**. A single
-Fedora guest runs OpenCode directly inside it, with the full manifest-pinned
-toolchain, rootless Podman available as a project tool, and nested
-virtualization enabled for L2 test VMs, kind, and minikube. Project files are
+Fedora guest runs OpenCode directly inside it with the full manifest-pinned
+toolchain. Docker CE is the default rootless Docker API runtime; Podman is a
+separate runtime for explicitly selected workflows. Nested virtualization
+supports L2 test VMs, kind, and minikube. Project files are
 shared at their host paths inside the VM. Host-shared directories are protected
 from the package builder; configuration and credentials are mounted behind a
 root-owned parent and exposed only to the guest user.
@@ -492,9 +493,9 @@ after root provisioning so its server uses the installed package pin. VMs
 created before Docker CE support must be migrated **before updating the shared
 checkout**. Their embedded system provisioner installs Podman only but reads the
 live manifest and tool installer; after the checkout adds Docker's manifest pin,
-the old provisioner can fail at the next start or `--reprovision` because Docker
-CE is absent. `--reprovision` cannot update that embedded script. Preserve any
-VM-local Podman images or container data that you need, then run
+the old provisioner fails during the next start or `--reprovision` because
+Docker CE is absent. `--reprovision` cannot update that embedded script.
+Preserve any VM-local Podman images or container data you need, then run
 `devbox --delete` and `devbox` after updating the checkout; host-mounted
 project/config files are preserved.
 
