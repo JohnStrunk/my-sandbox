@@ -489,19 +489,21 @@ Changes to embedded provisioning scripts or `lima/devbox.yaml` require
 [recreating the VM](#recreating-the-vm). A manifest-only Docker version bump is
 applied on VM restart; user provisioning enables and restarts the Docker service
 after root provisioning so its server uses the installed package pin. VMs
-created before Docker CE support must be recreated before
-`devbox-toolchain-check` can verify the new live manifest; `--reprovision` alone
-does not update their embedded scripts or checker.
+created before Docker CE support must be migrated **before updating the shared
+checkout**. Their embedded system provisioner installs Podman only but reads the
+live manifest and tool installer; after the checkout adds Docker's manifest pin,
+the old provisioner can fail at the next start or `--reprovision` because Docker
+CE is absent. `--reprovision` cannot update that embedded script. Preserve any
+VM-local Podman images or container data that you need, then run
+`devbox --delete` and `devbox` after updating the checkout; host-mounted
+project/config files are preserved.
 
 If provisioning refuses to replace a non-managed
 `~/.config/systemd/user/docker.service`, inspect the file and
 `systemctl --user cat docker.service` before changing it. If it is safe to give
 that unit name to devbox, stop and disable it, remove only the conflicting unit
 file, then run `devbox --reprovision` so provisioning can install its managed
-rootless unit. Do not overwrite an existing service you still need. VMs created
-before Docker CE support must instead be recreated from the current template:
-run `devbox --delete`, then `devbox`; `--reprovision` cannot replace their
-embedded provisioners or toolchain checker.
+rootless unit. Do not overwrite an existing service you still need.
 
 The VM keeps `net.ipv4.conf.default.route_localnet=0` to preserve the loopback
 routing boundary; a rootless Podman published-port smoke test passed with it
