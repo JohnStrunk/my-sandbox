@@ -30,6 +30,10 @@ markers = [
     "unit_serial: Timing-sensitive unit tests excluded from the parallel-safe worker pool",
 ]
 
+# Optional editor-only Pyright configuration for editors using a checkout-local
+# `.venv`. OpenCode v2 does not consume it; VM test/lint runs use
+# `UV_PROJECT_ENVIRONMENT` instead. Do not share the local `.venv` between host
+# and VM.
 [tool.pyright]
 venvPath = "."
 venv = ".venv"

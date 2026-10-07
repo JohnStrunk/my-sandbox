@@ -32,16 +32,18 @@
   ```
 
   This creates a VM-local test environment and installs `pytest` and the other
-  test dependencies. Give each checkout/worktree a unique path; the project
-  itself is on a host-shared mount, and a virtual environment must not be used
-  from both host and VM. The project Pyright config points the language server
-  at this local environment so test imports resolve before the first test run.
+  test dependencies. Give each checkout/worktree a unique VM-local environment
+  path. In every shell that runs `uv sync` or `uv run`, export
+  `UV_PROJECT_ENVIRONMENT` (or pass it with `env`) so `uv` creates and uses
+  that environment for test/lint commands. The project itself is on a
+  host-shared mount, and a virtual environment must not be used from both host
+  and VM.
 - Start or reopen OpenCode with the active worktree as its project root (for
   example, run `opencode .worktrees/<worktree>` from the repository root). Do
   not edit files from multiple worktrees in one session rooted at the main
-  checkout.
-  OpenCode scopes LSP workspaces to the active project directory, which keeps
-  diagnostics from sibling worktrees out of the current session.
+  checkout. This anchors the session in the worktree's project context:
+  OpenCode discovers applicable `AGENTS.md` instructions and project-local
+  config, commands, and skills from the active workspace.
 - Shell commands and file-tool paths are independent: relative shell paths use
   the shell's current working directory. Every shell command that reads or
   writes worktree files must pass the intended worktree as `workdir` or use an

@@ -1,4 +1,4 @@
-"""Regression tests for the AGENTS.md PR-landing guidance (issue #177).
+"""Regression tests for repository guidance (issues #177 and #349).
 
 Needle tests prove the repository guidance documents the canonical one-shot
 wait-for-CI/merge recipe -- a single blocking ``gh pr checks --watch`` call
@@ -12,6 +12,9 @@ proving the recipe behaves as documented: it exits zero once merged, exits
 non-zero when the PR closes without merging, fails fast when ``gh`` itself
 errors, and on timeout prints the check table that distinguishes queued from
 blocked.
+
+Issue #349 also verifies the worktree bootstrap and OpenCode v2 project-context
+guidance, plus the editor-only status of the optional Pyright configuration.
 """
 
 import os
@@ -67,6 +70,62 @@ def test_agents_md_encodes_pr_wait_recipe(repo_root: Path, needle: str):
     assert needle.lower() in normalized, (
         f"AGENTS.md is missing a required constraint: {needle!r}"
     )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "needle",
+    (
+        "opencode",
+        "uv_project_environment",
+        "uv sync",
+        "uv run",
+        "test/lint",
+        "in every shell",
+        "active worktree",
+        "project root",
+        "project context",
+        "agents.md",
+        "project-local",
+        "commands",
+        "skills",
+    ),
+)
+def test_agents_md_documents_worktree_uv_and_opencode_context(
+    repo_root: Path, needle: str
+):
+    normalized = " ".join(_agents_md_text(repo_root).lower().split())
+    assert needle.lower() in normalized, (
+        f"AGENTS.md is missing worktree or OpenCode v2 guidance: {needle!r}"
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("stale_term", ("pyright", "lsp", "language server"))
+def test_agents_md_omits_obsolete_lsp_terminology(repo_root: Path, stale_term: str):
+    normalized = " ".join(_agents_md_text(repo_root).lower().split())
+    assert stale_term not in normalized, (
+        f"AGENTS.md contains obsolete OpenCode/LSP terminology: {stale_term!r}"
+    )
+
+
+@pytest.mark.unit
+def test_pyright_config_is_documented_as_editor_only(repo_root: Path):
+    pyproject = (repo_root / "pyproject.toml").read_text(encoding="utf-8").lower()
+    section_start = pyproject.find("[tool.pyright]")
+    if section_start == -1:
+        return
+
+    comment_lines = []
+    for line in reversed(pyproject[:section_start].splitlines()):
+        if not line.strip() and not comment_lines:
+            continue
+        if not line.lstrip().startswith("#"):
+            break
+        comment_lines.append(line)
+    preceding_comment = " ".join(" ".join(reversed(comment_lines)).split())
+    assert "editor-only" in preceding_comment
+    assert "opencode v2 does not consume it" in preceding_comment
 
 
 def _shell_blocks(text: str) -> list[str]:
