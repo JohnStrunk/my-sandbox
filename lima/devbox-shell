@@ -241,11 +241,11 @@ if [[ -n "$workdir" ]]; then
 fi
 
 # Generate the runtime overlay inside the VM immediately before OpenCode starts.
-# The generator serializes only {env:...} references, never credential values;
-# keeping it guest-side also avoids requiring host jq/Python or modifying the
-# mounted global OpenCode config. Every OpenCode CLI form (including `run`)
-# enters through this path, so the first command starts the shared service with
-# the same config that subsequent project sessions receive.
+# The generator never serializes credential values; keeping it guest-side also
+# avoids requiring host jq/Python or modifying the mounted global OpenCode
+# config. Every OpenCode CLI form (including `run`) enters through this path, so
+# the first command starts the shared service with the same config that
+# subsequent project sessions receive.
 if [[ "$opencode_debug" != unchanged || "${1:-}" == opencode ]]; then
   # Resolve the guest-local service preference before starting OpenCode; the
   # runtime config is still generated immediately before each OpenCode client.

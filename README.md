@@ -73,10 +73,12 @@ compare installed tool versions with the manifest and `devbox-go --doctor` to
 see a Go project's selected toolchain.
 
 The VM-owned agent capability catalog is staged at
-`~/.agents/skills/devbox-tools/SKILL.md` inside the guest. OpenCode runtime
-configuration is generated in the VM immediately before launch; credentials are
-referenced by environment name and are not written into the host's shared
-configuration.
+`~/.agents/skills/devbox-tools/SKILL.md` inside the guest. The VM generates an
+in-memory OpenCode overlay for baseline permissions and optional integrations
+immediately before launch; it does not generate provider or model settings.
+EnMaaS provider/model settings are user-managed in
+`~/.config/opencode/opencode.jsonc`. Credential values are never serialized
+into the runtime overlay.
 
 | Integration | Enablement |
 | --- | --- |
@@ -85,15 +87,19 @@ configuration.
 | Context7 | `CONTEXT7_API_KEY`. |
 | Tavily search | `TAVILY_API_KEY`, through OpenCode's built-in web search. |
 | The Source | `IGLOO_MCP_*` credentials; VM trusts the internal CA roots. |
-| Built-in Anthropic/OpenAI | With a valid ASCII HTTPS `ENMAAS_URL` and `ENMAAS_API_KEY`, the generated config routes both providers through EnMaaS and disables direct provider-key fallback. Without the complete pair, normal OpenCode provider credentials apply. |
+| EnMaaS | A complete `ENMAAS_URL`/`ENMAAS_API_KEY` pair is forwarded; full URL validation runs on the `devbox opencode` launch path. Provider and model settings are user-managed in OpenCode config. |
 | PriceTag utilities | `PRICETAG_HOSTED_URL` or `PRICETAG_OPENAI_URL` plus `PRICETAG_API_KEY`; used by `list-models.sh` and the opt-in gateway inference test. |
 
-EnMaaS requires a valid ASCII HTTPS `ENMAAS_URL` and non-empty
-`ENMAAS_API_KEY`. The generated overlay uses environment references only;
-credential values are not serialized. When EnMaaS is active, direct
-OpenAI/Anthropic keys and the direct Anthropic base URL are removed from the
-guest environment. It also adds OpenAI model `rits/zai-org/glm-5-3` as **GLM 5.3
-(curvebender)**.
+Devbox forwards EnMaaS only as a non-empty pair. The host rejects non-HTTPS
+schemes, and the guest validates the full URL on the `devbox opencode` launch
+path. With a complete pair, direct OpenAI/Anthropic keys and the direct
+Anthropic base URL are removed from the guest environment. Devbox does not
+generate provider or model settings; manage those in your user OpenCode config
+(see the [Lima guide](lima/README.md) for the expected provider settings). A
+provider configured with `env: []` and EnMaaS references does not fall back to
+ordinary provider credentials when the pair is absent. OpenCode project-level
+settings can override the global provider endpoint, so only forward EnMaaS
+credentials to trusted projects.
 
 The launcher passes a strict allowlist of supported provider credentials. The
 VM mounts only selected project, knowledge-base, and configuration paths; see
@@ -113,6 +119,9 @@ the [mount table](lima/README.md#shared-vs-vm-local-state) for details.
 - Host configuration and credentials are mounted behind a protected parent,
   and provider environment variables cross into the VM only through the
   launcher's explicit allowlist.
+- When EnMaaS credentials are forwarded, project OpenCode config can override
+  `providers.*.settings.baseURL` while `{env:ENMAAS_API_KEY}` remains available.
+  Only run OpenCode with forwarded EnMaaS credentials in trusted projects.
 
 ## Testing
 

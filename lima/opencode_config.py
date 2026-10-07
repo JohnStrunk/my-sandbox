@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Build the VM's credential-gated OpenCode runtime overlay.
+"""Build the VM's OpenCode runtime overlay.
 
-Only environment-variable references are written to the generated config;
-credential values are used for gate checks and never serialized.
+Credential values are never written to the generated config. A complete EnMaaS
+pair is validated here because the user-managed OpenCode config may use it
+directly.
 """
 
 from __future__ import annotations
@@ -19,9 +20,9 @@ def present(name: str) -> bool:
     return bool(os.environ.get(name))
 
 
-def enmaas_credentials_ready() -> bool:
+def validate_enmaas_configuration() -> None:
     if not present("ENMAAS_URL") or not present("ENMAAS_API_KEY"):
-        return False
+        return
     enmaas_url = os.environ["ENMAAS_URL"]
     if (
         any(
@@ -53,7 +54,6 @@ def enmaas_credentials_ready() -> bool:
         raise ValueError("ENMAAS_URL must be a valid HTTPS URL")
     if port == 0:
         raise ValueError("ENMAAS_URL must be a valid HTTPS URL")
-    return True
 
 
 def valid_enmaas_hostname(hostname: str, bracketed: bool) -> bool:
@@ -166,30 +166,14 @@ def build_config() -> dict[str, object]:
             },
         }
 
-    if enmaas_credentials_ready():
-        enmaas_settings = {
-            "baseURL": "{env:ENMAAS_URL}",
-            "apiKey": "{env:ENMAAS_API_KEY}",
-        }
-        config["providers"] = {
-            "anthropic": {
-                # An empty env list prevents OpenCode from preferring the
-                # provider's direct API-key environment variable.
-                "env": [],
-                "settings": enmaas_settings,
-            },
-            "openai": {
-                "env": [],
-                "settings": enmaas_settings,
-                "models": {"rits/zai-org/glm-5-3": {"name": "GLM 5.3 (curvebender)"}},
-            },
-        }
-
     return config
 
 
 if __name__ == "__main__":
     try:
+        # Provider/model configuration lives in the user's OpenCode config.
+        # Still validate a complete EnMaaS pair before OpenCode starts.
+        validate_enmaas_configuration()
         generated_config = build_config()
     except ValueError as error:
         raise SystemExit(str(error)) from None
