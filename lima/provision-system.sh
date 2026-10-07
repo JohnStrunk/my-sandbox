@@ -476,7 +476,7 @@ export UV_CACHE_DIR="${UV_CACHE_DIR:-$HOME/.cache/uv}"
 export HF_HOME="${HF_HOME:-/var/lib/devbox-toolbuilder/.cache/semble/huggingface}"
 export SEMBLE_CACHE_LOCATION="${SEMBLE_CACHE_LOCATION:-$HOME/.cache/semble/index}"
 export PLAYWRIGHT_MCP_BROWSER="${PLAYWRIGHT_MCP_BROWSER:-chromium}"
-export DOCKER_HOST="unix:///run/user/$(id -u)/podman/podman.sock"
+export DOCKER_HOST="unix://${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/docker.sock"
 export KIND_EXPERIMENTAL_PROVIDER="${KIND_EXPERIMENTAL_PROVIDER:-podman}"
 export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}"
 EOF
@@ -536,6 +536,7 @@ packages=(
   qemu-img
   qemu-kvm
   ripgrep
+  shadow-utils
   shadow-utils-subid
   ShellCheck
   slirp4netns
@@ -551,6 +552,87 @@ if ((${#missing[@]})); then
   dnf clean all
   rm -rf /var/cache/dnf
 fi
+
+# Docker CE comes from Docker's official, GPG-checked Fedora repository. Keep
+# the Engine, official CLI, and rootless setup package on the same manifest pin.
+# The upstream RPMs use distinct epochs for Engine and CLI; include them in the
+# NEVRA requests so DNF cannot select an unpinned version. Skip all RPM
+# scriptlets: system provisioning does not run third-party package code as root.
+docker_repo_file=/etc/yum.repos.d/docker-ce.repo
+docker_repo_tmp="$(new_temp_dir)/docker-ce.repo"
+cat >"$docker_repo_tmp" <<'EOF'
+[docker-ce-stable]
+name=Docker CE Stable - $basearch
+baseurl=https://download.docker.com/linux/fedora/$releasever/$basearch/stable
+enabled=1
+gpgcheck=1
+gpgkey=https://download.docker.com/linux/fedora/gpg
+EOF
+if ! cmp -s "$docker_repo_tmp" "$docker_repo_file"; then
+  install -m 0644 "$docker_repo_tmp" "$docker_repo_file"
+fi
+
+docker_version="$(manifest_version docker_ce)"
+fedora_version="$(rpm -E '%fedora')"
+if [[ ! "$fedora_version" =~ ^[0-9]+$ ]]; then
+  echo "devbox: could not determine the Fedora release for Docker CE" >&2
+  exit 1
+fi
+docker_release="1.fc${fedora_version}"
+docker_ce_expected="docker-ce 3 ${docker_version} ${docker_release}"
+docker_cli_expected="docker-ce-cli 1 ${docker_version} ${docker_release}"
+docker_rootless_expected="docker-ce-rootless-extras 0 ${docker_version} ${docker_release}"
+docker_rpm_identity() {
+  rpm -q --queryformat '%{NAME} %{EPOCHNUM} %{VERSION} %{RELEASE}' "$1" \
+    2>/dev/null || true
+}
+if [[ "$(docker_rpm_identity docker-ce)" != "$docker_ce_expected" ]] \
+  || [[ "$(docker_rpm_identity docker-ce-cli)" != "$docker_cli_expected" ]] \
+  || [[ "$(docker_rpm_identity docker-ce-rootless-extras)" \
+    != "$docker_rootless_expected" ]]; then
+  dnf install -y --setopt=install_weak_deps=False --setopt=tsflags=noscripts \
+    "docker-ce-3:${docker_version}-${docker_release}" \
+    "docker-ce-cli-1:${docker_version}-${docker_release}" \
+    "docker-ce-rootless-extras-${docker_version}-${docker_release}"
+  dnf clean all
+  rm -rf /var/cache/dnf
+fi
+if [[ "$(docker_rpm_identity docker-ce)" != "$docker_ce_expected" ]] \
+  || [[ "$(docker_rpm_identity docker-ce-cli)" != "$docker_cli_expected" ]] \
+  || [[ "$(docker_rpm_identity docker-ce-rootless-extras)" \
+    != "$docker_rootless_expected" ]]; then
+  echo "devbox: Docker CE RPMs do not match the manifest pin" >&2
+  exit 1
+fi
+
+assert_rpm_owner() {
+  local path="$1" expected="$2" actual
+  actual="$(rpm -qf --queryformat '%{NAME}' "$path")" || {
+    echo "devbox: no RPM owns required Docker file $path" >&2
+    exit 1
+  }
+  if [[ "$actual" != "$expected" ]]; then
+    echo "devbox: $path is owned by $actual, expected $expected" >&2
+    exit 1
+  fi
+}
+assert_rpm_owner /usr/bin/docker docker-ce-cli
+assert_rpm_owner /usr/bin/dockerd docker-ce
+assert_rpm_owner /usr/bin/dockerd-rootless-setuptool.sh docker-ce-rootless-extras
+if rpm -q podman-docker >/dev/null 2>&1; then
+  echo "devbox: refusing podman-docker; Docker must use Docker CE" >&2
+  exit 1
+fi
+
+# Never leave Docker's rootful system daemon/socket or system containerd active.
+# The supported daemon is started separately by the guest's rootless user unit.
+systemctl daemon-reload
+for unit in docker.service docker.socket containerd.service; do
+  if systemctl cat "$unit" >/dev/null 2>&1; then
+    systemctl disable --now "$unit"
+  fi
+done
+systemctl daemon-reload
 
 # Preserve Red Hat internal TLS trust for guest tools and integrations.
 # These pins are embedded in the VM at create time. A writable shared-checkout

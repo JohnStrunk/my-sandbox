@@ -91,6 +91,7 @@
       "description": "Keep canonical tool versions and their consumers together",
       "matchPackageNames": [
         "@opencode/cli",
+        "moby/moby",
         "golang",
         "helm/helm",
         "kubernetes/kubernetes",

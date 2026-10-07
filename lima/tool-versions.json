@@ -229,6 +229,15 @@
         "lima": true
       }
     },
+    "docker_ce": {
+      "version": "29.8.1",
+      "datasource": "github-releases",
+      "depName": "moby/moby",
+      "integrity": "version-only",
+      "consumers": {
+        "lima": true
+      }
+    },
     "kubectl": {
       "version": "1.37.1",
       "datasource": "github-releases",

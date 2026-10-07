@@ -419,6 +419,59 @@ def test_external_gcloud_rpm_skips_root_scriptlets(repo_root: Path):
 
 
 @pytest.mark.unit
+def test_docker_ce_uses_pinned_signature_checked_rpms_and_rootless_service(
+    repo_root: Path,
+):
+    system_script = _script(repo_root, "provision-system.sh")
+    user_script = _script(repo_root, "provision-user.sh")
+    manifest = _template(repo_root)
+    tool_versions = (repo_root / "lima/tool-versions.json").read_text()
+
+    assert '"docker_ce"' in tool_versions
+    assert "[docker-ce-stable]" in system_script
+    assert (
+        "https://download.docker.com/linux/fedora/$releasever/$basearch/stable"
+        in system_script
+    )
+    assert "gpgcheck=1" in system_script
+    assert "manifest_version docker_ce" in system_script
+    assert '"docker-ce-3:${docker_version}-${docker_release}"' in system_script
+    assert '"docker-ce-cli-1:${docker_version}-${docker_release}"' in system_script
+    assert (
+        '"docker-ce-rootless-extras-${docker_version}-${docker_release}"'
+        in system_script
+    )
+    assert "--setopt=tsflags=noscripts" in system_script
+    assert "assert_rpm_owner /usr/bin/docker docker-ce-cli" in system_script
+    assert "assert_rpm_owner /usr/bin/dockerd docker-ce" in system_script
+    assert "rpm -q podman-docker" in system_script
+    assert 'systemctl disable --now "$unit"' in system_script
+    assert "dockerd-rootless-setuptool.sh install" in user_script
+    assert "systemctl --user enable --now docker.service" in user_script
+    assert "systemctl --user enable --now podman.socket" in user_script
+    assert "docker" in manifest["probes"][0]["description"].lower()
+
+
+@pytest.mark.unit
+def test_readiness_checks_distinct_docker_ce_and_podman_endpoints(
+    repo_root: Path,
+):
+    probe = _script(repo_root, "probe-readiness.sh")
+
+    assert 'DOCKER_SOCKET="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/docker.sock"' in probe
+    assert (
+        'PODMAN_SOCKET="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock"'
+        in probe
+    )
+    assert 'DOCKER_HOST="unix://${DOCKER_SOCKET}"' in probe
+    assert "systemctl --user is-active --quiet docker.service" in probe
+    assert "http://d/version" in probe
+    assert ".tools.docker_ce.version" in probe
+    assert '--unix-socket "$PODMAN_SOCKET" http://d/_ping' in probe
+    assert "the separate rootless Podman API is not responding" in probe
+
+
+@pytest.mark.unit
 def test_system_script_stamps_limactl_integrity_without_running_it_as_root(
     repo_root: Path,
 ):

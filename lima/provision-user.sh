@@ -291,7 +291,19 @@ if [[ -n "$host_agents" && -d "$host_agents" ]]; then
   fi
 fi
 
-# Rootless Podman provides the Docker-compatible socket used by kind.
+# Docker CE's official helper installs the per-user rootless service unit. Do
+# not enable the rootful system service or add the guest to the docker group.
+docker_user_unit="$HOME/.config/systemd/user/docker.service"
+if [[ -L "$docker_user_unit" ]]; then
+  echo "devbox: refusing symlinked rootless Docker user service" >&2
+  exit 1
+fi
+if [[ ! -f "$docker_user_unit" ]]; then
+  dockerd-rootless-setuptool.sh install
+fi
+systemctl --user enable --now docker.service
+
+# Podman remains an independent rootless runtime with its own API socket.
 systemctl --user enable --now podman.socket
 
 # OpenCode is not started here; its first credential-aware shell owns the service.

@@ -23,6 +23,121 @@ def test_provisioned_vm_toolchain_matches_manifest(devbox_vm: LimaVM):
 
 
 @pytest.mark.vm
+def test_docker_ce_and_kind_run_while_podman_is_stopped(
+    repo_root: Path, devbox_vm: LimaVM
+):
+    if devbox_vm.name is None and os.environ.get("MY_SANDBOX_VM_TEST_FRESH") != "1":
+        embedded_script = devbox_vm.run(
+            ["cat", "/var/lib/devbox-vm/system-provision.sha256"], timeout=30
+        )
+        if (
+            embedded_script.returncode != 0
+            or embedded_script.stdout.strip()
+            != expected_lima_system_script_sha256(repo_root)
+        ):
+            pytest.skip(
+                "the current guest embeds an older Docker provisioner; "
+                "use a fresh VM to validate Docker CE"
+            )
+
+    command = r"""
+set -euo pipefail
+repo_path="$1"
+docker_socket="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/docker.sock"
+podman_socket="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock"
+expected_version="$(jq -er '.tools.docker_ce.version' /etc/devbox/tool-versions.json)"
+docker_cli_path="$(command -v docker)"
+export DOCKER_HOST="unix://${docker_socket}"
+
+[[ "$docker_socket" != "$podman_socket" ]]
+[[ -S "$docker_socket" ]]
+[[ "$DOCKER_HOST" == "unix://${docker_socket}" ]]
+[[ "$docker_cli_path" == /usr/bin/docker ]]
+[[ "$(rpm -qf --queryformat '%{NAME}' "$docker_cli_path")" == docker-ce-cli ]]
+[[ "$(rpm -qf --queryformat '%{NAME}' /usr/bin/dockerd)" == docker-ce ]]
+[[ "$(rpm -qf --queryformat '%{NAME}' /usr/bin/dockerd-rootless-setuptool.sh)" \
+  == docker-ce-rootless-extras ]]
+[[ "$(rpm -q --queryformat '%{VERSION}' docker-ce)" == "$expected_version" ]]
+[[ "$(rpm -q --queryformat '%{VERSION}' docker-ce-cli)" == "$expected_version" ]]
+if rpm -q podman-docker >/dev/null 2>&1; then
+  echo "podman-docker must not provide the Docker CLI" >&2
+  exit 1
+fi
+if systemctl is-active --quiet docker.service \
+  || systemctl is-active --quiet docker.socket; then
+  echo "rootful Docker services must remain disabled" >&2
+  exit 1
+fi
+
+systemctl --user is-active --quiet docker.service
+docker_service_pid="$(systemctl --user show --property=MainPID --value docker.service)"
+[[ "$docker_service_pid" =~ ^[1-9][0-9]*$ ]]
+[[ "$(stat -c %u "/proc/${docker_service_pid}")" == "$(id -u)" ]]
+client_version="$(docker version --format '{{.Client.Version}}')"
+server_version="$(docker version --format '{{.Server.Version}}')"
+[[ "$client_version" == "$expected_version" ]]
+[[ "$server_version" == "$expected_version" ]]
+
+podman_socket_was_active=false
+podman_service_was_active=false
+if systemctl --user is-active --quiet podman.socket; then
+  podman_socket_was_active=true
+fi
+if systemctl --user is-active --quiet podman.service; then
+  podman_service_was_active=true
+fi
+container_id=""
+restore_services() {
+  local status=$?
+  trap - EXIT
+  if [[ -n "$container_id" ]]; then
+    docker rm --force "$container_id" >/dev/null 2>&1 || true
+  fi
+  if [[ "$podman_socket_was_active" == true ]]; then
+    systemctl --user start podman.socket || status=1
+  fi
+  if [[ "$podman_service_was_active" == true ]]; then
+    systemctl --user start podman.service || status=1
+  fi
+  exit "$status"
+}
+trap restore_services EXIT
+
+systemctl --user stop podman.socket
+systemctl --user stop podman.service
+if systemctl --user is-active --quiet podman.socket \
+  || systemctl --user is-active --quiet podman.service \
+  || [[ -S "$podman_socket" ]]; then
+  echo "Podman service or socket remained available during Docker smoke test" >&2
+  exit 1
+fi
+
+container_id="$(docker create --pull=missing docker.io/library/busybox:1.37.0 \
+  sh -c 'printf "docker-ce-smoke\\n"')"
+docker start --attach "$container_id" | grep -qx 'docker-ce-smoke'
+docker rm "$container_id" >/dev/null
+container_id=""
+KIND_EXPERIMENTAL_PROVIDER=docker "$repo_path/lima/validate-kind.sh" 1
+podman info >/dev/null
+if systemctl --user is-active --quiet podman.socket \
+  || systemctl --user is-active --quiet podman.service; then
+  echo "using Podman directly must not start its API service" >&2
+  exit 1
+fi
+"""
+    result = devbox_vm.run(
+        ["bash", "-ceu", command, "docker-ce-smoke", devbox_vm.repo_path],
+        timeout=600,
+        use_guest_runtime=True,
+    )
+
+    assert result.returncode == 0, (
+        "Docker CE and kind did not run independently of Podman.\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+
+
+@pytest.mark.vm
 def test_fresh_vm_fingerprint_matches_the_current_checkout(
     repo_root: Path, devbox_vm: LimaVM
 ):

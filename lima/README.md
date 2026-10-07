@@ -415,11 +415,66 @@ Changes to `lima/provision-system.sh`, `lima/provision-user.sh`, or
 `devbox-toolchain-check` command reports every manifest-declared Lima tool at
 its exact version, plus `make`, Python/pip, and ShellCheck.
 
-The rootless Podman Docker-compatible API is enabled at
-`$XDG_RUNTIME_DIR/podman/podman.sock` and exported through `DOCKER_HOST` for
-Docker API clients. Kind uses its explicit experimental Podman provider; ten
-consecutive create/delete cycles passed, so Docker CE is not installed.
-`lima/validate-kind.sh` repeats that acceptance check.
+### Docker CE and Podman runtimes
+
+The VM provisions **Docker CE Engine, its official CLI, and Docker's rootless
+setup package** from Docker's Fedora stable RPM repository. Rootless mode
+requires `newuidmap`/`newgidmap`, cgroup v2, and at least 65,536 subordinate
+UIDs and GIDs. Lima supplies the subordinate-ID ranges and cgroup delegation;
+the readiness probe checks the prerequisites. The `docker_ce` entry in
+`lima/tool-versions.json` pins Docker CE 29.8.1 for both supported
+architectures.
+DNF verifies the package signatures (`gpgcheck=1`) and the
+provisioner requests exact Engine/CLI/rootless-package RPM versions. It skips
+third-party RPM scriptlets as root. Docker CE is not a Podman alias, wrapper, or
+`podman-docker` package.
+
+Docker uses a rootless **per-user systemd service**. Provisioning enables
+`docker.service`; Lima's user lingering lets it start at VM boot and survive
+logout. The default `DOCKER_HOST` is
+`unix:///run/user/<uid>/docker.sock`. The rootful system `docker.service` and
+`docker.socket` remain disabled, and the guest is not added to a `docker` group.
+The daemon runs with the guest user's privileges, not host-root privileges, and
+can access files and credentials available to that guest user.
+
+Podman remains a separately supported rootless runtime. Its API socket is
+`$XDG_RUNTIME_DIR/podman/podman.sock`; invoking `podman` talks to Podman
+directly.
+Do not point Docker at that socket or expect Docker to fall back to Podman.
+`lima/validate-kind.sh` explicitly selects the matching socket for
+`KIND_EXPERIMENTAL_PROVIDER=podman` (its default) or `docker`.
+
+Verify both runtimes and their separation with:
+
+```shell
+devbox-toolchain-check            # checks the pinned Docker CLI version
+docker version                    # reports both client and Docker CE server
+rpm -qf /usr/bin/docker /usr/bin/dockerd
+systemctl --user status docker.service
+podman info
+```
+
+The readiness probe separately checks the Docker user service/socket and the
+manifest-pinned Docker server API version, then pings Podman's own socket. The
+provisioned-VM test creates, runs, and removes a container through Docker CE,
+then creates and deletes a kind cluster with the explicit Docker provider while
+the Podman service and socket are stopped. For troubleshooting, inspect
+`systemctl --user status docker.service` and
+`journalctl --user -u docker.service`; the Docker and Podman sockets must remain
+distinct.
+
+The strict kind/Minikube driver matrix is tracked in
+[#319](https://github.com/JohnStrunk/my-sandbox/issues/319), and Minikube
+provisioning is tracked in
+[#318](https://github.com/JohnStrunk/my-sandbox/issues/318).
+Their Docker cases must explicitly select the Docker driver/provider and use
+this Docker CE endpoint; their Podman cases select Podman directly. No case may
+silently substitute one backend for the other.
+
+Changes to embedded provisioning scripts or `lima/devbox.yaml` require
+[recreating the VM](#recreating-the-vm). A manifest-only Docker version bump is
+applied on VM restart.
+
 The VM keeps `net.ipv4.conf.default.route_localnet=0` to preserve the loopback
 routing boundary; a rootless Podman published-port smoke test passed with it
 disabled.
@@ -679,10 +734,13 @@ integration work.
 - **Fedora 44** cloud image, digest-pinned (x86_64 and aarch64).
 - **qemu/KVM**, `nestedVirtualization: true`, default `cpuType` (host),
   8 CPUs / 16 GiB RAM / 100 GiB sparse disk.
-- **Rootless Podman**: Lima's boot scripts provide static `/etc/subuid` and
-  `/etc/subgid`, cgroup-v2 delegation, and linger; provisioning installs
-  Podman/netavark, configures the Docker-compatible socket, and sets bridge
-  sysctls as root. Docker CE is not installed.
+- **Rootless Docker CE and Podman**: Lima's boot scripts provide static
+  `/etc/subuid` and `/etc/subgid` ranges (65,536 IDs), cgroup-v2 delegation,
+  and linger. Provisioning installs Docker CE from its official
+  signature-checked Fedora repository and
+  enables its separate rootless user service/socket. Podman/netavark remains
+  independently available with its own API socket and bridge configuration;
+  neither runtime aliases or falls back to the other.
 - **Manifest-pinned tools**: OpenCode, Go + `devbox-go`, uv, Rust, Node/npm,
   Playwright CLI + bundled Chromium, ast-grep + its skills, Semble + prefetched
   model, Repomix, Hadolint, markdownlint-cli2, pre-commit, acli, Google
@@ -711,10 +769,12 @@ the installed versions.
 ### Tool artifact integrity
 
 The manifest explicitly marks each downloaded tool or skill `sha256` or
-`version-only`. Checksum-managed releases are **Hadolint**, **uv**,
-**Antigravity CLI**, **limactl**, **kind**, the **ast-grep release binaries**,
-and **acli**. Each has separate amd64 and arm64 records; their exact upstream
-versions and SHA-256 values are verified before installation. The top-level
+`version-only`. Docker CE uses a version-only manifest pin but its official RPM
+packages are signature-checked by DNF. Checksum-managed releases are
+**Hadolint**, **uv**, **Antigravity CLI**, **limactl**, **kind**, the
+**ast-grep release binaries**, and **acli**. Each has separate amd64 and arm64
+records; their exact upstream versions and SHA-256 values are verified before
+installation. The top-level
 `version` remains the provisioning alias, and the validator requires both
 artifact versions to normalize to it. The ast-grep agent-skill archive is also
 verified against its pinned commit's SHA-256.
@@ -779,7 +839,10 @@ passes, verify from inside the VM (opened with
       operator tools; `make --version`, `kind version`, `kubectl version
       --client`, `helm version`, and `pipenv --version` all succeed.
 - [ ] `~/src/my-sandbox/lima/validate-kind.sh` completes ten consecutive
-      create/delete cycles using rootless Podman's Docker-compatible socket.
+      create/delete cycles with the explicit Podman provider; selecting
+      `KIND_EXPERIMENTAL_PROVIDER=docker` uses the separate Docker CE socket.
+- [ ] `docker version` reports the manifest-pinned client and server, and the
+      Docker smoke test succeeds while Podman's service/socket are stopped.
 - [ ] `~/.agents/skills/devbox-tools/SKILL.md` and the ast-grep skills are
       present; VM-owned files take precedence at those skill names.
 - [ ] `HF_HOME` and `SEMBLE_CACHE_LOCATION` point under the VM-local cache,
