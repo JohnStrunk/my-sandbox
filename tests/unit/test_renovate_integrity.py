@@ -384,6 +384,10 @@ def test_docker_ce_renovate_pin_normalizes_moby_release_tags(repo_root: Path):
         config,
         '"description": "Normalize Docker Engine release tags for the manifest pin"',
     )
+    containerd_rule = _config_object(
+        config,
+        '"description": "Wait for Docker\'s Fedora repo before bumping containerd.io"',
+    )
 
     assert docker_ce["datasource"] == "github-releases"
     assert docker_ce["depName"] == "moby/moby"
@@ -392,7 +396,8 @@ def test_docker_ce_renovate_pin_normalizes_moby_release_tags(repo_root: Path):
     assert containerd_io["depName"] == "containerd/containerd"
     assert re.fullmatch(r"\d+\.\d+\.\d+", containerd_io["version"])
     assert '"moby/moby"' in version_group
-    assert '"containerd/containerd"' in version_group
+    assert '"containerd/containerd"' in containerd_rule
+    assert '"enabled": false' in containerd_rule
     assert (
         r'"extractVersion": "^docker-v(?<version>\\d+\\.\\d+\\.\\d+)$"' in extract_rule
     )

@@ -429,6 +429,9 @@ SHA-256-pinned Docker key
 `repo_gpgcheck=1`).
 Provisioning skips third-party RPM scriptlets as root. Docker CE is not a Podman
 alias, wrapper, or `podman-docker` package.
+The `containerd_io` pin follows the containerd version packaged by Docker; its
+Renovate updates are disabled until Docker publishes a matching Fedora RPM for
+both supported architectures.
 
 Rootless mode requires `newuidmap`/`newgidmap`, cgroup v2, and at least 65,536
 subordinate UIDs and GIDs. Lima supplies the subordinate-ID ranges and cgroup

@@ -91,7 +91,6 @@
       "description": "Keep canonical tool versions and their consumers together",
       "matchPackageNames": [
         "@opencode/cli",
-        "containerd/containerd",
         "moby/moby",
         "golang",
         "helm/helm",
@@ -122,6 +121,13 @@
         "moby/moby",
       ],
       "extractVersion": "^docker-v(?<version>\\d+\\.\\d+\\.\\d+)$",
+    },
+    {
+      "description": "Wait for Docker's Fedora repo before bumping containerd.io",
+      "matchPackageNames": [
+        "containerd/containerd",
+      ],
+      "enabled": false,
     },
     {
       "description": "Use loose versioning for ShellCheck's four-part tags",
