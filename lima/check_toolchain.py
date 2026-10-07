@@ -50,7 +50,7 @@ _VERSION_COMMANDS: dict[str, tuple[Command, re.Pattern[str]]] = {
     ),
     "containerd_io": (
         ("containerd", "--version"),
-        re.compile(r"\b(\d+\.\d+\.\d+)\b"),
+        re.compile(r"\bv?(\d+\.\d+\.\d+)\b"),
     ),
     "google_workspace_cli": (
         ("gws", "--version"),

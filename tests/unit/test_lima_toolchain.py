@@ -30,7 +30,7 @@ def _version_output(name: str, version: str) -> str:
     if name == "docker_ce":
         return f"Docker version {version}, build 0000000"
     if name == "containerd_io":
-        return f"containerd github.com/containerd/containerd/v2 {version}"
+        return f"containerd github.com/containerd/containerd/v2 v{version}"
     if name == "pre_commit":
         return f"pre-commit {version}"
     if name in {"markdownlint_cli2", "opencode"}:
