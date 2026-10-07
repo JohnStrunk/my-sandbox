@@ -583,7 +583,7 @@ cat >"$docker_repo_tmp" <<'EOF'
 [docker-ce-stable]
 name=Docker CE Stable - $basearch
 baseurl=https://download.docker.com/linux/fedora/$releasever/$basearch/stable
-enabled=1
+enabled=0
 gpgcheck=1
 repo_gpgcheck=1
 gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-docker-ce
@@ -610,7 +610,8 @@ docker_rpms_match_pins() {
     && [[ "$(docker_rpm_identity containerd.io)" == "$containerd_expected" ]]
 }
 if ! docker_rpms_match_pins; then
-  dnf install -y --setopt=install_weak_deps=False --setopt=tsflags=noscripts \
+  dnf install -y --enablerepo=docker-ce-stable \
+    --setopt=install_weak_deps=False --setopt=tsflags=noscripts \
     "docker-ce-3:${docker_version}" \
     "docker-ce-cli-1:${docker_version}" \
     "docker-ce-rootless-extras-${docker_version}" \

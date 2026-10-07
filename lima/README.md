@@ -427,8 +427,10 @@ verifies repository metadata and package signatures with a committed,
 SHA-256-pinned Docker key
 (`060A 61C5 1B55 8A7F 742B 77AA C52F EB6B 621E 9F35`, `gpgcheck=1`,
 `repo_gpgcheck=1`).
-Provisioning skips third-party RPM scriptlets as root. Docker CE is not a Podman
-alias, wrapper, or `podman-docker` package.
+The Docker repo is disabled for ordinary guest `dnf` operations and enabled only
+for the pinned install transaction. Provisioning skips third-party RPM
+scriptlets as root. Docker CE is not a Podman alias, wrapper, or `podman-docker`
+package.
 The `containerd_io` pin follows the containerd version packaged by Docker; its
 Renovate updates are disabled until Docker publishes a matching Fedora RPM for
 both supported architectures.

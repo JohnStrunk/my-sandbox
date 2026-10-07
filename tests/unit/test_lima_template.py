@@ -442,7 +442,9 @@ def test_docker_ce_uses_pinned_signature_checked_rpms_and_rootless_service(
         "https://download.docker.com/linux/fedora/$releasever/$basearch/stable"
         in system_script
     )
+    assert "enabled=0" in system_script
     assert "gpgcheck=1" in system_script
+    assert "--enablerepo=docker-ce-stable" in system_script
     assert "manifest_version docker_ce" in system_script
     assert "manifest_version containerd_io" in system_script
     assert '"docker-ce-3:${docker_version}"' in system_script
