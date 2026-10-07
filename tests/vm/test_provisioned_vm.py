@@ -126,11 +126,19 @@ if systemctl --user is-active --quiet podman.service; then
   podman_service_was_active=true
 fi
 container_id=""
+build_image=""
+build_log=""
 restore_services() {
   local status=$?
   trap - EXIT
   if [[ -n "$container_id" ]]; then
     docker rm --force "$container_id" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "$build_image" ]]; then
+    docker image rm "$build_image" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "$build_log" ]]; then
+    rm -f -- "$build_log"
   fi
   if [[ "$podman_socket_was_active" == true ]]; then
     systemctl --user start podman.socket || status=1
@@ -155,7 +163,7 @@ if curl --fail --silent --show-error --max-time 3 \
   exit 1
 fi
 
-# Pin Docker Hub's multi-architecture OCI index, not a mutable tag or amd64 child.
+# Public multi-architecture OCI digest (split for line length; not a secret).
 smoke_digest_prefix="bdf57e528e45e4433820e045b29b4597" # pragma: allowlist secret
 smoke_digest_suffix="825a1c9e38353532d90a01445013f82e" # pragma: allowlist secret
 smoke_image="docker.io/library/busybox:1.37.0@sha256:${smoke_digest_prefix}${smoke_digest_suffix}"
@@ -164,6 +172,23 @@ container_id="$(docker create --pull=missing "$smoke_image" \
 docker start --attach "$container_id" | grep -qx 'docker-ce-smoke'
 docker rm "$container_id" >/dev/null
 container_id=""
+build_image="docker-ce-build-smoke:latest"
+build_log="$(mktemp)"
+if ! printf 'FROM scratch\nLABEL org.example.devbox-smoke=passed\n' \
+  | env -u DOCKER_BUILDKIT docker build --tag "$build_image" - \
+    >"$build_log" 2>&1; then
+  cat "$build_log" >&2
+  exit 1
+fi
+if ! grep -q 'DEPRECATED: The legacy builder is deprecated' "$build_log"; then
+  cat "$build_log" >&2
+  echo "docker build did not use the expected legacy-builder fallback" >&2
+  exit 1
+fi
+docker image rm "$build_image" >/dev/null
+build_image=""
+rm -f -- "$build_log"
+build_log=""
 KIND_EXPERIMENTAL_PROVIDER=docker "$repo_path/lima/validate-kind.sh" 1
 podman info >/dev/null
 if systemctl --user is-active --quiet podman.socket \

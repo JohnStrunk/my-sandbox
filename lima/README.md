@@ -442,6 +442,12 @@ Docker's documented per-user systemd unit directly instead of running the
 vendor setup utility with the guest's host-mounted credentials. The optional
 `docker-buildx-plugin` and `docker-compose-plugin` RPMs are not installed, so
 `docker buildx` and `docker compose` are unavailable by default.
+With `DOCKER_BUILDKIT` unset, `docker build` currently falls back to Docker's
+deprecated legacy builder and prints a warning; `DOCKER_BUILDKIT=1 docker build`
+fails without Buildx. This profile supports container execution and kind, not
+BuildKit image builds. Use Podman's separate `podman build` store or add a
+pinned Buildx plugin before relying on Docker image builds; the legacy fallback
+may be removed in a future CLI release.
 
 Docker uses a rootless **per-user systemd service**. Provisioning enables
 `docker.service`; Lima's user lingering lets it start at VM boot and survive
@@ -493,8 +499,9 @@ silently substitute one backend for the other.
 
 Changes to embedded provisioning scripts or `lima/devbox.yaml` require
 [recreating the VM](#recreating-the-vm). A manifest-only Docker version bump is
-applied on VM restart; user provisioning enables and restarts the Docker service
-after root provisioning so its server uses the installed package pin. VMs
+applied on VM restart; user provisioning enables the Docker service and
+restarts it after root provisioning when the provisioning fingerprint changes.
+An unchanged active daemon is left running. VMs
 created before Docker CE support must be migrated **before updating the shared
 checkout**. Their embedded system provisioner installs Podman only but reads the
 live manifest and tool installer; after the checkout adds Docker's manifest pin,

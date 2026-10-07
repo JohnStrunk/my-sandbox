@@ -178,7 +178,10 @@ shared repository `AGENTS.md` or README.
   65,536 subordinate UIDs and GIDs. Lima provisions these prerequisites; the
   readiness probe checks them.
 - The optional Buildx and Compose plugin RPMs are not installed; `docker buildx`
-  and `docker compose` are not available by default.
+  and `docker compose` are unavailable. With `DOCKER_BUILDKIT` unset, `docker
+  build` currently uses the deprecated legacy-builder fallback; setting
+  `DOCKER_BUILDKIT=1` fails without Buildx. Do not assume modern BuildKit image
+  builds are supported by this profile.
 - Docker CE is not a Podman alias or wrapper. Do not point `DOCKER_HOST` at
   Podman's API socket, install `podman-docker`, or add the guest to the rootful
   `docker` group. The Docker daemon runs as the guest user and can access data

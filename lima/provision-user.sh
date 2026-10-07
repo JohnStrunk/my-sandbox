@@ -150,9 +150,11 @@ fingerprint="$(printf '%s\n%s\n%s\n%s\n%s\n%s\n' \
   | sha256sum | awk '{print $1}')"
 fingerprint_file="$HOME/.local/share/devbox-toolchain/provisioning.fingerprint"
 previous_fingerprint="$(cat "$fingerprint_file" 2>/dev/null || true)"
+provisioning_fingerprint_changed=false
 if [[ -n "$previous_fingerprint" \
   && "$previous_fingerprint" != "$fingerprint" ]]; then
   echo "devbox: toolchain fingerprint changed; applying updated manifest pins" >&2
+  provisioning_fingerprint_changed=true
 fi
 
 # Seed Git identity only when unset; route GitHub remotes through HTTPS/gh.
@@ -362,7 +364,9 @@ systemctl --user daemon-reload
 systemctl --user enable docker.service
 # Linger may have started the previous daemon before the RPM pin was applied.
 if systemctl --user is-active --quiet docker.service; then
-  systemctl --user restart docker.service
+  if [[ "$provisioning_fingerprint_changed" == true ]]; then
+    systemctl --user restart docker.service
+  fi
 else
   systemctl --user start docker.service
 fi

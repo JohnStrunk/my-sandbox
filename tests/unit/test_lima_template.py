@@ -462,6 +462,7 @@ def test_docker_ce_uses_pinned_signature_checked_rpms_and_rootless_service(
         'KIND_EXPERIMENTAL_PROVIDER="${KIND_EXPERIMENTAL_PROVIDER:-docker}"'
         in system_script
     )
+    assert "Replace the Podman-era value" in system_script
     assert 'systemctl disable --now "$unit"' in system_script
     assert 'XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"' in user_script
     assert "export XDG_RUNTIME_DIR" in user_script
@@ -480,6 +481,8 @@ def test_docker_ce_uses_pinned_signature_checked_rpms_and_rootless_service(
     assert "systemctl --user enable docker.service" in user_script
     assert "systemctl --user start docker.service" in user_script
     assert "systemctl --user restart docker.service" in user_script
+    assert "provisioning_fingerprint_changed=false" in user_script
+    assert '[[ "$provisioning_fingerprint_changed" == true ]]' in user_script
     assert "systemctl --user enable --now podman.socket" in user_script
     assert "docker" in manifest["probes"][0]["description"].lower()
 
