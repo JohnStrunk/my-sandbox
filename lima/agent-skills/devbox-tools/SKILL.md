@@ -164,16 +164,55 @@ shared repository `AGENTS.md` or README.
 - Unit coverage is in `tests/unit/test_devbox_go.py`; provisioned availability
   is covered by `tests/vm/test_provisioned_vm.py`.
 
+### Docker CE and Podman runtimes (Lima)
+
+- Both runtimes are available independently. Docker CE Engine, its official
+  `docker` CLI, `docker-ce-rootless-extras`, and pinned `containerd.io` are
+  installed from Docker's signature-checked Fedora repository. The Docker CE
+  and containerd versions are manifest-pinned.
+- The `docker` CLI uses the rootless per-user Docker service at
+  `unix:///run/user/$(id -u)/docker.sock` by default. Use `docker version` to
+  inspect its client and server and `devbox-toolchain-check` to check the pinned
+  CLI version. Readiness also checks the server version against the manifest.
+- Rootless Docker requires `newuidmap`/`newgidmap`, cgroup v2, and at least
+  65,536 subordinate UIDs and GIDs. Lima provisions these prerequisites; the
+  readiness probe checks them.
+- The optional Buildx and Compose plugin RPMs are not installed; `docker buildx`
+  and `docker compose` are unavailable. With `DOCKER_BUILDKIT` unset, `docker
+  build` currently uses the deprecated legacy-builder fallback; setting
+  `DOCKER_BUILDKIT=1` fails without Buildx. Do not assume modern BuildKit image
+  builds are supported by this profile.
+- Docker CE is not a Podman alias or wrapper. Do not point `DOCKER_HOST` at
+  Podman's API socket, install `podman-docker`, or add the guest to the rootful
+  `docker` group. The Docker daemon runs as the guest user and can access data
+  available to that user; rootless mode is not a boundary from guest-user data.
+- Podman remains available through the `podman` command and its separate
+  `$XDG_RUNTIME_DIR/podman/podman.sock` API socket. Select a kind backend
+  explicitly with `KIND_EXPERIMENTAL_PROVIDER=docker` or `podman`;
+  `lima/validate-kind.sh` defaults to Docker but assigns the socket for the
+  selected provider rather than inheriting a possibly mismatched `DOCKER_HOST`.
+- kind's Podman provider invokes the `podman` CLI directly; its Docker provider
+  uses the Docker CLI and the default Docker CE `DOCKER_HOST`.
+- Docker and Podman do not share image, container, or network state; repull or
+  explicitly save/load an image when switching runtimes.
+- Minikube's Docker and Podman drivers are distinct modes. Once Minikube is
+  provisioned by #318, use `--driver=docker` for Docker CE and `--driver=podman`
+  for Podman. Neither mode falls back to the other; strict recurring matrix
+  coverage is tracked in #319.
+- To troubleshoot Docker, inspect `systemctl --user status docker.service`,
+  `journalctl --user -u docker.service`, and the distinct Docker/Podman socket
+  paths. The Docker service is enabled for VM boot through user lingering.
+
 ### Kubernetes operator profile (Lima)
 
 - Available in the Lima VM: GNU `make`, `kind`, `kubectl`, Helm, Python/pip,
   Pipenv, and the VM-local `~/.local/share/kubebuilder-envtest` asset store.
-- `kind` uses its explicit experimental Podman provider. The VM also exports
-  the rootless Podman Docker-compatible socket in `DOCKER_HOST` for Docker API
-  clients; do not install or assume Docker CE in the VM.
+- Select kind's experimental `docker` or `podman` provider explicitly. The
+  Docker provider uses the Docker CE socket; the Podman provider uses Podman's
+  socket. `lima/validate-kind.sh` defaults to Docker, exercises repeated
+  create/delete cycles, and cleans up any cluster left by a failed attempt.
 - Use `devbox-toolchain-check` to verify manifest-pinned tools and report the
-  operator versions. `lima/validate-kind.sh` exercises ten create/delete
-  cycles and cleans up any cluster left by a failed attempt.
+  operator versions.
 - The VM configures netavark bridge networking, applies the required sysctls,
   and raises user-service task/inotify limits for nested Kubernetes workloads.
 - Runtime and version-check coverage is in `tests/unit/test_lima_toolchain.py`

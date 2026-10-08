@@ -1,5 +1,6 @@
 """Unit tests for the lima/devbox.yaml VM template and its scripts."""
 
+import hashlib
 import os
 import re
 import stat
@@ -416,6 +417,97 @@ def test_external_gcloud_rpm_skips_root_scriptlets(repo_root: Path):
     system_script = _script(repo_root, "provision-system.sh")
 
     assert "--setopt=tsflags=noscripts" in system_script
+
+
+@pytest.mark.unit
+def test_docker_ce_uses_pinned_signature_checked_rpms_and_rootless_service(
+    repo_root: Path,
+):
+    system_script = _script(repo_root, "provision-system.sh")
+    user_script = _script(repo_root, "provision-user.sh")
+    manifest = _template(repo_root)
+    tool_versions = (repo_root / "lima/tool-versions.json").read_text()
+    docker_key = (repo_root / "lima/keys/docker-ce.asc").read_bytes()
+    docker_key_sha256 = hashlib.sha256(docker_key).hexdigest()
+
+    assert '"docker_ce"' in tool_versions
+    assert '"containerd_io"' in tool_versions
+    assert f"DOCKER_GPG_KEY_SHA256={docker_key_sha256}" in system_script
+    assert "copy_repo_file lima/keys/docker-ce.asc" in system_script
+    assert 'rpm --import "$docker_gpg_key_file"' in system_script
+    assert "repo_gpgcheck=1" in system_script
+    assert "file:///etc/pki/rpm-gpg/RPM-GPG-KEY-docker-ce" in system_script
+    assert "[docker-ce-stable]" in system_script
+    assert (
+        "https://download.docker.com/linux/fedora/$releasever/$basearch/stable"
+        in system_script
+    )
+    assert "enabled=0" in system_script
+    assert "gpgcheck=1" in system_script
+    assert "--enablerepo=docker-ce-stable" in system_script
+    assert "manifest_version docker_ce" in system_script
+    assert "manifest_version containerd_io" in system_script
+    assert '"docker-ce-3:${docker_version}"' in system_script
+    assert '"docker-ce-cli-1:${docker_version}"' in system_script
+    assert '"docker-ce-rootless-extras-${docker_version}"' in system_script
+    assert '"containerd.io-${containerd_version}"' in system_script
+    assert "docker_release" not in system_script
+    assert "rpm -q --queryformat '%{NAME} %{EPOCHNUM} %{VERSION}'" in system_script
+    assert "--setopt=tsflags=noscripts" in system_script
+    assert "assert_rpm_owner /usr/bin/docker docker-ce-cli" in system_script
+    assert "assert_rpm_owner /usr/bin/dockerd docker-ce" in system_script
+    assert "assert_rpm_owner /usr/bin/containerd containerd.io" in system_script
+    assert "rpm -q podman-docker" in system_script
+    assert (
+        'KIND_EXPERIMENTAL_PROVIDER="${KIND_EXPERIMENTAL_PROVIDER:-docker}"'
+        in system_script
+    )
+    assert "Replace the Podman-era value" in system_script
+    assert 'systemctl disable --now "$unit"' in system_script
+    assert 'XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"' in user_script
+    assert "export XDG_RUNTIME_DIR" in user_script
+    assert (
+        'export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"'
+        in user_script
+    )
+    assert "systemctl --user show-environment" in user_script
+    assert "dockerd-rootless-setuptool.sh install" not in user_script
+    assert "ExecStart=/usr/bin/dockerd-rootless.sh" in user_script
+    assert "Requires=dbus.socket" in user_script
+    assert "Type=notify" in user_script
+    assert "Delegate=yes" in user_script
+    assert "WantedBy=default.target" in user_script
+    assert "systemctl --user daemon-reload" in user_script
+    assert "systemctl --user enable docker.service" in user_script
+    assert "systemctl --user start docker.service" in user_script
+    assert "systemctl --user restart docker.service" in user_script
+    assert "provisioning_fingerprint_changed=false" in user_script
+    assert '[[ "$provisioning_fingerprint_changed" == true ]]' in user_script
+    assert "systemctl --user enable --now podman.socket" in user_script
+    assert "docker" in manifest["probes"][0]["description"].lower()
+
+
+@pytest.mark.unit
+def test_readiness_checks_distinct_docker_ce_and_podman_endpoints(
+    repo_root: Path,
+):
+    probe = _script(repo_root, "probe-readiness.sh")
+
+    assert 'DOCKER_SOCKET="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/docker.sock"' in probe
+    assert (
+        'PODMAN_SOCKET="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock"'
+        in probe
+    )
+    assert "systemctl --user is-active --quiet docker.service" in probe
+    assert "rootful Docker system services must remain inactive" in probe
+    assert "rootful Docker system services must remain disabled" in probe
+    assert "the rootful system containerd service must remain inactive" in probe
+    assert "the rootful system containerd service must remain disabled" in probe
+    assert "the guest user must not be a member of the rootful docker group" in probe
+    assert "http://d/version" in probe
+    assert ".tools.docker_ce.version" in probe
+    assert '--unix-socket "$PODMAN_SOCKET" http://d/_ping' in probe
+    assert "the separate rootless Podman API is not responding" in probe
 
 
 @pytest.mark.unit

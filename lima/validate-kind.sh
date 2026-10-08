@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Validate repeated kind create/delete cycles against the VM's rootless Podman API.
+# Validate repeated kind create/delete cycles against an explicitly selected
+# rootless container backend.
 set -euo pipefail
 
 runs="${1:-10}"
@@ -8,8 +9,22 @@ if [[ ! "$runs" =~ ^[1-9][0-9]*$ || "$runs" -gt 100 ]]; then
   exit 2
 fi
 
-export DOCKER_HOST="${DOCKER_HOST:-unix:///run/user/$(id -u)/podman/podman.sock}"
-export KIND_EXPERIMENTAL_PROVIDER="${KIND_EXPERIMENTAL_PROVIDER:-podman}"
+provider="${KIND_EXPERIMENTAL_PROVIDER:-docker}"
+runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+case "$provider" in
+  podman)
+    DOCKER_HOST="unix://${runtime_dir}/podman/podman.sock"
+    ;;
+  docker)
+    DOCKER_HOST="unix://${runtime_dir}/docker.sock"
+    ;;
+  *)
+    echo "unsupported kind provider '$provider'; choose podman or docker" >&2
+    exit 2
+    ;;
+esac
+export DOCKER_HOST
+export KIND_EXPERIMENTAL_PROVIDER="$provider"
 prefix="devbox-kind-validation-$(date +%s)-$$"
 clusters=()
 cleanup() {

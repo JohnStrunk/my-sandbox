@@ -476,8 +476,9 @@ export UV_CACHE_DIR="${UV_CACHE_DIR:-$HOME/.cache/uv}"
 export HF_HOME="${HF_HOME:-/var/lib/devbox-toolbuilder/.cache/semble/huggingface}"
 export SEMBLE_CACHE_LOCATION="${SEMBLE_CACHE_LOCATION:-$HOME/.cache/semble/index}"
 export PLAYWRIGHT_MCP_BROWSER="${PLAYWRIGHT_MCP_BROWSER:-chromium}"
-export DOCKER_HOST="unix:///run/user/$(id -u)/podman/podman.sock"
-export KIND_EXPERIMENTAL_PROVIDER="${KIND_EXPERIMENTAL_PROVIDER:-podman}"
+# Replace the Podman-era value so guest Docker clients use Docker CE.
+export DOCKER_HOST="unix://${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/docker.sock"
+export KIND_EXPERIMENTAL_PROVIDER="${KIND_EXPERIMENTAL_PROVIDER:-docker}"
 export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}"
 EOF
 if ! cmp -s "$profile_tmp" "$profile_file"; then
@@ -536,6 +537,7 @@ packages=(
   qemu-img
   qemu-kvm
   ripgrep
+  shadow-utils
   shadow-utils-subid
   ShellCheck
   slirp4netns
@@ -551,6 +553,107 @@ if ((${#missing[@]})); then
   dnf clean all
   rm -rf /var/cache/dnf
 fi
+
+# Pin Docker's RPM signing key independently from the package-download origin.
+# The key is public, committed, and SHA-256 verified before DNF trusts it.
+# Docker Release (CE rpm) fingerprint: 060A 61C5 1B55 8A7F 742B 77AA C52F EB6B 621E 9F35
+DOCKER_GPG_KEY_SHA256=e6c650e0700b1bf4868b693b30761b926844befc8a0acb7ac0dd9b1faf1b7423
+docker_gpg_key_file=/etc/pki/rpm-gpg/RPM-GPG-KEY-docker-ce
+docker_gpg_key_tmp="$(new_temp_dir)/docker-ce.asc"
+copy_repo_file lima/keys/docker-ce.asc "$docker_gpg_key_tmp"
+printf '%s  %s\n' "$DOCKER_GPG_KEY_SHA256" "$docker_gpg_key_tmp" \
+  | sha256sum -c -
+install -d -m 0755 /etc/pki/rpm-gpg
+if [[ -L "$docker_gpg_key_file" ]]; then
+  echo "devbox: refusing symlinked Docker CE RPM key" >&2
+  exit 1
+fi
+if ! cmp -s "$docker_gpg_key_tmp" "$docker_gpg_key_file"; then
+  install -m 0644 "$docker_gpg_key_tmp" "$docker_gpg_key_file"
+fi
+rpm --import "$docker_gpg_key_file"
+
+# Docker CE comes from Docker's official Fedora repository. Keep Engine, CLI,
+# rootless extras, and containerd.io on canonical version pins. Engine and CLI
+# use distinct RPM epochs; request exact name/epoch/version but let the repo
+# select the current Fedora release build. Skip RPM scriptlets; the Docker units
+# are configured explicitly below and in user provisioning.
+docker_repo_file=/etc/yum.repos.d/docker-ce.repo
+docker_repo_tmp="$(new_temp_dir)/docker-ce.repo"
+cat >"$docker_repo_tmp" <<'EOF'
+[docker-ce-stable]
+name=Docker CE Stable - $basearch
+baseurl=https://download.docker.com/linux/fedora/$releasever/$basearch/stable
+enabled=0
+gpgcheck=1
+repo_gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-docker-ce
+EOF
+if ! cmp -s "$docker_repo_tmp" "$docker_repo_file"; then
+  install -m 0644 "$docker_repo_tmp" "$docker_repo_file"
+fi
+
+docker_version="$(manifest_version docker_ce)"
+containerd_version="$(manifest_version containerd_io)"
+docker_ce_expected="docker-ce 3 ${docker_version}"
+docker_cli_expected="docker-ce-cli 1 ${docker_version}"
+docker_rootless_expected="docker-ce-rootless-extras 0 ${docker_version}"
+containerd_expected="containerd.io 0 ${containerd_version}"
+docker_rpm_identity() {
+  rpm -q --queryformat '%{NAME} %{EPOCHNUM} %{VERSION}' "$1" \
+    2>/dev/null || true
+}
+docker_rpms_match_pins() {
+  [[ "$(docker_rpm_identity docker-ce)" == "$docker_ce_expected" ]] \
+    && [[ "$(docker_rpm_identity docker-ce-cli)" == "$docker_cli_expected" ]] \
+    && [[ "$(docker_rpm_identity docker-ce-rootless-extras)" \
+      == "$docker_rootless_expected" ]] \
+    && [[ "$(docker_rpm_identity containerd.io)" == "$containerd_expected" ]]
+}
+if ! docker_rpms_match_pins; then
+  dnf install -y --enablerepo=docker-ce-stable \
+    --setopt=install_weak_deps=False --setopt=tsflags=noscripts \
+    "docker-ce-3:${docker_version}" \
+    "docker-ce-cli-1:${docker_version}" \
+    "docker-ce-rootless-extras-${docker_version}" \
+    "containerd.io-${containerd_version}"
+  dnf clean all
+  rm -rf /var/cache/dnf
+fi
+if ! docker_rpms_match_pins; then
+  echo "devbox: Docker CE/containerd RPMs do not match the manifest pins" >&2
+  exit 1
+fi
+
+assert_rpm_owner() {
+  local path="$1" expected="$2" actual
+  actual="$(rpm -qf --queryformat '%{NAME}' "$path")" || {
+    echo "devbox: no RPM owns required Docker file $path" >&2
+    exit 1
+  }
+  if [[ "$actual" != "$expected" ]]; then
+    echo "devbox: $path is owned by $actual, expected $expected" >&2
+    exit 1
+  fi
+}
+assert_rpm_owner /usr/bin/docker docker-ce-cli
+assert_rpm_owner /usr/bin/dockerd docker-ce
+assert_rpm_owner /usr/bin/dockerd-rootless.sh docker-ce-rootless-extras
+assert_rpm_owner /usr/bin/containerd containerd.io
+if rpm -q podman-docker >/dev/null 2>&1; then
+  echo "devbox: refusing podman-docker; Docker must use Docker CE" >&2
+  exit 1
+fi
+
+# Never leave Docker's rootful system daemon/socket or system containerd active.
+# The supported daemon is started separately by the guest's rootless user unit.
+systemctl daemon-reload
+for unit in docker.service docker.socket containerd.service; do
+  if systemctl cat "$unit" >/dev/null 2>&1; then
+    systemctl disable --now "$unit"
+  fi
+done
+systemctl daemon-reload
 
 # Preserve Red Hat internal TLS trust for guest tools and integrations.
 # These pins are embedded in the VM at create time. A writable shared-checkout

@@ -44,6 +44,14 @@ _VERSION_COMMANDS: dict[str, tuple[Command, re.Pattern[str]]] = {
     "ast_grep": (("ast-grep", "--version"), re.compile(r"\bv?(\d+\.\d+\.\d+)\b")),
     "semble": (("semble", "--version"), re.compile(r"\bv?(\d+\.\d+\.\d+)\b")),
     "acli": (("acli", "--version"), re.compile(r"\b(\d+\.\d+\.\d+(?:-[\w.]+)?)\b")),
+    "docker_ce": (
+        ("docker", "--version"),
+        re.compile(r"\bDocker version v?(\d+\.\d+\.\d+)\b"),
+    ),
+    "containerd_io": (
+        ("containerd", "--version"),
+        re.compile(r"\bv?(\d+\.\d+\.\d+)\b"),
+    ),
     "google_workspace_cli": (
         ("gws", "--version"),
         re.compile(r"\bv?(\d+\.\d+\.\d+)\b"),

@@ -27,6 +27,10 @@ def _version_output(name: str, version: str) -> str:
         return f"kind v{version} go1.27.1 linux/amd64"
     if name == "node":
         return f"v{version}"
+    if name == "docker_ce":
+        return f"Docker version {version}, build 0000000"
+    if name == "containerd_io":
+        return f"containerd containerd v{version} deadbeef"
     if name == "pre_commit":
         return f"pre-commit {version}"
     if name in {"markdownlint_cli2", "opencode"}:
@@ -90,6 +94,40 @@ def test_lima_toolchain_check_reports_a_pinned_version_mismatch(
 
     assert any(
         "kind: installed version 0.0.1, expected 0.33.0" in error for error in errors
+    )
+
+
+@pytest.mark.unit
+def test_lima_toolchain_check_verifies_the_docker_ce_client_version(
+    repo_root: Path, tmp_path: Path
+):
+    manifest = _manifest(repo_root)
+    manifest_path = _write_manifest(tmp_path / "manifest.json", manifest)
+    expected_version = manifest["tools"]["docker_ce"]["version"]
+    runner = _successful_runner(manifest, {"docker_ce": "0.0.0"})
+
+    _, errors = check_toolchain(manifest_path, runner)
+
+    assert any(
+        f"docker_ce: installed version 0.0.0, expected {expected_version}" in error
+        for error in errors
+    )
+
+
+@pytest.mark.unit
+def test_lima_toolchain_check_verifies_containerd_version(
+    repo_root: Path, tmp_path: Path
+):
+    manifest = _manifest(repo_root)
+    manifest_path = _write_manifest(tmp_path / "manifest.json", manifest)
+    expected_version = manifest["tools"]["containerd_io"]["version"]
+    runner = _successful_runner(manifest, {"containerd_io": "0.0.0"})
+
+    _, errors = check_toolchain(manifest_path, runner)
+
+    assert any(
+        f"containerd_io: installed version 0.0.0, expected {expected_version}" in error
+        for error in errors
     )
 
 

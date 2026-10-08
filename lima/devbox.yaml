@@ -15,10 +15,10 @@
 # - The guest user mirrors the host user (same name and uid, Lima's
 #   default on Linux hosts), so files written through the mounts are
 #   owned by the host user.
-# - Lima's own boot scripts already provide the rootless-Podman base
+# - Lima's own boot scripts already provide the rootless-container base
 #   (/etc/subuid and /etc/subgid entries, cgroup delegation, linger);
-#   provisioning only installs Podman itself, and probe-readiness.sh
-#   verifies all of it.
+#   provisioning installs Docker CE and Podman independently, and
+#   probe-readiness.sh verifies both backends.
 
 # 2.1.3 is the floor for the CVE-2026-53657 guest-agent fix
 # (GHSA-2j9v-p4xj-cjw2). Everything this template uses exists in 2.1.3.
@@ -107,8 +107,8 @@ mounts:
     mountPoint: "{{.Home}}/.host-config/config/gws"
     writable: true
 
-# Podman (installed by provisioning) is the container runtime; disable
-# Lima's containerd so no docker/nerdctl machinery is installed.
+# Provision Docker CE and Podman explicitly; disable Lima's built-in
+# containerd so the selected runtime remains an explicit choice.
 containerd:
   system: false
   user: false
@@ -140,7 +140,7 @@ provision:
 
 probes:
   - mode: readiness
-    description: "full tools, operator profile, Podman, shared mounts"
+    description: "tools, operator profile, Docker CE, Podman, shared mounts"
     # Lima requires a probe's script to be embedded inline. Keep this copy in
     # sync with probe-readiness.sh; test_lima_template.py checks the match.
     script: |
@@ -163,8 +163,10 @@ probes:
       export SEMBLE_CACHE_LOCATION="$HOME/.cache/semble/index"
       export PLAYWRIGHT_BROWSERS_PATH="$TOOL_BUILDER_HOME/.cache/ms-playwright"
       export PLAYWRIGHT_MCP_BROWSER=chromium
-      DOCKER_HOST="unix:///run/user/$(id -u)/podman/podman.sock"
-      export DOCKER_HOST
+      DOCKER_SOCKET="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/docker.sock"
+      PODMAN_SOCKET="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock"
+      [[ "$DOCKER_SOCKET" != "$PODMAN_SOCKET" ]] \
+        || fail "Docker and Podman must use different API sockets"
 
       OPENCODE_TMP=/tmp/opencode
       OPENCODE_TMP_PROBE_DIR=""
@@ -262,9 +264,10 @@ probes:
         || fail "the system CA bundle is missing"
 
       for tool in \
-        acli agy cargo diff difft fd file ffmpeg gh glab gcloud gws \
+        acli agy cargo diff difft fd file ffmpeg docker gh glab gcloud gws \
         hadolint helm hyperfine jq just kind kubectl limactl make \
-        markdownlint-cli2 node npm npx opencode patch pipenv pip3 \
+        markdownlint-cli2 newgidmap newuidmap \
+        node npm npx opencode patch pipenv pip3 \
         playwright-cli podman pre-commit python3 qemu-img repomix rg \
         rustc rustup semble shellcheck tokei uv uvx
       do
@@ -317,12 +320,39 @@ probes:
       getent group kvm | grep -qw "$(id -un)" \
         || fail "the devbox user is not in the kvm group"
 
-      # Lima sets Podman subordinate IDs and cgroup delegation.
-      grep -q "^$(id -un):" /etc/subuid \
-        || fail "/etc/subuid has no entry for $(id -un)"
-      grep -q "^$(id -un):" /etc/subgid \
-        || fail "/etc/subgid has no entry for $(id -un)"
-      test -S "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock" \
+      # Lima sets subordinate IDs and cgroup delegation for rootless engines.
+      check_subordinate_ids() {
+        local file="$1"
+        awk -F: -v user="$(id -un)" \
+          '$1 == user { total += $3 } END { exit !(total >= 65536) }' "$file" \
+          || fail "$file has fewer than 65,536 subordinate IDs for $(id -un)"
+      }
+      check_subordinate_ids /etc/subuid
+      check_subordinate_ids /etc/subgid
+      systemctl --user is-enabled --quiet docker.service \
+        || fail "the rootless Docker user service is not enabled"
+      systemctl --user is-active --quiet docker.service \
+        || fail "the rootless Docker user service is not active"
+      if systemctl is-active --quiet docker.service \
+        || systemctl is-active --quiet docker.socket; then
+        fail "rootful Docker system services must remain inactive"
+      fi
+      if systemctl is-enabled --quiet docker.service \
+        || systemctl is-enabled --quiet docker.socket; then
+        fail "rootful Docker system services must remain disabled"
+      fi
+      if systemctl is-active --quiet containerd.service; then
+        fail "the rootful system containerd service must remain inactive"
+      fi
+      if systemctl is-enabled --quiet containerd.service; then
+        fail "the rootful system containerd service must remain disabled"
+      fi
+      if id -nG | tr ' ' '\n' | grep -qx docker; then
+        fail "the guest user must not be a member of the rootful docker group"
+      fi
+      test -S "$DOCKER_SOCKET" \
+        || fail "the rootless Docker socket is not available"
+      test -S "$PODMAN_SOCKET" \
         || fail "the rootless Podman API socket is not available"
       [[ "$(stat -fc %T /sys/fs/cgroup)" == cgroup2fs ]] \
         || fail "the VM is not using cgroup v2"
@@ -351,10 +381,30 @@ probes:
       fd_limit="$(systemctl show -p LimitNOFILE --value "$user_service")"
       [[ "$fd_limit" == 1048576 ]] \
         || fail "user service NOFILE limit is $fd_limit"
+      if ! docker_version_json="$(
+        curl --fail --silent --show-error --max-time 5 \
+          --unix-socket "$DOCKER_SOCKET" http://d/version 2>/dev/null
+      )"; then
+        fail "the Docker CE API at $DOCKER_SOCKET is not responding"
+      fi
+      if ! docker_server_version="$(
+        jq -er '.Version' <<<"$docker_version_json"
+      )"; then
+        fail "the Docker CE API did not report a server version"
+      fi
+      if ! expected_docker_version="$(
+        jq -er '.tools.docker_ce.version | sub("^v"; "")' \
+          /etc/devbox/tool-versions.json
+      )"; then
+        fail "the Docker CE version pin is missing from the tool manifest"
+      fi
+      [[ "$docker_server_version" == "$expected_docker_version" ]] \
+        || fail "Docker server is $docker_server_version; "\
+          "expected Docker CE $expected_docker_version"
       curl --fail --silent --show-error --max-time 5 \
-        --unix-socket "${DOCKER_HOST#unix://}" http://d/_ping 2>/dev/null \
+        --unix-socket "$PODMAN_SOCKET" http://d/_ping 2>/dev/null \
         | grep -qx OK \
-        || fail "the Podman Docker-compatible API is not responding"
+        || fail "the separate rootless Podman API is not responding"
 
       # Mounts use virtiofs or the documented 9p fallback. Host-shared paths sit
       # behind root-owned parents traversable only by the guest UID.

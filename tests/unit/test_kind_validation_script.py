@@ -1,3 +1,4 @@
+import os
 import subprocess
 from pathlib import Path
 
@@ -14,7 +15,8 @@ def test_kind_validation_script_runs_ten_create_delete_cycles(
     kind = fake_bin / "kind"
     kind.write_text(
         "#!/usr/bin/env bash\n"
-        'printf \'%s\\n\' "$*" >> "$KIND_LOG"\n'
+        'printf \'%s |%s|%s\\n\' "$*" "${DOCKER_HOST:-}" '
+        '"${KIND_EXPERIMENTAL_PROVIDER:-}" >> "$KIND_LOG"\n'
         'if [[ "${FAIL_CREATE:-}" == 1 && "$1 $2" == \'create cluster\' ]]; then\n'
         "  exit 1\n"
         "fi\n"
@@ -30,7 +32,7 @@ def test_kind_validation_script_runs_ten_create_delete_cycles(
     env = {
         "PATH": f"{fake_bin}:/usr/bin:/bin",
         "KIND_LOG": str(log_path),
-        "DOCKER_HOST": "unix:///tmp/podman.sock",
+        "DOCKER_HOST": f"unix:///run/user/{os.getuid()}/docker.sock",
     }
 
     result = subprocess.run(
@@ -47,6 +49,8 @@ def test_kind_validation_script_runs_ten_create_delete_cycles(
     creates = [line for line in calls if line.startswith("create cluster")]
     deletes = [line for line in calls if line.startswith("delete cluster")]
     assert len(creates) == len(deletes) == 10
+    expected_docker_host = f"unix:///run/user/{os.getuid()}/docker.sock"
+    assert all(call.endswith(f"|{expected_docker_host}|docker") for call in calls)
     create_names = [line.split("--name ", 1)[1].split()[0] for line in creates]
     delete_names = [line.split("--name ", 1)[1].split()[0] for line in deletes]
     assert create_names == delete_names
@@ -71,6 +75,39 @@ def test_kind_validation_script_runs_ten_create_delete_cycles(
     assert all_create_names[10] not in all_create_names[:10]
     assert all_delete_names[10] == all_create_names[10]
 
+    podman_run = subprocess.run(
+        ["bash", str(repo_root / "lima/validate-kind.sh"), "1"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**env, "KIND_EXPERIMENTAL_PROVIDER": "podman"},
+        timeout=10,
+    )
+
+    assert podman_run.returncode == 0, podman_run.stderr
+    podman_call = log_path.read_text().splitlines()[-2]
+    expected_podman_host = f"unix:///run/user/{os.getuid()}/podman/podman.sock"
+    assert podman_call.startswith("create cluster")
+    assert podman_call.endswith(f"|{expected_podman_host}|podman")
+
+    runtime_dir = str(tmp_path / "xdg-runtime")
+    custom_runtime_run = subprocess.run(
+        ["bash", str(repo_root / "lima/validate-kind.sh"), "1"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            **env,
+            "KIND_EXPERIMENTAL_PROVIDER": "docker",
+            "XDG_RUNTIME_DIR": runtime_dir,
+        },
+        timeout=10,
+    )
+
+    assert custom_runtime_run.returncode == 0, custom_runtime_run.stderr
+    custom_runtime_call = log_path.read_text().splitlines()[-2]
+    assert custom_runtime_call.endswith(f"|unix://{runtime_dir}/docker.sock|docker")
+
 
 @pytest.mark.unit
 def test_kind_validation_script_rejects_an_invalid_run_count(repo_root: Path):
@@ -85,3 +122,21 @@ def test_kind_validation_script_rejects_an_invalid_run_count(repo_root: Path):
 
     assert result.returncode == 2
     assert "usage:" in result.stderr
+
+
+@pytest.mark.unit
+def test_kind_validation_script_rejects_unsupported_provider(repo_root: Path):
+    result = subprocess.run(
+        ["bash", str(repo_root / "lima/validate-kind.sh"), "1"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "KIND_EXPERIMENTAL_PROVIDER": "docker-desktop",
+        },
+        timeout=10,
+    )
+
+    assert result.returncode == 2
+    assert "unsupported kind provider 'docker-desktop'" in result.stderr

@@ -137,7 +137,15 @@ def test_checksum_managed_tool_set_is_an_explicit_v1_policy(repo_root: Path):
 
     assert checksum_managed == _CHECKSUM_MANAGED_TOOLS
     assert manifest["tools"]["ast_grep"]["agent_skill"]["integrity"] == "sha256"
-    for tool in ("node", "go", "rustup", "helm", "kubectl"):
+    for tool in (
+        "node",
+        "go",
+        "rustup",
+        "helm",
+        "kubectl",
+        "docker_ce",
+        "containerd_io",
+    ):
         assert manifest["tools"][tool]["integrity"] == "version-only"
         assert "artifacts" not in manifest["tools"][tool]
 
