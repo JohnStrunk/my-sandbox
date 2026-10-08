@@ -17,8 +17,8 @@
 #   owned by the host user.
 # - Lima's own boot scripts already provide the rootless-container base
 #   (/etc/subuid and /etc/subgid entries, cgroup delegation, linger);
-#   provisioning installs Docker CE and Podman independently, and
-#   probe-readiness.sh verifies both backends.
+#   provisioning installs Docker CE, Podman, and the libvirt/KVM2 backend
+#   independently, and probe-readiness.sh verifies their distinct endpoints.
 
 # 2.1.3 is the floor for the CVE-2026-53657 guest-agent fix
 # (GHSA-2j9v-p4xj-cjw2). Everything this template uses exists in 2.1.3.
@@ -34,7 +34,8 @@ minimumLimaVersion: "2.1.3"
 vmType: "qemu"
 nestedVirtualization: true
 
-# Headroom for L2 test VMs and kind clusters (issue asks for 6-8 CPUs).
+# Headroom for L2 test VMs, kind clusters, and Minikube KVM2.
+# Keep 6-8 CPUs available for the host-side development workload.
 cpus: 8
 memory: "16GiB"
 disk: "100GiB"
@@ -140,7 +141,7 @@ provision:
 
 probes:
   - mode: readiness
-    description: "tools, operator profile, Docker CE, Podman, shared mounts"
+    description: "tools, Docker CE, Podman, Minikube KVM2, shared mounts"
     # Lima requires a probe's script to be embedded inline. Keep this copy in
     # sync with probe-readiness.sh; test_lima_template.py checks the match.
     script: |
@@ -265,11 +266,11 @@ probes:
 
       for tool in \
         acli agy cargo diff difft fd file ffmpeg docker gh glab gcloud gws \
-        hadolint helm hyperfine jq just kind kubectl limactl make \
+        hadolint helm hyperfine jq just kind kubectl limactl make minikube \
         markdownlint-cli2 newgidmap newuidmap \
         node npm npx opencode patch pipenv pip3 \
         playwright-cli podman pre-commit python3 qemu-img repomix rg \
-        rustc rustup semble shellcheck tokei uv uvx
+        rustc rustup semble shellcheck tokei uv uvx virsh virt-host-validate
       do
         command -v "$tool" >/dev/null 2>&1 || fail "$tool is not installed"
       done
@@ -319,6 +320,26 @@ probes:
       esac
       getent group kvm | grep -qw "$(id -un)" \
         || fail "the devbox user is not in the kvm group"
+      getent group libvirt | grep -qw "$(id -un)" \
+        || fail "the devbox user is not in the libvirt group "\
+          "required for Minikube KVM2"
+      systemctl is-enabled --quiet virtqemud.socket \
+        || fail "the libvirt QEMU socket is not enabled"
+      systemctl is-active --quiet virtqemud.socket \
+        || fail "the libvirt QEMU socket is not active"
+      systemctl is-enabled --quiet virtnetworkd.socket \
+        || fail "the libvirt network socket is not enabled"
+      systemctl is-active --quiet virtnetworkd.socket \
+        || fail "the libvirt network socket is not active"
+      virsh -c qemu:///system list --all >/dev/null 2>&1 \
+        || fail "the guest user cannot access the system libvirt QEMU API"
+      virsh -c qemu:///system net-list --all >/dev/null 2>&1 \
+        || fail "the system libvirt network API is unavailable"
+      if ! virt_host_validation="$(virt-host-validate qemu 2>&1)"; then
+        printf '%s\n' "$virt_host_validation" >&2
+        fail "libvirt cannot use nested KVM; check /dev/kvm "\
+          "and host virtualization"
+      fi
 
       # Lima sets subordinate IDs and cgroup delegation for rootless engines.
       check_subordinate_ids() {

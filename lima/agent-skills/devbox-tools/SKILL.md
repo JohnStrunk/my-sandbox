@@ -195,10 +195,8 @@ shared repository `AGENTS.md` or README.
   uses the Docker CLI and the default Docker CE `DOCKER_HOST`.
 - Docker and Podman do not share image, container, or network state; repull or
   explicitly save/load an image when switching runtimes.
-- Minikube's Docker and Podman drivers are distinct modes. Once Minikube is
-  provisioned by #318, use `--driver=docker` for Docker CE and `--driver=podman`
-  for Podman. Neither mode falls back to the other; strict recurring matrix
-  coverage is tracked in #319.
+- Minikube's Docker, Podman, and KVM2 drivers are distinct modes; see the
+  Minikube entry below. No driver automatically falls back to another.
 - To troubleshoot Docker, inspect `systemctl --user status docker.service`,
   `journalctl --user -u docker.service`, and the distinct Docker/Podman socket
   paths. The Docker service is enabled for VM boot through user lingering.
@@ -217,6 +215,57 @@ shared repository `AGENTS.md` or README.
   and raises user-service task/inotify limits for nested Kubernetes workloads.
 - Runtime and version-check coverage is in `tests/unit/test_lima_toolchain.py`
   and `tests/unit/test_lima_template.py`.
+
+### Minikube in Lima
+
+- Runtime command: `minikube` v1.39.0, pinned with SHA-256 per architecture.
+  Use it when a project needs a Minikube cluster or Minikube-specific driver
+  behavior; select the backend explicitly.
+- Docker CE (the backend from #188, not Podman's socket):
+  `minikube start --driver=docker`.
+- Rootless Podman (per Minikube's documented setup):
+  `minikube config set rootless true`, then:
+
+  ```shell
+  minikube start \
+    --driver=podman \
+    --container-runtime=containerd \
+    --cpus=2 \
+    --memory=4096
+  ```
+
+- Keep SELinux enforcing. Provisioning applies container-selinux contexts to the
+  rootless Podman graphroot so containers can execute; do not work around a
+  labeling issue by disabling SELinux.
+- KVM2 is the supported Linux/Lima nested-VM driver on x86_64. The provisioner
+  installs `libvirt-daemon-kvm`, `libvirt-daemon-config-network`, and
+  `libvirt-client`, enables `virtqemud.socket` and `virtnetworkd.socket`, and
+  adds the guest user to `kvm` and `libvirt`. It needs `/dev/kvm` with nested
+  VMX/SVM, `qemu-kvm`, and working system libvirt. The `libvirt` group is
+  root-equivalent for VM management inside the guest; only the trusted devbox
+  user is added. Start explicitly with containerd:
+
+  ```shell
+  minikube start \
+    --driver=kvm2 \
+    --container-runtime=containerd \
+    --cpus=2 \
+    --memory=4096
+  ```
+
+- The Podman and KVM2 test profiles each use 2 CPUs/4 GiB and run sequentially;
+  leave L1 headroom (Lima is configured for 8 CPUs/16 GiB). KVM2 additionally
+  consumes L2 guest resources. There is no automatic backend fallback.
+- For a provisioned-VM smoke, run `lima/validate-minikube.sh podman` or
+  `lima/validate-minikube.sh kvm2`. It uses private `MINIKUBE_HOME` and
+  `KUBECONFIG`; `devbox-minikube-<mode>-` is reserved for these profiles, and a
+  stale matching resource blocks a new run for cleanup.
+- If `minikube` is missing, use the existing kind/kubectl workflow or skip
+  Minikube-specific work; do not substitute a different Minikube driver. The
+  provisioned-VM tests check that the runtime is present and this skill entry
+  is discoverable. Minikube v1.39.0 can log a nonfatal Podman KIC cache warning
+  before pulling the image (upstream #8426); keep the warning visible and
+  verify the cluster reaches Ready and runs a workload.
 
 ### Release artifact inspection
 

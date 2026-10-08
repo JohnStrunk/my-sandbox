@@ -64,6 +64,14 @@
       "minimumGroupSize": 3,
     },
     {
+      "description": "Group Minikube version and architecture artifact updates",
+      "matchPackageNames": [
+        "kubernetes/minikube",
+      ],
+      "groupName": "minikube release artifacts",
+      "minimumGroupSize": 3,
+    },
+    {
       "description": "Group ast-grep version and architecture artifact updates",
       "matchPackageNames": [
         "ast-grep/ast-grep",

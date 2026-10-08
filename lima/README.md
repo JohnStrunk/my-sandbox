@@ -494,10 +494,56 @@ distinct.
 The strict kind/Minikube driver matrix is tracked in
 [#319](https://github.com/JohnStrunk/my-sandbox/issues/319), and Minikube
 provisioning is tracked in
-[#318](https://github.com/JohnStrunk/my-sandbox/issues/318).
-Their Docker cases must explicitly select the Docker driver/provider and use
-this Docker CE endpoint; their Podman cases select Podman directly. No case may
-silently substitute one backend for the other.
+[#318](https://github.com/JohnStrunk/my-sandbox/issues/318). Select each
+backend explicitly; no case may silently substitute one for another.
+
+### Minikube backends (issues #318 and #319)
+
+Minikube **v1.39.0** is the SHA-256-pinned release for #318. For
+Linux/Lima nested-VM use, **KVM2** is the supported driver (Minikube's Linux
+documentation calls it the preferred driver); QEMU is not the selected
+Minikube VM mode. Provisioning installs
+`libvirt-daemon-kvm`, `libvirt-daemon-config-network`, and `libvirt-client`,
+enables `virtqemud.socket` and `virtnetworkd.socket`, and adds the guest user to
+the `kvm` and `libvirt` groups. `libvirt` membership is effectively
+root-equivalent for VM management inside the guest; only the trusted devbox
+user is added. It does not grant host privileges, and should be reconsidered
+if the guest user's existing sudo access is ever restricted.
+
+Minikube v1.39 KVM2 is supported on x86_64 only and requires `/dev/kvm`, nested
+VMX/SVM, `qemu-kvm`, and working system libvirt. Select the intended backend:
+
+```shell
+# Docker CE backend from #188; this is not the Podman API socket.
+minikube start --driver=docker
+
+# Rootless Podman, following Minikube's documented setup.
+minikube config set rootless true
+minikube start --driver=podman --container-runtime=containerd --cpus=2 --memory=4096
+
+# Nested VM through KVM2.
+minikube start --driver=kvm2 --container-runtime=containerd --cpus=2 --memory=4096
+```
+
+Minikube does not automatically fall back between backends. Docker and Podman
+run clusters as containers in the L1; KVM2 creates an L2 VM and has additional
+guest overhead. Podman and KVM2 test profiles each request 2 CPUs and 4 GiB of
+memory and run sequentially. The Lima L1 is configured for 8 CPUs and 16 GiB;
+leave enough resources for the L1 and its other workloads rather than running
+both profiles concurrently. The Lima provisioner applies the container-selinux
+labels to rootless Podman's graphroot; keep SELinux enforcing. The #318 smoke
+validator covers Podman and KVM2, while #319 owns the recurring full driver
+matrix. Minikube may log an E1008 cache warning for upstream #8426 before it
+pulls the KIC base image; the warning is nonfatal, and the smoke verifies a
+Ready node and running workload.
+
+Run `lima/validate-minikube.sh podman` or
+`lima/validate-minikube.sh kvm2` for the corresponding isolated smoke. The
+validator reserves the `devbox-minikube-<mode>-` resource-name prefix and
+refuses to start if an interrupted run left matching containers, volumes,
+networks, or VMs behind. Recreate pre-#318 VMs to apply the Minikube and
+libvirt provisioning; until then, `devbox-toolchain-check` reports Minikube as
+missing. `--reprovision` does not replace the embedded system provisioner.
 
 Changes to embedded provisioning scripts or `lima/devbox.yaml` require
 [recreating the VM](#recreating-the-vm). A manifest-only Docker version bump is
@@ -789,12 +835,14 @@ integration work.
 - **Manifest-pinned tools**: OpenCode, Go + `devbox-go`, uv, Rust, Node/npm,
   Playwright CLI + bundled Chromium, ast-grep + its skills, Semble + prefetched
   model, Repomix, Hadolint, markdownlint-cli2, pre-commit, acli, Google
-  Workspace CLI, Antigravity CLI, kind, kubectl, Helm, and Pipenv. Assets
+  Workspace CLI, Antigravity CLI, kind, Minikube v1.39.0,
+  kubectl, Helm, and Pipenv. Assets
   declaring SHA-256 integrity are verified before installation; version-only
   assets are fetched over HTTPS at their exact pinned versions without a
   manifest-level digest check.
-- **Operator profile**: GNU make, kind, kubectl, Helm, Python/pip, Pipenv, and
-  a VM-local `~/.local/share/kubebuilder-envtest` asset-store location.
+- **Operator profile**: GNU make, kind, Minikube v1.39.0, kubectl, Helm,
+  Python/pip, Pipenv, and a VM-local `~/.local/share/kubebuilder-envtest`
+  asset-store location.
 - **Additional CLIs/utilities**: `gh`, `glab`, `gcloud`, `gws`, ShellCheck,
   `tokei`, `just`, `difft`, `hyperfine`, `fd`, `file`, `diff`, and `patch`.
 - **Red Hat internal TLS trust**: three CA roots are SHA-256 pinned in the
@@ -817,10 +865,10 @@ The manifest explicitly marks each downloaded tool or skill `sha256` or
 `version-only`. Docker CE and containerd use version-only manifest pins, with
 their official RPM packages signature-checked by DNF against the pinned Docker
 key. Checksum-managed releases are
-**Hadolint**, **uv**, **Antigravity CLI**, **limactl**, **kind**, the
-**ast-grep release binaries**, and **acli**. Each has separate amd64 and arm64
-records; their exact upstream versions and SHA-256 values are verified before
-installation. The top-level
+**Hadolint**, **uv**, **Antigravity CLI**, **limactl**, **kind**, **Minikube**,
+the **ast-grep release binaries**, and **acli**. Each has separate amd64 and
+arm64 records; their exact upstream versions and SHA-256 values are verified
+before installation. The top-level
 `version` remains the provisioning alias, and the validator requires both
 artifact versions to normalize to it. The ast-grep agent-skill archive is also
 verified against its pinned commit's SHA-256.

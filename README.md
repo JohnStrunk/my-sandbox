@@ -69,10 +69,10 @@ The full toolchain is provisioned from
 [`lima/tool-versions.json`](lima/tool-versions.json) and includes OpenCode, Go,
 Rust, Node.js, Python/uv, Playwright, ast-grep,
 Semble, Repomix, cloud and productivity CLIs, linters, and release inspection
-utilities. The VM also includes GNU make, kind, kubectl, Helm, Pipenv, and a
-VM-local setup-envtest asset-store location. Use `devbox-toolchain-check` to
-compare installed tool versions with the manifest and `devbox-go --doctor` to
-see a Go project's selected toolchain.
+utilities. The VM also includes GNU make, kind, Minikube v1.39.0, kubectl, Helm,
+Pipenv, and a VM-local setup-envtest asset-store location. Use
+`devbox-toolchain-check` to compare installed tool versions with the manifest
+and `devbox-go --doctor` to see a Go project's selected toolchain.
 
 The VM-owned agent capability catalog is staged at
 `~/.agents/skills/devbox-tools/SKILL.md` inside the guest. The VM generates an
@@ -160,6 +160,13 @@ credential mounts.
   uv run --extra test pytest -m recursive
 ```
 
+Minikube v1.39.0 is pinned for #318. Its Docker CE,
+rootless-Podman, and KVM2 modes require explicit driver selection; the Podman
+and KVM2 test profiles each use 2 CPUs/4 GiB and run sequentially within the
+8-CPU/16-GiB Lima L1. Read the [Minikube driver and resource
+notes](lima/README.md#minikube-backends-issues-318-and-319). The #319
+end-to-end test covers the driver matrix; no result is claimed here.
+
 The per-user lock serializes full test commands across worktrees. Full
 `fast-check` runs include signal/process-group regression tests that timed out
 when run concurrently, so use the lock shown above; targeted parallel-safe
@@ -190,8 +197,8 @@ python3 scripts/verify_provenance.py
 ```
 
 Every tool and downloaded agent skill in the manifest declares an explicit
-`integrity` policy: `sha256` or `version-only`. The seven checksum-managed
-release binaries—Hadolint, uv, Antigravity CLI, Lima, kind, ast-grep, and
+`integrity` policy: `sha256` or `version-only`. The checksum-managed release
+binaries—Hadolint, uv, Antigravity CLI, Lima, kind, Minikube, ast-grep, and
 Atlassian CLI (`acli`)—have separate amd64/arm64 artifact records with exact
 upstream versions and SHA-256 digests. Renovate's regex manager models GitHub
 release assets as `github-release-attachments` dependencies. For acli, separate

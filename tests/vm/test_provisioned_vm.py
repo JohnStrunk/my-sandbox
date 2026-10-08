@@ -211,6 +211,29 @@ fi
 
 
 @pytest.mark.vm
+def test_minikube_podman_backend_runs_inside_the_provisioned_vm(
+    devbox_vm: LimaVM,
+):
+    validator = shlex.quote(f"{devbox_vm.repo_path}/lima/validate-minikube.sh")
+    home = shlex.quote(devbox_vm.guest_home)
+    command = f"export HOME={home}; bash {validator} podman"
+    result = devbox_vm.run(
+        ["bash", "-ceu", command],
+        timeout=1800,
+        use_guest_runtime=True,
+    )
+
+    assert result.returncode == 0, (
+        "The required rootless-Podman Minikube backend failed its preflight or "
+        "cluster/workload smoke test. Check the validator's actionable "
+        "diagnostic; this backend test is not skipped when dependencies are "
+        "missing.\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert "minikube validation passed: podman" in result.stdout
+
+
+@pytest.mark.vm
 def test_fresh_vm_fingerprint_matches_the_current_checkout(
     repo_root: Path, devbox_vm: LimaVM
 ):
@@ -256,12 +279,26 @@ def test_fresh_vm_fingerprint_matches_the_current_checkout(
 @pytest.mark.vm
 def test_project_utility_commands_are_discoverable(devbox_vm: LimaVM):
     command = (
-        'for tool in devbox-go diff file patch podman; do command -v "$tool"; done'
+        "for tool in devbox-go diff file minikube patch podman virsh "
+        'virt-host-validate; do command -v "$tool"; done'
     )
     result = devbox_vm.run(["bash", "-ceu", command], timeout=60)
 
     assert result.returncode == 0, (
         "VM-provisioned project utilities are unavailable.\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+
+
+@pytest.mark.vm
+def test_minikube_agent_guidance_is_staged(devbox_vm: LimaVM):
+    skill_path = f"{devbox_vm.guest_home}/.agents/skills/devbox-tools/SKILL.md"
+    result = devbox_vm.run(
+        ["grep", "-F", "-q", "### Minikube in Lima", skill_path], timeout=60
+    )
+
+    assert result.returncode == 0, (
+        "The VM-owned devbox-tools skill does not expose Minikube guidance.\n"
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
 
