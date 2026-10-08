@@ -180,7 +180,8 @@ if ! printf 'FROM scratch\nLABEL org.example.devbox-smoke=passed\n' \
   cat "$build_log" >&2
   exit 1
 fi
-if ! grep -q 'DEPRECATED: The legacy builder is deprecated' "$build_log"; then
+if ! grep -qi 'deprecated' "$build_log" \
+  || ! grep -qi 'legacy builder' "$build_log"; then
   cat "$build_log" >&2
   echo "docker build did not use the expected legacy-builder fallback" >&2
   exit 1

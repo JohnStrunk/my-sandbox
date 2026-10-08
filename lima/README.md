@@ -433,7 +433,9 @@ scriptlets as root. Docker CE is not a Podman alias, wrapper, or `podman-docker`
 package.
 The `containerd_io` pin follows the containerd version packaged by Docker; its
 Renovate updates are disabled until Docker publishes a matching Fedora RPM for
-both supported architectures.
+both supported architectures. A unit-test allowlist also blocks a Docker-only
+pin bump; when updating either version, verify all four RPMs for Fedora 44
+x86_64 and aarch64, then update both pins and the reviewed pair together.
 
 Rootless mode requires `newuidmap`/`newgidmap`, cgroup v2, and at least 65,536
 subordinate UIDs and GIDs. Lima supplies the subordinate-ID ranges and cgroup

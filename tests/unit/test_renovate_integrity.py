@@ -411,6 +411,20 @@ def test_docker_ce_renovate_pin_normalizes_moby_release_tags(repo_root: Path):
 
 
 @pytest.mark.unit
+def test_docker_engine_and_containerd_rpm_pair_requires_review(repo_root: Path):
+    manifest = json.loads((repo_root / "lima" / "tool-versions.json").read_text())
+    tools = manifest["tools"]
+    pinned_pair = (tools["docker_ce"]["version"], tools["containerd_io"]["version"])
+    reviewed_pairs = {("29.8.2", "2.3.6")}
+
+    assert pinned_pair in reviewed_pairs, (
+        "Review Docker Fedora 44 stable RPM metadata for x86_64 and aarch64, "
+        "then update docker_ce, containerd_io, and this approved version pair "
+        f"together; got {pinned_pair!r}"
+    )
+
+
+@pytest.mark.unit
 def test_acli_uses_scoped_timestamp_exception(repo_root: Path):
     """Check both base and candidate states; CI verifies live artifact bytes.
 

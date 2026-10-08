@@ -103,12 +103,13 @@ def test_lima_toolchain_check_verifies_the_docker_ce_client_version(
 ):
     manifest = _manifest(repo_root)
     manifest_path = _write_manifest(tmp_path / "manifest.json", manifest)
-    runner = _successful_runner(manifest, {"docker_ce": "29.8.0"})
+    expected_version = manifest["tools"]["docker_ce"]["version"]
+    runner = _successful_runner(manifest, {"docker_ce": "0.0.0"})
 
     _, errors = check_toolchain(manifest_path, runner)
 
     assert any(
-        "docker_ce: installed version 29.8.0, expected 29.8.2" in error
+        f"docker_ce: installed version 0.0.0, expected {expected_version}" in error
         for error in errors
     )
 
@@ -119,12 +120,13 @@ def test_lima_toolchain_check_verifies_containerd_version(
 ):
     manifest = _manifest(repo_root)
     manifest_path = _write_manifest(tmp_path / "manifest.json", manifest)
-    runner = _successful_runner(manifest, {"containerd_io": "2.3.5"})
+    expected_version = manifest["tools"]["containerd_io"]["version"]
+    runner = _successful_runner(manifest, {"containerd_io": "0.0.0"})
 
     _, errors = check_toolchain(manifest_path, runner)
 
     assert any(
-        "containerd_io: installed version 2.3.5, expected 2.3.6" in error
+        f"containerd_io: installed version 0.0.0, expected {expected_version}" in error
         for error in errors
     )
 
