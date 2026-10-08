@@ -1,6 +1,7 @@
 import getpass
 import json
 import os
+import shutil
 import signal
 import stat
 import subprocess
@@ -94,7 +95,7 @@ case "${1:-}" in
       printf '%s' "$MOCK_VM_FINGERPRINT_AFTER_START" >"$MOCK_VM_FINGERPRINT_FILE"
     fi
     ;;
-  stop|factory-reset)
+  stop)
     fail_if_requested "$1"
     printf 'Stopped' >"$MOCK_LIMA_STATUS_FILE"
     ;;
@@ -177,6 +178,10 @@ esac
 
 def _read_lima_calls(calls: Path) -> list[list[str]]:
     return [json.loads(line) for line in calls.read_text().splitlines()]
+
+
+def _mount_checkout_as_src(repo_root: Path, env: dict[str, str]) -> None:
+    (Path(env["HOME"]) / "src").symlink_to(repo_root.parent, target_is_directory=True)
 
 
 def _interrupt_blocked_delete(
@@ -623,29 +628,102 @@ def test_running_vm_warns_when_provisioning_fingerprint_is_stale(
 
     assert result.returncode == 0, result.stderr
     assert "provisioning is stale" in result.stderr
-    assert "devbox --reprovision" in result.stderr
+    assert "devbox --stop" in result.stderr
+    assert "devbox --recreate" in result.stderr
 
 
 @pytest.mark.unit
-def test_reprovision_clears_manifest_fingerprint_warning(
-    devbox_path: Path,
+@pytest.mark.parametrize("action", ["reset", "reprovision"])
+def test_internal_dispatcher_rejects_retired_lifecycle_actions(
     repo_root: Path,
     isolated_env: dict[str, str],
     project_dir: Path,
     tmp_path: Path,
+    action: str,
 ):
     calls, _ = _install_lima_shim(tmp_path, isolated_env)
+
+    result = run_bash_script(
+        repo_root / "lima/devbox",
+        [action],
+        cwd=project_dir,
+        env=isolated_env,
+        timeout=15,
+    )
+
+    assert result.returncode == 2
+    assert f"unknown action '{action}'" in result.stderr
+    assert not calls.exists()
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("protected", [True, False])
+def test_recreate_replaces_vm_from_current_checkout_and_provisions_fresh(
+    devbox_path: Path,
+    repo_root: Path,
+    isolated_env: dict[str, str],
+    tmp_path: Path,
+    protected: bool,
+):
+    _mount_checkout_as_src(repo_root, isolated_env)
+    calls, _ = _install_lima_shim(tmp_path, isolated_env, protected=protected)
     isolated_env["MOCK_VM_FINGERPRINT_AFTER_START"] = (
         expected_lima_provisioning_fingerprint(repo_root)
     )
 
     result = run_bash_script(
-        devbox_path, ["--reprovision"], cwd=project_dir, env=isolated_env, timeout=15
+        devbox_path, ["--recreate"], cwd=repo_root, env=isolated_env, timeout=15
     )
 
     assert result.returncode == 0, result.stderr
-    assert "provisioning is stale" not in result.stderr
-    assert _read_lima_calls(calls)[-1][0] == "shell"
+    logged = _read_lima_calls(calls)
+    expected_operations = ["list", "list"]
+    if protected:
+        expected_operations.append("unprotect")
+    expected_operations.extend(["delete", "start", "shell"])
+    assert tuple(call[0] for call in logged) == tuple(expected_operations)
+    create_call = next(call for call in logged if call[0] == "start")
+    assert create_call[:4] == ["start", "--yes", "--name", "devbox"]
+    assert str(repo_root / "lima/devbox.yaml") in create_call
+    assert "--workdir" in logged[-1]
+    if protected:
+        assert "fresh Lima VM devbox is unprotected" in result.stderr
+        assert "limactl protect devbox" in result.stderr
+    else:
+        assert "is unprotected" not in result.stderr
+
+    follow_up = run_bash_script(
+        devbox_path, ["true"], cwd=repo_root, env=isolated_env, timeout=15
+    )
+
+    assert follow_up.returncode == 0, follow_up.stderr
+    assert "provisioning is stale" not in follow_up.stderr
+
+
+@pytest.mark.unit
+def test_recreate_creates_missing_vm_from_active_checkout(
+    devbox_path: Path,
+    repo_root: Path,
+    isolated_env: dict[str, str],
+    tmp_path: Path,
+):
+    _mount_checkout_as_src(repo_root, isolated_env)
+    calls, _ = _install_lima_shim(tmp_path, isolated_env, status="")
+
+    result = run_bash_script(
+        devbox_path, ["--recreate"], cwd=repo_root, env=isolated_env, timeout=15
+    )
+
+    assert result.returncode == 0, result.stderr
+    logged = _read_lima_calls(calls)
+    assert tuple(call[0] for call in logged) == ("list", "start", "shell")
+    create_call = logged[1]
+    assert create_call[:4] == ["start", "--yes", "--name", "devbox"]
+    assert str(repo_root / "lima/devbox.yaml") in create_call
+    assert f"RepoPath={repo_root}" in create_call
+    assert "--workdir" in logged[-1]
+    assert logged[-1][-1] == "devbox"
+    assert "is unprotected" not in result.stderr
 
 
 @pytest.mark.unit
@@ -666,12 +744,10 @@ def test_launcher_rejects_a_directory_outside_lima_mounts(
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("action", ["--reset", "--reprovision"])
-def test_lifecycle_command_rejects_unmapped_workdir_before_action(
+def test_recreate_rejects_unmapped_workdir_before_deleting_vm(
     devbox_path: Path,
     isolated_env: dict[str, str],
     tmp_path: Path,
-    action: str,
 ):
     outside = tmp_path / "outside"
     outside.mkdir()
@@ -679,7 +755,7 @@ def test_lifecycle_command_rejects_unmapped_workdir_before_action(
 
     result = run_bash_script(
         devbox_path,
-        [action, "--", "true"],
+        ["--recreate", "--", "true"],
         cwd=outside,
         env=isolated_env,
         timeout=15,
@@ -691,7 +767,7 @@ def test_lifecycle_command_rejects_unmapped_workdir_before_action(
 
 
 @pytest.mark.unit
-def test_reset_without_command_does_not_validate_workdir_or_launch_a_shell(
+def test_recreate_without_command_validates_workdir_before_deleting_vm(
     devbox_path: Path,
     isolated_env: dict[str, str],
     tmp_path: Path,
@@ -701,17 +777,61 @@ def test_reset_without_command_does_not_validate_workdir_or_launch_a_shell(
     calls, _ = _install_lima_shim(tmp_path, isolated_env)
 
     result = run_bash_script(
-        devbox_path, ["--reset"], cwd=outside, env=isolated_env, timeout=15
+        devbox_path, ["--recreate"], cwd=outside, env=isolated_env, timeout=15
     )
 
-    assert result.returncode == 0, result.stderr
-    logged = _read_lima_calls(calls)
-    assert tuple(call[0] for call in logged) == (
-        "list",
-        "factory-reset",
-        "list",
-        "start",
+    assert result.returncode != 0
+    assert "outside the paths mounted in Lima" in result.stderr
+    assert not calls.exists()
+
+
+@pytest.mark.unit
+def test_recreate_rejects_checkout_outside_src_before_lima_calls(
+    devbox_path: Path,
+    isolated_env: dict[str, str],
+    tmp_path: Path,
+):
+    mapped_src = Path(isolated_env["HOME"]) / "src"
+    workdir = mapped_src / "project"
+    workdir.mkdir(parents=True)
+    calls, _ = _install_lima_shim(tmp_path, isolated_env)
+
+    result = run_bash_script(
+        devbox_path, ["--recreate"], cwd=workdir, env=isolated_env, timeout=15
     )
+
+    assert result.returncode != 0
+    assert "checkout must be under" in result.stderr
+    assert not calls.exists()
+
+
+@pytest.mark.unit
+def test_recreate_rejects_missing_checkout_template_before_lima_calls(
+    repo_root: Path,
+    isolated_env: dict[str, str],
+    tmp_path: Path,
+):
+    fake_checkout = Path(isolated_env["HOME"]) / "src" / "fake-checkout"
+    fake_lima = fake_checkout / "lima"
+    fake_lima.mkdir(parents=True)
+    shutil.copy2(repo_root / "devbox", fake_checkout / "devbox")
+    shutil.copy2(repo_root / "lima/devbox", fake_lima / "devbox")
+    workdir = fake_checkout / "project"
+    workdir.mkdir()
+    calls, _ = _install_lima_shim(tmp_path, isolated_env)
+
+    result = run_bash_script(
+        fake_checkout / "devbox",
+        ["--recreate"],
+        cwd=workdir,
+        env=isolated_env,
+        timeout=15,
+    )
+
+    assert result.returncode != 0
+    assert "Lima template" in result.stderr
+    assert "missing or not a regular file" in result.stderr
+    assert not calls.exists()
 
 
 @pytest.mark.unit
@@ -770,26 +890,25 @@ def test_opencode_state_mounts_map_to_their_guest_mounts(
 @pytest.mark.parametrize(
     ("action", "expected_operations"),
     [
-        ("--reprovision", ("list", "stop", "start", "shell", "shell")),
-        ("--reset", ("list", "factory-reset", "list", "start", "shell")),
+        (
+            "--recreate",
+            ("list", "list", "unprotect", "delete", "start", "shell"),
+        ),
     ],
 )
-def test_debug_option_applies_after_lifecycle_action_without_opening_shell(
+def test_recreate_debug_option_applies_to_the_default_shell(
     devbox_path: Path,
     repo_root: Path,
     isolated_env: dict[str, str],
-    project_dir: Path,
     tmp_path: Path,
     action: str,
     expected_operations: tuple[str, ...],
 ):
+    _mount_checkout_as_src(repo_root, isolated_env)
     calls, capture = _install_lima_shim(tmp_path, isolated_env)
-    isolated_env["MOCK_VM_FINGERPRINT_AFTER_START"] = (
-        expected_lima_provisioning_fingerprint(repo_root)
-    )
 
     result = run_bash_script(
-        devbox_path, [action, "--debug"], cwd=project_dir, env=isolated_env, timeout=15
+        devbox_path, [action, "--debug"], cwd=repo_root, env=isolated_env, timeout=15
     )
 
     assert result.returncode == 0, result.stderr
@@ -802,60 +921,71 @@ def test_debug_option_applies_after_lifecycle_action_without_opening_shell(
     assert operations == expected_operations
     config_index = helper_call.index(str(repo_root / "lima/opencode_config.py"))
     assert helper_call[config_index - 1] == "enabled"
-    assert helper_call[-1] == "true"
-    assert "--workdir" not in helper_call
+    assert "exec bash -l" in " ".join(helper_call)
+    assert "--workdir" in helper_call
     assert capture.exists()
 
 
 @pytest.mark.parametrize(
-    ("args", "expected_calls"),
+    ("args", "expected_calls", "recreates"),
     [
-        (["--stop"], ("list", "stop")),
-        (["--reprovision"], ("list", "stop", "start", "shell")),
-        (["--reset"], ("list", "factory-reset", "list", "start")),
+        (["--stop"], ("list", "stop"), False),
+        (
+            ["--recreate"],
+            ("list", "list", "unprotect", "delete", "start", "shell"),
+            True,
+        ),
+        (["-r"], ("list", "list", "unprotect", "delete", "start", "shell"), True),
     ],
 )
+@pytest.mark.unit
 def test_lifecycle_flags_run_expected_lima_operations(
     devbox_path: Path,
     isolated_env: dict[str, str],
-    project_dir: Path,
     tmp_path: Path,
+    repo_root: Path,
     args: list[str],
     expected_calls: tuple[str, ...],
+    recreates: bool,
 ):
+    if recreates:
+        _mount_checkout_as_src(repo_root, isolated_env)
     calls, _ = _install_lima_shim(tmp_path, isolated_env)
 
     result = run_bash_script(
-        devbox_path, args, cwd=project_dir, env=isolated_env, timeout=15
+        devbox_path, args, cwd=repo_root, env=isolated_env, timeout=15
     )
 
     assert result.returncode == 0, result.stderr
     operations = tuple(call[0] for call in _read_lima_calls(calls))
     assert operations == expected_calls
-    assert not any("--preserve-env" in call for call in _read_lima_calls(calls))
+    if recreates:
+        shell_call = _read_lima_calls(calls)[-1]
+        assert "--workdir" in shell_call
+        assert str(repo_root) in shell_call
+        assert shell_call[-1] == "devbox"
 
 
 @pytest.mark.unit
 @pytest.mark.parametrize(
     ("action", "expected_operations"),
     [
-        ("--reset", ("list", "factory-reset", "list", "start", "shell")),
-        ("--reprovision", ("list", "stop", "start", "shell", "shell")),
+        (
+            "--recreate",
+            ("list", "list", "unprotect", "delete", "start", "shell"),
+        ),
     ],
 )
 def test_lifecycle_command_runs_after_action_with_exact_argv_and_filtered_env(
     devbox_path: Path,
     repo_root: Path,
     isolated_env: dict[str, str],
-    project_dir: Path,
     tmp_path: Path,
     action: str,
     expected_operations: tuple[str, ...],
 ):
+    _mount_checkout_as_src(repo_root, isolated_env)
     calls, capture = _install_lima_shim(tmp_path, isolated_env)
-    isolated_env["MOCK_VM_FINGERPRINT_AFTER_START"] = (
-        expected_lima_provisioning_fingerprint(repo_root)
-    )
     isolated_env["GEMINI_API_KEY"] = "mock-gemini-token"  # pragma: allowlist secret
     unlisted_key = "AWS_" + "SECRET_ACCESS_KEY"
     isolated_env[unlisted_key] = "must-not-forward"  # pragma: allowlist secret
@@ -870,7 +1000,7 @@ def test_lifecycle_command_runs_after_action_with_exact_argv_and_filtered_env(
     result = run_bash_script(
         devbox_path,
         [action, "--", *command],
-        cwd=project_dir,
+        cwd=repo_root,
         env=isolated_env,
         timeout=15,
     )
@@ -884,7 +1014,7 @@ def test_lifecycle_command_runs_after_action_with_exact_argv_and_filtered_env(
         if call[0] == "shell" and "--preserve-env" in call
     )
     workdir_index = command_shell.index("--workdir")
-    assert command_shell[workdir_index + 1] == str(project_dir)
+    assert command_shell[workdir_index + 1] == str(repo_root)
     assert command_shell[-len(command) :] == command
     payload = json.loads(capture.read_text())
     assert payload["argv"] == command_shell
@@ -896,23 +1026,20 @@ def test_lifecycle_command_runs_after_action_with_exact_argv_and_filtered_env(
 
 
 @pytest.mark.unit
-def test_reprovision_opencode_command_uses_runtime_config_wrapper(
+def test_recreate_opencode_command_uses_runtime_config_wrapper(
     devbox_path: Path,
     repo_root: Path,
     isolated_env: dict[str, str],
-    project_dir: Path,
     tmp_path: Path,
 ):
+    _mount_checkout_as_src(repo_root, isolated_env)
     calls, capture = _install_lima_shim(tmp_path, isolated_env)
-    isolated_env["MOCK_VM_FINGERPRINT_AFTER_START"] = (
-        expected_lima_provisioning_fingerprint(repo_root)
-    )
     command = ["opencode", "run", "--agent", "build", "--model", "openai/test"]
 
     result = run_bash_script(
         devbox_path,
-        ["--reprovision", "--", *command],
-        cwd=project_dir,
+        ["--recreate", "--", *command],
+        cwd=repo_root,
         env=isolated_env,
         timeout=15,
     )
@@ -937,17 +1064,18 @@ def test_reprovision_opencode_command_uses_runtime_config_wrapper(
 @pytest.mark.unit
 def test_lifecycle_command_returns_its_exit_status(
     devbox_path: Path,
+    repo_root: Path,
     isolated_env: dict[str, str],
-    project_dir: Path,
     tmp_path: Path,
 ):
+    _mount_checkout_as_src(repo_root, isolated_env)
     calls, _ = _install_lima_shim(tmp_path, isolated_env)
     isolated_env["MOCK_LIMA_COMMAND_EXIT_STATUS"] = "37"
 
     result = run_bash_script(
         devbox_path,
-        ["--reset", "--", "false"],
-        cwd=project_dir,
+        ["--recreate", "--", "false"],
+        cwd=repo_root,
         env=isolated_env,
         timeout=15,
     )
@@ -959,18 +1087,19 @@ def test_lifecycle_command_returns_its_exit_status(
 @pytest.mark.unit
 def test_lifecycle_command_is_not_run_when_action_fails(
     devbox_path: Path,
+    repo_root: Path,
     isolated_env: dict[str, str],
-    project_dir: Path,
     tmp_path: Path,
 ):
+    _mount_checkout_as_src(repo_root, isolated_env)
     calls, _ = _install_lima_shim(tmp_path, isolated_env)
-    isolated_env["MOCK_LIMA_FAIL_COMMAND"] = "factory-reset"
+    isolated_env["MOCK_LIMA_FAIL_COMMAND"] = "delete"
     isolated_env["MOCK_LIMA_FAIL_STATUS"] = "42"
 
     result = run_bash_script(
         devbox_path,
-        ["--reset", "--", "true"],
-        cwd=project_dir,
+        ["--recreate", "--", "true"],
+        cwd=repo_root,
         env=isolated_env,
         timeout=15,
     )
@@ -978,8 +1107,92 @@ def test_lifecycle_command_is_not_run_when_action_fails(
     assert result.returncode == 42
     assert tuple(call[0] for call in _read_lima_calls(calls)) == (
         "list",
-        "factory-reset",
+        "list",
+        "unprotect",
+        "delete",
+        "protect",
     )
+
+
+@pytest.mark.unit
+def test_recreate_stops_when_protection_state_cannot_be_verified(
+    devbox_path: Path,
+    repo_root: Path,
+    isolated_env: dict[str, str],
+    tmp_path: Path,
+):
+    _mount_checkout_as_src(repo_root, isolated_env)
+    calls, _ = _install_lima_shim(tmp_path, isolated_env)
+    isolated_env["MOCK_LIMA_FAIL_FORMAT"] = "{{.Name}} {{.Protected}}"
+
+    result = run_bash_script(
+        devbox_path, ["--recreate"], cwd=repo_root, env=isolated_env, timeout=15
+    )
+
+    assert result.returncode != 0
+    assert "could not verify protection state" in result.stderr
+    assert tuple(call[0] for call in _read_lima_calls(calls)) == ("list", "list")
+    assert Path(isolated_env["MOCK_LIMA_STATUS_FILE"]).read_text() == "Running"
+
+
+@pytest.mark.unit
+def test_recreate_restores_protection_and_stops_when_unprotect_fails(
+    devbox_path: Path,
+    repo_root: Path,
+    isolated_env: dict[str, str],
+    tmp_path: Path,
+):
+    _mount_checkout_as_src(repo_root, isolated_env)
+    calls, _ = _install_lima_shim(tmp_path, isolated_env, protected=True)
+    isolated_env["MOCK_LIMA_FAIL_COMMAND"] = "unprotect"
+    isolated_env["MOCK_LIMA_FAIL_STATUS"] = "43"
+
+    result = run_bash_script(
+        devbox_path, ["--recreate"], cwd=repo_root, env=isolated_env, timeout=15
+    )
+
+    assert result.returncode == 43
+    assert tuple(call[0] for call in _read_lima_calls(calls)) == (
+        "list",
+        "list",
+        "unprotect",
+        "protect",
+    )
+    assert "unprotect failed" in result.stderr
+    assert Path(isolated_env["MOCK_LIMA_PROTECTED_FILE"]).read_text() == "true"
+
+
+@pytest.mark.unit
+def test_recreate_reports_create_failure_without_running_guest_command(
+    devbox_path: Path,
+    repo_root: Path,
+    isolated_env: dict[str, str],
+    tmp_path: Path,
+):
+    _mount_checkout_as_src(repo_root, isolated_env)
+    calls, _ = _install_lima_shim(tmp_path, isolated_env)
+    isolated_env["MOCK_LIMA_FAIL_COMMAND"] = "start"
+    isolated_env["MOCK_LIMA_FAIL_STATUS"] = "55"
+
+    result = run_bash_script(
+        devbox_path,
+        ["--recreate", "--", "true"],
+        cwd=repo_root,
+        env=isolated_env,
+        timeout=15,
+    )
+
+    assert result.returncode != 0
+    assert "could not create Lima instance" in result.stderr
+    assert tuple(call[0] for call in _read_lima_calls(calls)) == (
+        "list",
+        "list",
+        "unprotect",
+        "delete",
+        "start",
+    )
+    assert not Path(isolated_env["MOCK_SHELL_CAPTURE"]).exists()
+    assert Path(isolated_env["MOCK_LIMA_STATUS_FILE"]).read_text() == ""
 
 
 @pytest.mark.unit
@@ -1292,12 +1505,13 @@ def test_delete_rejects_extra_command_args_before_inspecting_instance(
 
 
 @pytest.mark.unit
-def test_concurrent_reprovision_operations_do_not_interleave(
+def test_concurrent_recreate_operations_do_not_interleave(
     devbox_path: Path,
+    repo_root: Path,
     isolated_env: dict[str, str],
-    project_dir: Path,
     tmp_path: Path,
 ):
+    _mount_checkout_as_src(repo_root, isolated_env)
     calls, _ = _install_lima_shim(tmp_path, isolated_env)
 
     with ThreadPoolExecutor(max_workers=2) as executor:
@@ -1305,8 +1519,8 @@ def test_concurrent_reprovision_operations_do_not_interleave(
             executor.map(
                 lambda _: run_bash_script(
                     devbox_path,
-                    ["--reprovision"],
-                    cwd=project_dir,
+                    ["--recreate"],
+                    cwd=repo_root,
                     env=isolated_env.copy(),
                     timeout=15,
                 ),
@@ -1318,13 +1532,18 @@ def test_concurrent_reprovision_operations_do_not_interleave(
         result.stderr for result in results
     ]
     operations = tuple(call[0] for call in _read_lima_calls(calls))
-    assert operations == (
+    lifecycle_operations = tuple(
+        operation for operation in operations if operation != "shell"
+    )
+    assert operations.count("shell") == 2
+    assert lifecycle_operations == (
         "list",
-        "stop",
-        "start",
-        "shell",
         "list",
-        "stop",
+        "unprotect",
+        "delete",
         "start",
-        "shell",
+        "list",
+        "list",
+        "delete",
+        "start",
     )
