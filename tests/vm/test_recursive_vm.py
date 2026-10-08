@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from tests.conftest import LimaVM, vm_start_timeout
+from tests.conftest import LimaVM, user_runtime_offline_guard, vm_start_timeout
 
 
 @pytest.mark.recursive
@@ -268,31 +268,38 @@ done
 def test_kind_cluster_runs_inside_the_provisioned_vm(devbox_vm: LimaVM):
     home = shlex.quote(devbox_vm.guest_home)
     validate_kind = shlex.quote(f"{devbox_vm.repo_path}/lima/validate-kind.sh")
-    command = f"""
-set -euo pipefail
-export HOME={home}
-export DOCKER_HOST="unix:///run/user/$(id -u)/podman/podman.sock"
-export KIND_EXPERIMENTAL_PROVIDER=podman
-bash {validate_kind} 1
+    command = (
+        f"export HOME={home}; "
+        + user_runtime_offline_guard("docker")
+        + r"""
+export DOCKER_HOST="unix://${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/docker.sock"
+export CONTAINER_HOST="unix:///nonexistent/podman.sock"
+export CONTAINER_CONNECTION=issue-319-untrusted-connection
+export PODMAN_HOST="unix:///nonexistent/legacy-podman.sock"
 """
+        + f"\nbash {validate_kind} podman 1\nverify_user_runtime_offline"
+    )
     result = devbox_vm.run(
         ["bash", "-ceu", command],
-        timeout=900,
+        timeout=1200,
         use_guest_runtime=True,
     )
 
     assert result.returncode == 0, (
-        "A kind cluster did not complete a create/delete cycle in the VM.\n"
+        "kind did not prove the rootless Podman backend and complete its "
+        "cluster/workload/delete cycle in the VM.\n"
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
-    assert "kind validation passed: 1 consecutive clusters" in result.stdout
+    assert "backend identity verified" in result.stdout
+    assert "via podman" in result.stdout
+    assert "kind validation passed: 1 consecutive podman clusters" in result.stdout
 
 
 @pytest.mark.recursive
 def test_minikube_kvm2_backend_runs_inside_the_provisioned_vm(devbox_vm: LimaVM):
     home = shlex.quote(devbox_vm.guest_home)
     validator = shlex.quote(f"{devbox_vm.repo_path}/lima/validate-minikube.sh")
-    command = f"export HOME={home}; bash {validator} kvm2"
+    command = f"export HOME={home}; export TMPDIR=/var/tmp; bash {validator} kvm2"
     result = devbox_vm.run(
         ["bash", "-ceu", command],
         # Leave time beyond the 10-minute start and 5-minute pod waits.
@@ -307,4 +314,5 @@ def test_minikube_kvm2_backend_runs_inside_the_provisioned_vm(devbox_vm: LimaVM)
         "missing.\n"
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
+    assert "backend identity verified: KVM2 libvirt L2 VM" in result.stdout
     assert "minikube validation passed: kvm2" in result.stdout

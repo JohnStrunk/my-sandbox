@@ -26,6 +26,70 @@ DEFAULT_VM_START_TIMEOUT = 3600.0
 VM_START_TIMEOUT_ENV_VAR = "DEVBOX_VM_START_TIMEOUT"
 
 
+def user_runtime_offline_guard(runtime: str) -> str:
+    """Return guest-shell setup that stops and restores one rootless runtime."""
+    socket_path = {
+        "docker": "docker.sock",
+        "podman": "podman/podman.sock",
+    }.get(runtime)
+    if socket_path is None:
+        raise ValueError(f"unsupported rootless runtime: {runtime}")
+
+    script = r"""
+runtime_name=__RUNTIME__
+runtime_socket="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/__SOCKET_PATH__"
+runtime_service_was_active=false
+runtime_socket_was_active=false
+if systemctl --user is-active --quiet "${runtime_name}.service"; then
+  runtime_service_was_active=true
+fi
+if systemctl --user is-active --quiet "${runtime_name}.socket"; then
+  runtime_socket_was_active=true
+fi
+restore_user_runtime() {
+  local status="${1:-$?}"
+  trap - EXIT HUP INT TERM
+  if [[ "$runtime_service_was_active" == true ]]; then
+    systemctl --user start "${runtime_name}.service" || status=1
+  else
+    systemctl --user stop "${runtime_name}.service" >/dev/null 2>&1 || status=1
+  fi
+  if [[ "$runtime_socket_was_active" == true ]]; then
+    systemctl --user start "${runtime_name}.socket" || status=1
+  else
+    systemctl --user stop "${runtime_name}.socket" >/dev/null 2>&1 || true
+  fi
+  exit "$status"
+}
+verify_user_runtime_offline() {
+  if systemctl --user is-active --quiet "${runtime_name}.service" \
+    || systemctl --user is-active --quiet "${runtime_name}.socket"; then
+    echo "${runtime_name} service/socket remained active during smoke" >&2
+    return 1
+  fi
+  if [[ -S "$runtime_socket" ]] \
+    && curl --fail --silent --show-error --max-time 3 \
+      --unix-socket "$runtime_socket" http://d/_ping >/dev/null 2>&1; then
+    echo "${runtime_name} API remained reachable during independent-backend smoke" >&2
+    return 1
+  fi
+  return 0
+}
+trap restore_user_runtime EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+systemctl --user stop "${runtime_name}.socket" >/dev/null 2>&1 || true
+systemctl --user stop "${runtime_name}.service"
+verify_user_runtime_offline
+"""
+    return (
+        script.replace("__RUNTIME__", runtime)
+        .replace("__SOCKET_PATH__", socket_path)
+        .strip()
+    )
+
+
 def expected_lima_system_script_sha256(
     repo_root: Path, guest_user: str | None = None
 ) -> str:

@@ -8,6 +8,7 @@ from tests.conftest import (
     LimaVM,
     expected_lima_provisioning_fingerprint,
     expected_lima_system_script_sha256,
+    user_runtime_offline_guard,
 )
 
 
@@ -117,20 +118,13 @@ server_version="$(docker version --format '{{.Server.Version}}')"
 [[ "$client_version" == "$expected_version" ]]
 [[ "$server_version" == "$expected_version" ]]
 
-podman_socket_was_active=false
-podman_service_was_active=false
-if systemctl --user is-active --quiet podman.socket; then
-  podman_socket_was_active=true
-fi
-if systemctl --user is-active --quiet podman.service; then
-  podman_service_was_active=true
-fi
+__PODMAN_OFFLINE_GUARD__
 container_id=""
 build_image=""
 build_log=""
 restore_services() {
   local status=$?
-  trap - EXIT
+  trap - EXIT HUP INT TERM
   if [[ -n "$container_id" ]]; then
     docker rm --force "$container_id" >/dev/null 2>&1 || true
   fi
@@ -140,28 +134,9 @@ restore_services() {
   if [[ -n "$build_log" ]]; then
     rm -f -- "$build_log"
   fi
-  if [[ "$podman_socket_was_active" == true ]]; then
-    systemctl --user start podman.socket || status=1
-  fi
-  if [[ "$podman_service_was_active" == true ]]; then
-    systemctl --user start podman.service || status=1
-  fi
-  exit "$status"
+  restore_user_runtime "$status"
 }
 trap restore_services EXIT
-
-systemctl --user stop podman.socket
-systemctl --user stop podman.service
-if systemctl --user is-active --quiet podman.socket \
-  || systemctl --user is-active --quiet podman.service; then
-  echo "Podman service or socket remained available during Docker smoke test" >&2
-  exit 1
-fi
-if curl --fail --silent --show-error --max-time 3 \
-  --unix-socket "$podman_socket" http://d/_ping >/dev/null 2>&1; then
-  echo "Podman's API remained reachable during Docker smoke test" >&2
-  exit 1
-fi
 
 # Public multi-architecture OCI digest (split for line length; not a secret).
 smoke_digest_prefix="bdf57e528e45e4433820e045b29b4597" # pragma: allowlist secret
@@ -190,17 +165,16 @@ docker image rm "$build_image" >/dev/null
 build_image=""
 rm -f -- "$build_log"
 build_log=""
-KIND_EXPERIMENTAL_PROVIDER=docker "$repo_path/lima/validate-kind.sh" 1
+"$repo_path/lima/validate-kind.sh" docker 1
 podman info >/dev/null
-if systemctl --user is-active --quiet podman.socket \
-  || systemctl --user is-active --quiet podman.service; then
-  echo "using Podman directly must not start its API service" >&2
-  exit 1
-fi
+verify_user_runtime_offline
 """
+    command = command.replace(
+        "__PODMAN_OFFLINE_GUARD__", user_runtime_offline_guard("podman")
+    )
     result = devbox_vm.run(
         ["bash", "-ceu", command, "docker-ce-smoke", devbox_vm.repo_path],
-        timeout=600,
+        timeout=1200,
         use_guest_runtime=True,
     )
 
@@ -208,6 +182,36 @@ fi
         "Docker CE and kind did not run independently of Podman.\n"
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
+    assert "backend identity verified" in result.stdout
+    assert "via docker" in result.stdout
+
+
+@pytest.mark.vm
+def test_minikube_docker_ce_backend_runs_inside_the_provisioned_vm(
+    devbox_vm: LimaVM,
+):
+    validator = shlex.quote(f"{devbox_vm.repo_path}/lima/validate-minikube.sh")
+    home = shlex.quote(devbox_vm.guest_home)
+    command = (
+        f"export HOME={home}; "
+        + user_runtime_offline_guard("podman")
+        + f"\nbash {validator} docker\nverify_user_runtime_offline"
+    )
+    result = devbox_vm.run(
+        ["bash", "-ceu", command],
+        timeout=1800,
+        use_guest_runtime=True,
+    )
+
+    assert result.returncode == 0, (
+        "Minikube did not use the pinned rootless Docker CE backend and complete "
+        "its cluster/workload smoke test. Check the strict Docker CE preflight "
+        "diagnostic; this backend test is not skipped when dependencies are "
+        "missing.\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert "backend identity verified: Docker CE container" in result.stdout
+    assert "minikube validation passed: docker" in result.stdout
 
 
 @pytest.mark.vm
@@ -216,7 +220,17 @@ def test_minikube_podman_backend_runs_inside_the_provisioned_vm(
 ):
     validator = shlex.quote(f"{devbox_vm.repo_path}/lima/validate-minikube.sh")
     home = shlex.quote(devbox_vm.guest_home)
-    command = f"export HOME={home}; bash {validator} podman"
+    command = (
+        f"export HOME={home}; "
+        + user_runtime_offline_guard("docker")
+        + r"""
+export DOCKER_HOST="unix://${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/docker.sock"
+export CONTAINER_HOST="unix:///nonexistent/podman.sock"
+export CONTAINER_CONNECTION=issue-319-untrusted-connection
+export PODMAN_HOST="unix:///nonexistent/legacy-podman.sock"
+"""
+        + f"\nbash {validator} podman\nverify_user_runtime_offline"
+    )
     result = devbox_vm.run(
         ["bash", "-ceu", command],
         timeout=1800,
@@ -230,6 +244,7 @@ def test_minikube_podman_backend_runs_inside_the_provisioned_vm(
         "missing.\n"
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
+    assert "backend identity verified: rootless Podman container" in result.stdout
     assert "minikube validation passed: podman" in result.stdout
 
 
