@@ -28,6 +28,7 @@ _CHECKSUM_MANAGED_TOOLS = {
     "hadolint",
     "kind",
     "limactl",
+    "minikube",
     "uv",
 }
 
@@ -417,6 +418,7 @@ def test_manifest_declares_lima_consumers(repo_root: Path):
         "kubectl",
         "limactl",
         "markdownlint_cli2",
+        "minikube",
         "node",
         "opencode",
         "pipenv",

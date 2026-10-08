@@ -392,11 +392,11 @@ def test_probe_checks_exactly_the_mounted_paths(repo_root: Path):
 
 
 @pytest.mark.unit
-def test_system_script_adds_user_to_kvm_group(repo_root: Path):
+def test_system_script_adds_user_to_kvm_and_libvirt_groups(repo_root: Path):
     system_script = _script(repo_root, "provision-system.sh")
 
     assert 'DEVBOX_USER="{{.User}}"' in system_script
-    assert 'usermod --append --groups kvm "$DEVBOX_USER"' in system_script
+    assert 'usermod --append --groups kvm,libvirt "$DEVBOX_USER"' in system_script
 
 
 @pytest.mark.unit
@@ -410,6 +410,72 @@ def test_system_script_installs_qemu_img_for_nested_lima(repo_root: Path):
 
     assert match
     assert re.search(r"^\s*qemu-img\s*$", match.group(1), re.MULTILINE)
+
+
+@pytest.mark.unit
+def test_system_script_provisions_libvirt_for_minikube_kvm2(repo_root: Path):
+    system_script = _script(repo_root, "provision-system.sh")
+    match = re.search(
+        r"^packages=\(\n(.*?)^\)",
+        system_script,
+        re.DOTALL | re.MULTILINE,
+    )
+
+    assert match
+    for package in (
+        "container-selinux",
+        "libselinux-utils",
+        "libvirt-client",
+        "libvirt-daemon-config-network",
+        "libvirt-daemon-kvm",
+        "policycoreutils",
+    ):
+        assert re.search(rf"^\s*{re.escape(package)}\s*$", match.group(1), re.MULTILINE)
+    assert (
+        "systemctl enable --now virtqemud.socket virtnetworkd.socket" in system_script
+    )
+    assert 'usermod --append --groups kvm,libvirt "$DEVBOX_USER"' in system_script
+
+
+@pytest.mark.unit
+def test_system_script_repairs_rootless_podman_selinux_contexts(repo_root: Path):
+    system_script = _script(repo_root, "provision-system.sh")
+
+    assert (
+        'podman_graphroot="$DEVBOX_GUEST_HOME_REAL/.local/share/containers/storage"'
+        in system_script
+    )
+    assert (
+        'runuser -u "$DEVBOX_USER" -- mkdir -p "${podman_storage_paths[@]}"'
+        in system_script
+    )
+    assert 'matchpathcon -V "$storage_path"' in system_script
+    assert 'restorecon -RF "$podman_graphroot"' in system_script
+    assert (
+        "podman_context_stamp=/var/lib/devbox-vm/podman-storage-selinux.sha256"
+        in system_script
+    )
+    assert "container-selinux" in system_script
+    assert "refusing symlinked rootless Podman storage path" in system_script
+
+
+@pytest.mark.unit
+def test_system_script_installs_checksum_pinned_minikube(repo_root: Path):
+    system_script = _script(repo_root, "provision-system.sh")
+
+    assert 'MINIKUBE_VERSION="$(manifest_version minikube)"' in system_script
+    assert 'manifest_artifact_version minikube "$arch"' in system_script
+    assert 'manifest_integrity_fingerprint minikube "$arch"' in system_script
+    assert (
+        'artifact_integrity_matches minikube "$MINIKUBE_FINGERPRINT"' in system_script
+    )
+    assert (
+        '"https://github.com/kubernetes/minikube/releases/download/${MINIKUBE_ARTIFACT_VERSION}/minikube-linux-${arch}"'
+        in system_script
+    )
+    assert 'verify_download minikube "$arch" "$tmp/minikube"' in system_script
+    assert 'install -m 0755 "$tmp/minikube" /usr/local/bin/minikube' in system_script
+    assert 'record_artifact_integrity minikube "$MINIKUBE_FINGERPRINT"' in system_script
 
 
 @pytest.mark.unit
@@ -508,6 +574,24 @@ def test_readiness_checks_distinct_docker_ce_and_podman_endpoints(
     assert ".tools.docker_ce.version" in probe
     assert '--unix-socket "$PODMAN_SOCKET" http://d/_ping' in probe
     assert "the separate rootless Podman API is not responding" in probe
+
+
+@pytest.mark.unit
+def test_readiness_requires_minikube_and_libvirt_kvm2(repo_root: Path):
+    probe = _script(repo_root, "probe-readiness.sh")
+
+    assert "make minikube" in probe
+    assert "virsh virt-host-validate" in probe
+    assert 'getent group libvirt | grep -qw "$(id -un)"' in probe
+    assert 'if ! virt_host_validation="$(virt-host-validate qemu 2>&1)"; then' in probe
+    assert "printf '%s\\n' \"$virt_host_validation\" >&2" in probe
+    assert "systemctl is-enabled --quiet virtqemud.socket" in probe
+    assert "systemctl is-active --quiet virtqemud.socket" in probe
+    assert "systemctl is-enabled --quiet virtnetworkd.socket" in probe
+    assert "systemctl is-active --quiet virtnetworkd.socket" in probe
+    assert "virsh -c qemu:///system list --all" in probe
+    assert "virsh -c qemu:///system net-list --all" in probe
+    assert "virt-host-validate qemu" in probe
 
 
 @pytest.mark.unit

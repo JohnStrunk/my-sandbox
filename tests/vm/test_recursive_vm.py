@@ -286,3 +286,25 @@ bash {validate_kind} 1
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
     assert "kind validation passed: 1 consecutive clusters" in result.stdout
+
+
+@pytest.mark.recursive
+def test_minikube_kvm2_backend_runs_inside_the_provisioned_vm(devbox_vm: LimaVM):
+    home = shlex.quote(devbox_vm.guest_home)
+    validator = shlex.quote(f"{devbox_vm.repo_path}/lima/validate-minikube.sh")
+    command = f"export HOME={home}; bash {validator} kvm2"
+    result = devbox_vm.run(
+        ["bash", "-ceu", command],
+        # Leave time beyond the 10-minute start and 5-minute pod waits.
+        timeout=1800,
+        use_guest_runtime=True,
+    )
+
+    assert result.returncode == 0, (
+        "The required KVM2 Minikube backend failed inside the provisioned VM. "
+        "Check the validator's KVM/libvirt/QEMU preflight diagnostic; this "
+        "recursive backend test is not skipped when a prerequisite is "
+        "missing.\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert "minikube validation passed: kvm2" in result.stdout

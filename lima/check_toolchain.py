@@ -38,6 +38,10 @@ _VERSION_COMMANDS: dict[str, tuple[Command, re.Pattern[str]]] = {
     "limactl": (("limactl", "--version"), re.compile(r"\bv?(\d+\.\d+\.\d+)\b")),
     "helm": (("helm", "version", "--short"), re.compile(r"\bv?(\d+\.\d+\.\d+)\b")),
     "kind": (("kind", "version"), re.compile(r"\bkind\s+v?(\d+\.\d+\.\d+)\b")),
+    "minikube": (
+        ("minikube", "version"),
+        re.compile(r"\bminikube version:\s*v?(\d+\.\d+\.\d+)\b"),
+    ),
     "kubectl": (("kubectl", "version", "--client", "-o", "json"), re.compile(r"")),
     "pipenv": (("pipenv", "--version"), re.compile(r"\b(\d{4}\.\d+\.\d+)\b")),
     "repomix": (("repomix", "--version"), re.compile(r"\bv?(\d+\.\d+\.\d+)\b")),

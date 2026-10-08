@@ -495,6 +495,7 @@ packages=(
   at-spi2-atk
   atk
   ca-certificates
+  container-selinux
   cups-libs
   curl
   diffutils
@@ -515,6 +516,10 @@ packages=(
   hyperfine
   jq
   just
+  libselinux-utils
+  libvirt-client
+  libvirt-daemon-config-network
+  libvirt-daemon-kvm
   libXcomposite
   libXdamage
   libXext
@@ -530,6 +535,7 @@ packages=(
   openssl
   patch
   passt
+  policycoreutils
   podman
   procps-ng
   python3
@@ -552,6 +558,70 @@ if ((${#missing[@]})); then
   dnf install -y --setopt=install_weak_deps=False "${missing[@]}"
   dnf clean all
   rm -rf /var/cache/dnf
+fi
+
+# Rootless Podman stores image layers below the guest user's home. Relabel its
+# graphroot with container-selinux's expected contexts before the user socket
+# starts; inherited home-directory labels can block container processes from
+# loading libc under enforcing SELinux.
+podman_graphroot="$DEVBOX_GUEST_HOME_REAL/.local/share/containers/storage"
+podman_storage_paths=(
+  "$podman_graphroot"
+  "$podman_graphroot/artifacts"
+  "$podman_graphroot/overlay"
+  "$podman_graphroot/overlay-containers"
+  "$podman_graphroot/overlay-images"
+  "$podman_graphroot/overlay-layers"
+  "$podman_graphroot/overlay2"
+  "$podman_graphroot/overlay2-containers"
+  "$podman_graphroot/overlay2-images"
+  "$podman_graphroot/overlay2-layers"
+  "$podman_graphroot/volumes"
+)
+validate_podman_storage_paths() {
+  local storage_path
+  for storage_path in \
+    "$DEVBOX_GUEST_HOME_REAL/.local" \
+    "$DEVBOX_GUEST_HOME_REAL/.local/share" \
+    "$DEVBOX_GUEST_HOME_REAL/.local/share/containers" \
+    "${podman_storage_paths[@]}"
+  do
+    if [[ -L "$storage_path" ]]; then
+      echo "devbox: refusing symlinked rootless Podman storage path '$storage_path'" >&2
+      exit 1
+    fi
+    if [[ -e "$storage_path" && ! -d "$storage_path" ]]; then
+      echo "devbox: rootless Podman storage path is not a directory: '$storage_path'" >&2
+      exit 1
+    fi
+  done
+}
+validate_podman_storage_paths
+runuser -u "$DEVBOX_USER" -- mkdir -p "${podman_storage_paths[@]}"
+podman_context_fingerprint="$(
+  printf '%s\n%s\n' "$podman_graphroot" \
+    "$(rpm -q --queryformat '%{VERSION}-%{RELEASE}' container-selinux)" \
+    | sha256sum | awk '{print $1}'
+)"
+podman_context_stamp=/var/lib/devbox-vm/podman-storage-selinux.sha256
+podman_context_needs_restore=false
+if [[ "$(cat "$podman_context_stamp" 2>/dev/null || true)" \
+  != "$podman_context_fingerprint" ]]; then
+  podman_context_needs_restore=true
+fi
+for storage_path in "${podman_storage_paths[@]}"; do
+  if ! matchpathcon -V "$storage_path" >/dev/null 2>&1; then
+    podman_context_needs_restore=true
+  fi
+done
+if [[ "$podman_context_needs_restore" == true ]]; then
+  # Recheck user-owned path components immediately before the privileged walk.
+  validate_podman_storage_paths
+  restorecon -RF "$podman_graphroot"
+  podman_context_stamp_tmp="$(mktemp "${podman_context_stamp}.XXXXXX")"
+  printf '%s\n' "$podman_context_fingerprint" >"$podman_context_stamp_tmp"
+  chmod 0644 "$podman_context_stamp_tmp"
+  mv -f "$podman_context_stamp_tmp" "$podman_context_stamp"
 fi
 
 # Pin Docker's RPM signing key independently from the package-download origin.
@@ -694,12 +764,14 @@ if [[ ! -L "$compat_ca_bundle" ]] \
   ln -sfn "$ca_bundle" "$compat_ca_bundle"
 fi
 
-# The guest user needs access to the passed-through KVM device for nested L2s.
-usermod --append --groups kvm "$DEVBOX_USER"
+# The guest user needs access to passed-through KVM devices and the system
+# libvirt API used by Minikube's KVM2 driver.
+usermod --append --groups kvm,libvirt "$DEVBOX_USER"
 modprobe kvm || true
 case "$(uname -m)" in
   x86_64) modprobe kvm_intel || modprobe kvm_amd || true ;;
 esac
+systemctl enable --now virtqemud.socket virtnetworkd.socket
 
 # Google Cloud CLI is from Google's signed RPM repository, matching the VM.
 # Skip RPM scriptlets so third-party package code never executes as root.
@@ -1087,6 +1159,23 @@ if [[ "$kind_installed" != "$KIND_VERSION" ]] \
   verify_download kind "$arch" "$tmp/kind"
   install -m 0755 "$tmp/kind" /usr/local/bin/kind
   record_artifact_integrity kind "$KIND_FINGERPRINT"
+fi
+
+MINIKUBE_VERSION="$(manifest_version minikube)"
+MINIKUBE_ARTIFACT_VERSION="$(manifest_artifact_version minikube "$arch")"
+MINIKUBE_FINGERPRINT="$(manifest_integrity_fingerprint minikube "$arch")"
+minikube_installed="$(as_toolbuilder /usr/local/bin/minikube version \
+  2>/dev/null | grep -Eo 'v[0-9]+\.[0-9]+\.[0-9]+' | head -n1 \
+  | sed 's/^v//' || true)"
+if [[ "$minikube_installed" != "$MINIKUBE_VERSION" ]] \
+  || ! artifact_integrity_matches minikube "$MINIKUBE_FINGERPRINT"; then
+  tmp="$(new_temp_dir)"
+  curl --retry 3 --retry-connrefused -fsSL \
+    "https://github.com/kubernetes/minikube/releases/download/${MINIKUBE_ARTIFACT_VERSION}/minikube-linux-${arch}" \
+    -o "$tmp/minikube"
+  verify_download minikube "$arch" "$tmp/minikube"
+  install -m 0755 "$tmp/minikube" /usr/local/bin/minikube
+  record_artifact_integrity minikube "$MINIKUBE_FINGERPRINT"
 fi
 
 KUBECTL_VERSION="$(manifest_version kubectl)"

@@ -25,6 +25,8 @@ def _version_output(name: str, version: str) -> str:
         return f"rustc {version} (commit 48a229cea 2026-09-01)"
     if name == "kind":
         return f"kind v{version} go1.27.1 linux/amd64"
+    if name == "minikube":
+        return f"minikube version: v{version}\ncommit: abcdef0123456789"
     if name == "node":
         return f"v{version}"
     if name == "docker_ce":
@@ -94,6 +96,23 @@ def test_lima_toolchain_check_reports_a_pinned_version_mismatch(
 
     assert any(
         "kind: installed version 0.0.1, expected 0.33.0" in error for error in errors
+    )
+
+
+@pytest.mark.unit
+def test_lima_toolchain_check_verifies_the_minikube_version(
+    repo_root: Path, tmp_path: Path
+):
+    manifest = _manifest(repo_root)
+    manifest_path = _write_manifest(tmp_path / "manifest.json", manifest)
+    expected_version = manifest["tools"]["minikube"]["version"]
+    runner = _successful_runner(manifest, {"minikube": "0.0.0"})
+
+    _, errors = check_toolchain(manifest_path, runner)
+
+    assert any(
+        f"minikube: installed version 0.0.0, expected {expected_version}" in error
+        for error in errors
     )
 
 

@@ -13,6 +13,7 @@ _CHECKSUM_GROUPS = {
     "google-antigravity/antigravity-cli": "antigravity cli release artifacts",
     "lima-vm/lima": "limactl release artifacts",
     "kubernetes-sigs/kind": "kind release artifacts",
+    "kubernetes/minikube": "minikube release artifacts",
     "ast-grep/ast-grep": "ast-grep release artifacts",
     "acli": "acli release artifacts",
 }
@@ -188,13 +189,13 @@ def test_artifact_regex_matches_manifest_and_noop_replacement_is_stable(
     manifest_text = (repo_root / "lima" / "tool-versions.json").read_text()
     matches = list(pattern.finditer(manifest_text))
 
-    assert len(matches) == 14
+    assert len(matches) == 16
     assert {match.group("packageName") for match in matches} == set(_CHECKSUM_GROUPS)
     assert {
         datasource: sum(match.group("datasource") == datasource for match in matches)
         for datasource in {match.group("datasource") for match in matches}
     } == {
-        "github-release-attachments": 12,
+        "github-release-attachments": 14,
         "custom.acli-amd64": 1,
         "custom.acli-arm64": 1,
     }

@@ -119,11 +119,11 @@ test -r /etc/ssl/certs/ca-certificates.crt \
 
 for tool in \
   acli agy cargo diff difft fd file ffmpeg docker gh glab gcloud gws \
-  hadolint helm hyperfine jq just kind kubectl limactl make \
+  hadolint helm hyperfine jq just kind kubectl limactl make minikube \
   markdownlint-cli2 newgidmap newuidmap \
   node npm npx opencode patch pipenv pip3 \
   playwright-cli podman pre-commit python3 qemu-img repomix rg \
-  rustc rustup semble shellcheck tokei uv uvx
+  rustc rustup semble shellcheck tokei uv uvx virsh virt-host-validate
 do
   command -v "$tool" >/dev/null 2>&1 || fail "$tool is not installed"
 done
@@ -173,6 +173,26 @@ case "$(uname -m)" in
 esac
 getent group kvm | grep -qw "$(id -un)" \
   || fail "the devbox user is not in the kvm group"
+getent group libvirt | grep -qw "$(id -un)" \
+  || fail "the devbox user is not in the libvirt group "\
+    "required for Minikube KVM2"
+systemctl is-enabled --quiet virtqemud.socket \
+  || fail "the libvirt QEMU socket is not enabled"
+systemctl is-active --quiet virtqemud.socket \
+  || fail "the libvirt QEMU socket is not active"
+systemctl is-enabled --quiet virtnetworkd.socket \
+  || fail "the libvirt network socket is not enabled"
+systemctl is-active --quiet virtnetworkd.socket \
+  || fail "the libvirt network socket is not active"
+virsh -c qemu:///system list --all >/dev/null 2>&1 \
+  || fail "the guest user cannot access the system libvirt QEMU API"
+virsh -c qemu:///system net-list --all >/dev/null 2>&1 \
+  || fail "the system libvirt network API is unavailable"
+if ! virt_host_validation="$(virt-host-validate qemu 2>&1)"; then
+  printf '%s\n' "$virt_host_validation" >&2
+  fail "libvirt cannot use nested KVM; check /dev/kvm "\
+    "and host virtualization"
+fi
 
 # Lima sets subordinate IDs and cgroup delegation for rootless engines.
 check_subordinate_ids() {

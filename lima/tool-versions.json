@@ -256,6 +256,37 @@
         "lima": true
       }
     },
+    "minikube": {
+      "version": "1.39.0",
+      "datasource": "github-releases",
+      "depName": "kubernetes/minikube",
+      "integrity": "sha256",
+      "artifacts": {
+        "amd64": {
+          "version": "v1.39.0",
+          "sha256": "b738496da01be06bbaf80c688f57ce25acd3849fbb518155f3a88e03ef555aa4",
+          "depName": "kubernetes/minikube-amd64",
+          "packageName": "kubernetes/minikube",
+          "datasource": "github-release-attachments"
+        },
+        "arm64": {
+          "version": "v1.39.0",
+          "sha256": "202f331cb677761c5aec81c58472d16d65707358b9f66226210be3fe3275b1c3",
+          "depName": "kubernetes/minikube-arm64",
+          "packageName": "kubernetes/minikube",
+          "datasource": "github-release-attachments"
+        }
+      },
+      "provenance": {
+        "url_templates": {
+          "artifacts.amd64.sha256": "https://github.com/kubernetes/minikube/releases/download/{artifacts.amd64.version}/minikube-linux-amd64",
+          "artifacts.arm64.sha256": "https://github.com/kubernetes/minikube/releases/download/{artifacts.arm64.version}/minikube-linux-arm64"
+        }
+      },
+      "consumers": {
+        "lima": true
+      }
+    },
     "pipenv": {
       "version": "2026.8.0",
       "datasource": "pypi",
