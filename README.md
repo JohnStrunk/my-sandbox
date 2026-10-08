@@ -5,8 +5,8 @@ software projects. `devbox` enters one shared Fedora Lima VM at the current
 project directory; OpenCode and the pinned development toolchain run inside that
 VM. Docker CE and Podman are available as separate rootless runtimes in the
 guest. The Docker CLI uses its own Engine by default; Podman remains available
-for explicitly selected workflows. Kind uses Docker CE by default, with a
-separate Podman provider.
+for explicitly selected workflows. Kind has separate Docker CE and Podman
+providers; the validation commands require the provider to be selected.
 
 The VM template, host requirements, mounts, provisioning, and lifecycle details
 are documented in [`lima/README.md`](lima/README.md).
@@ -164,12 +164,17 @@ credential mounts.
   uv run --extra test pytest -m recursive
 ```
 
-Minikube v1.39.0 is pinned for #318. Its Docker CE,
-rootless-Podman, and KVM2 modes require explicit driver selection; the Podman
-and KVM2 test profiles each use 2 CPUs/4 GiB and run sequentially within the
-8-CPU/16-GiB Lima L1. Read the [Minikube driver and resource
-notes](lima/README.md#minikube-backends-issues-318-and-319). The #319
-end-to-end test covers the driver matrix; no result is claimed here.
+The #319 backend matrix explicitly exercises kind+Docker CE, kind+Podman,
+Minikube+Docker CE, Minikube+Podman, and Minikube+KVM2. It pins kind 0.33.0's
+Kubernetes 1.37.0 node image by digest and starts Minikube with Kubernetes
+1.37.0; Minikube 1.39.0, Docker CE 29.8.2, and kubectl 1.37.1 are also pinned.
+Every smoke uses a digest-pinned BusyBox workload. Validators require explicit
+driver selection and never fall back or skip. Tests verify the actual
+Docker/Podman node resource or KVM2 libvirt L2 domain, then delete the cluster
+and audit resources.
+Minikube Docker, Podman, and KVM2 profiles each use 2 CPUs/4 GiB and run
+sequentially within the 8-CPU/16-GiB Lima L1. See the
+[Lima guide](lima/README.md) for exact invocations and driver/resource notes.
 
 The per-user lock serializes full test commands across worktrees. Full
 `fast-check` runs include signal/process-group regression tests that timed out

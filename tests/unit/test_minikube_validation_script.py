@@ -1,4 +1,10 @@
+import atexit
+import json
+import os
+import re
+import socket
 import subprocess
+import uuid
 from pathlib import Path
 
 import pytest
@@ -14,10 +20,22 @@ def _fake_tools(tmp_path: Path) -> tuple[Path, dict[str, str]]:
     fake_bin.mkdir()
     log = tmp_path / "tools.log"
     profile_file = tmp_path / "profile"
+    active_file = tmp_path / "active"
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir()
+    runtime_alias = Path("/tmp") / f"m{uuid.uuid4().hex[:8]}"
+    runtime_alias.symlink_to(runtime_dir, target_is_directory=True)
+    atexit.register(runtime_alias.unlink, missing_ok=True)
+    docker_socket = runtime_alias / "docker.sock"
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.bind(str(docker_socket))
+    sock.close()
     files = {
         "TOOL_LOG": str(log),
         "PROFILE_FILE": str(profile_file),
+        "ACTIVE_FILE": str(active_file),
         "TMPDIR": str(tmp_path / "tmp"),
+        "XDG_RUNTIME_DIR": str(runtime_alias),
     }
     Path(files["TMPDIR"]).mkdir()
 
@@ -32,6 +50,7 @@ if [[ "$1" == start ]]; then
     case "$argument" in --profile=*) profile="${argument#--profile=}" ;; esac
   done
   printf '%s\\n' "$profile" >"$PROFILE_FILE"
+  touch "$ACTIVE_FILE"
   printf '%s\\n' "$MINIKUBE_HOME" >"$TOOL_LOG.minikube-home"
   printf '%s\\n' "$KUBECONFIG" >"$TOOL_LOG.kubeconfig"
   stat -c '%a' "$(dirname "$MINIKUBE_HOME")" >"$TOOL_LOG.state-mode"
@@ -41,6 +60,7 @@ if [[ "$1" == delete && "${FAIL_DELETE:-}" == 1 ]]; then
   echo 'simulated profile deletion failure' >&2
   exit 1
 fi
+if [[ "$1" == delete ]]; then rm -f "$ACTIVE_FILE"; fi
 """,
     )
     _write_executable(
@@ -69,13 +89,30 @@ esac
         fake_bin / "podman",
         """#!/usr/bin/env bash
 set -euo pipefail
-if [[ "$1" == info ]]; then
+if [[ -n "${DOCKER_HOST:-}${CONTAINER_HOST:-}" \
+  || -n "${CONTAINER_CONNECTION:-}${PODMAN_HOST:-}" ]]; then
+  echo 'unexpected remote Podman endpoint override' >&2
+  exit 65
+fi
+if [[ "$1" == system && "${2:-}" == connection && "${3:-}" == list ]]; then
+  if [[ -n "${PODMAN_DEFAULT_CONNECTION:-}" ]]; then
+    printf '%s\\n' "$PODMAN_DEFAULT_CONNECTION"
+  fi
+elif [[ "$1" == info ]]; then
+  if [[ "${PODMAN_INFO_WARNING:-}" == 1 ]]; then
+    echo 'simulated benign Podman warning' >&2
+  fi
   printf '%s\n' "${PODMAN_ROOTLESS:-true}"
 elif [[ "$1" == ps ]]; then
+  if [[ "${PODMAN_PS_WARNING:-}" == 1 ]]; then
+    echo 'simulated Podman ps warning' >&2
+  fi
   if [[ "${STALE_RESOURCE:-}" == container ]]; then
     printf 'devbox-minikube-podman-stale fake-label\\n'
-  elif [[ "${LEAVE_RESOURCE:-}" == podman && -f "$PROFILE_FILE" ]]; then
+  elif [[ "${LEAVE_RESOURCE:-}" == podman || -f "$ACTIVE_FILE" ]] \
+    && [[ -f "$PROFILE_FILE" ]]; then
     printf '%s-node fake-label\n' "$(cat "$PROFILE_FILE")"
+    printf 'unrelated-tenant private-label\n'
   fi
 elif [[ "$1" == volume ]]; then
   if [[ "${STALE_RESOURCE:-}" == volume ]]; then
@@ -95,10 +132,106 @@ else
 fi
 """,
     )
+    _write_executable(
+        fake_bin / "docker",
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ -n "${DOCKER_CONTEXT:-}" ]]; then
+  echo 'unexpected Docker context override' >&2
+  exit 65
+fi
+printf 'docker %s\\n' "$*" >>"$TOOL_LOG"
+case "$1" in
+  version)
+    if [[ "${PREFLIGHT_WARNING:-}" == 1 ]]; then
+      echo 'simulated docker warning' >&2
+    fi
+    printf '%s\\n' "${DOCKER_VERSION:-29.8.2|29.8.2}"
+    ;;
+  ps)
+    if [[ "${PREFLIGHT_WARNING:-}" == 1 ]]; then
+      echo 'simulated Docker ps warning' >&2
+    fi
+    if [[ "${STALE_RESOURCE:-}" == container ]]; then
+      printf 'devbox-minikube-docker-stale fake-label\\n'
+    elif [[ "${LEAVE_RESOURCE:-}" == container || -f "$ACTIVE_FILE" ]] \
+      && [[ -f "$PROFILE_FILE" ]]; then
+      printf '%s-node fake-label\\n' "$(cat "$PROFILE_FILE")"
+      printf 'unrelated-tenant private-label\\n'
+    fi
+    ;;
+  volume)
+    if [[ "${STALE_RESOURCE:-}" == volume ]]; then
+      printf 'devbox-minikube-docker-stale\\n'
+    elif [[ "${LEAVE_RESOURCE:-}" == volume && -f "$PROFILE_FILE" ]]; then
+      cat "$PROFILE_FILE"
+    fi
+    ;;
+  network)
+    if [[ "${STALE_RESOURCE:-}" == network ]]; then
+      printf 'devbox-minikube-docker-stale\\n'
+    elif [[ "${LEAVE_RESOURCE:-}" == network && -f "$PROFILE_FILE" ]]; then
+      cat "$PROFILE_FILE"
+    fi
+    ;;
+  *) echo "unexpected docker invocation: $*" >&2; exit 64 ;;
+esac
+""",
+    )
+    _write_executable(
+        fake_bin / "rpm",
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${PREFLIGHT_WARNING:-}" == 1 ]]; then
+  echo 'simulated rpm warning' >&2
+fi
+case "$*" in
+  *'/docker') printf 'docker-ce-cli\\n' ;;
+  *'/dockerd-rootless.sh') printf 'docker-ce-rootless-extras\\n' ;;
+  *'/dockerd') printf 'docker-ce\\n' ;;
+  *' podman-docker') exit 1 ;;
+  *' docker-ce') printf '%s\\n' "${DOCKER_PACKAGE_VERSION:-29.8.2}" ;;
+  *' docker-ce-cli') printf '%s\\n' "${DOCKER_PACKAGE_VERSION:-29.8.2}" ;;
+  *' docker-ce-rootless-extras') printf '%s\\n' "${DOCKER_PACKAGE_VERSION:-29.8.2}" ;;
+  *) echo "unexpected rpm invocation: $*" >&2; exit 64 ;;
+esac
+""",
+    )
+    _write_executable(
+        fake_bin / "jq",
+        "#!/bin/sh\n"
+        'if [ "${PREFLIGHT_WARNING:-}" = 1 ]; then '
+        "echo 'simulated jq warning' >&2; fi\n"
+        "printf '29.8.2\\n'\n",
+    )
+    _write_executable(
+        fake_bin / "stat",
+        "#!/usr/bin/env bash\n"
+        'if [[ "${PREFLIGHT_WARNING:-}" == 1 ]]; then '
+        "echo 'simulated stat warning' >&2; fi\n"
+        'exec /usr/bin/stat "$@"\n',
+    )
+    _write_executable(
+        fake_bin / "systemctl",
+        """#!/usr/bin/env bash
+if [[ "$1" == --user ]]; then
+  if [[ "$2" == show ]]; then
+    if [[ "${PREFLIGHT_WARNING:-}" == 1 ]]; then
+      echo 'simulated systemctl warning' >&2
+    fi
+    printf '%s\\n' "$DOCKER_DAEMON_PID"
+  fi
+  exit 0
+fi
+exit 1
+""",
+    )
     env = {
         "PATH": f"{fake_bin}:/usr/bin:/bin",
         "HOME": str(tmp_path),
+        "DOCKER_DAEMON_PID": str(os.getpid()),
         "TMPDIR": files["TMPDIR"],
+        "XDG_RUNTIME_DIR": files["XDG_RUNTIME_DIR"],
         **files,
     }
     return log, env
@@ -126,7 +259,6 @@ def _run(
     [
         ([], False),
         (["podman", "kvm2"], False),
-        (["docker"], True),
         (["--driver=podman"], True),
     ],
 )
@@ -208,6 +340,23 @@ def test_podman_preflight_rejects_unavailable_or_rootful_podman(
 
 
 @pytest.mark.unit
+def test_podman_preflight_rejects_configured_default_connection(
+    repo_root: Path, tmp_path: Path
+):
+    log, env = _fake_tools(tmp_path)
+    result = _run(
+        repo_root,
+        "podman",
+        {**env, "PODMAN_DEFAULT_CONNECTION": "remote-production"},
+    )
+
+    assert result.returncode != 0
+    assert "configured as the default" in result.stderr
+    assert "podman system connection list" in result.stderr
+    assert not log.exists(), "a default remote must stop before Minikube starts"
+
+
+@pytest.mark.unit
 def test_kvm2_preflight_reports_unsupported_architecture(
     repo_root: Path, tmp_path: Path
 ):
@@ -235,13 +384,28 @@ def test_podman_backend_is_explicit_isolated_and_checks_cluster_and_workload(
     repo_root: Path, tmp_path: Path
 ):
     log, env = _fake_tools(tmp_path)
-    result = _run(repo_root, "podman", env)
+    result = _run(
+        repo_root,
+        "podman",
+        {
+            **env,
+            "DOCKER_HOST": "unix:///untrusted/docker.sock",
+            "CONTAINER_HOST": "unix:///untrusted/podman.sock",
+            "CONTAINER_CONNECTION": "untrusted-connection",
+            "PODMAN_HOST": "unix:///untrusted/legacy-podman.sock",
+            "PODMAN_INFO_WARNING": "1",
+            "PODMAN_PS_WARNING": "1",
+        },
+    )
 
     assert result.returncode == 0, result.stderr
+    assert "simulated benign Podman warning" in result.stderr
+    assert "simulated Podman ps warning" in result.stderr
     assert "minikube validation passed: podman" in result.stdout
     calls = log.read_text().splitlines()
     start = next(call for call in calls if call.startswith("minikube start "))
     assert "--driver=podman" in start
+    assert "--kubernetes-version=v1.37.0" in start
     assert "--container-runtime=containerd" in start
     assert "--cpus=2" in start
     assert "--memory=4096" in start
@@ -277,6 +441,118 @@ def test_podman_backend_is_explicit_isolated_and_checks_cluster_and_workload(
     assert second_run.returncode == 0, second_run.stderr
     second_profile = Path(env["PROFILE_FILE"]).read_text().strip()
     assert second_profile != profile, "each run must use a unique Minikube profile"
+
+
+@pytest.mark.unit
+def test_docker_backend_is_pinned_docker_ce_and_checks_cluster_and_workload(
+    repo_root: Path, tmp_path: Path
+):
+    log, env = _fake_tools(tmp_path)
+    original_kubeconfig = tmp_path / "caller-kubeconfig"
+    original_kubeconfig.write_text("caller state must remain untouched")
+    result = _run(
+        repo_root,
+        "docker",
+        {
+            **env,
+            "DOCKER_CONTEXT": "untrusted-context",
+            "PREFLIGHT_WARNING": "1",
+            "KUBECONFIG": str(original_kubeconfig),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    for warning in ("docker", "rpm", "jq", "systemctl", "stat"):
+        assert f"simulated {warning} warning" in result.stderr
+    assert "simulated Docker ps warning" in result.stderr
+    assert "backend identity verified: Docker CE container" in result.stdout
+    assert "minikube validation passed: docker" in result.stdout
+    calls = log.read_text().splitlines()
+    start = next(call for call in calls if call.startswith("minikube start "))
+    assert "--driver=docker" in start
+    assert "--kubernetes-version=v1.37.0" in start
+    assert "--container-runtime=containerd" in start
+    assert "minikube config set rootless true" not in calls
+    assert any(
+        call == "docker version --format {{.Client.Version}}|{{.Server.Version}}"
+        for call in calls
+    )
+    assert any(call.startswith("docker ps --all") for call in calls)
+    assert original_kubeconfig.read_text() == "caller state must remain untouched"
+
+    profile = Path(env["PROFILE_FILE"]).read_text().strip()
+    minikube_home = Path(f"{log}.minikube-home").read_text().strip()
+    kubeconfig = Path(f"{log}.kubeconfig").read_text().strip()
+    state_dir = Path(minikube_home).parent
+    assert state_dir.parent == Path(env["TMPDIR"])
+    assert Path(kubeconfig) == state_dir / "kubeconfig"
+    assert profile.startswith("devbox-minikube-docker-")
+    assert not state_dir.exists()
+
+    kubectl_calls = [call for call in calls if call.startswith("kubectl ")]
+    assert any("get nodes" in call for call in kubectl_calls)
+    assert any("busybox:1.37.0@sha256:" in call for call in kubectl_calls)
+    assert any("condition=Ready" in call for call in kubectl_calls)
+    assert all(f"--kubeconfig={kubeconfig}" in call for call in kubectl_calls)
+    assert all(f"--context={profile}" in call for call in kubectl_calls)
+
+
+@pytest.mark.unit
+def test_docker_mode_rejects_wrong_server_identity_before_start(
+    repo_root: Path, tmp_path: Path
+):
+    log, env = _fake_tools(tmp_path)
+    result = _run(repo_root, "docker", {**env, "DOCKER_VERSION": "29.8.2|5.7.0"})
+
+    assert result.returncode != 0
+    assert "reported client/server 29.8.2|5.7.0" in result.stderr
+    assert not any(
+        call.startswith("minikube start ") for call in log.read_text().splitlines()
+    ), "a non-Docker-CE endpoint must stop before Minikube starts"
+
+
+@pytest.mark.unit
+def test_docker_mode_fails_if_profile_resources_remain_after_delete(
+    repo_root: Path, tmp_path: Path
+):
+    log, env = _fake_tools(tmp_path)
+    result = _run(repo_root, "docker", {**env, "LEAVE_RESOURCE": "container"})
+
+    assert result.returncode != 0
+    assert "Docker resources matching profile" in result.stderr
+    assert "unrelated-tenant" not in result.stderr
+    assert "preserving private state" in result.stderr
+    minikube_home = Path(f"{env['TOOL_LOG']}.minikube-home").read_text().strip()
+    assert Path(minikube_home).parent.is_dir()
+    assert any(
+        call.startswith("minikube delete ") for call in log.read_text().splitlines()
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("resource", "diagnostic"),
+    [
+        ("container", "stale Docker containers"),
+        ("volume", "stale Docker volumes"),
+        ("network", "stale Docker networks"),
+    ],
+)
+def test_docker_mode_rejects_stale_resources(
+    repo_root: Path,
+    tmp_path: Path,
+    resource: str,
+    diagnostic: str,
+):
+    log, env = _fake_tools(tmp_path)
+    result = _run(repo_root, "docker", {**env, "STALE_RESOURCE": resource})
+
+    assert result.returncode != 0
+    assert diagnostic in result.stderr
+    assert "reserved prefix" in result.stderr
+    assert not any(
+        call.startswith("minikube start ") for call in log.read_text().splitlines()
+    ), "stale resources must stop before cluster creation"
 
 
 @pytest.mark.unit
@@ -330,6 +606,7 @@ def test_minikube_validation_fails_and_retains_state_for_leftover_podman_resourc
 
     assert result.returncode != 0
     assert "Podman resources matching profile" in result.stderr
+    assert "unrelated-tenant" not in result.stderr
     assert "preserving private state" in result.stderr
     minikube_home = Path(f"{env['TOOL_LOG']}.minikube-home").read_text().strip()
     assert Path(minikube_home).parent.is_dir()
@@ -384,6 +661,27 @@ def test_minikube_validation_rejects_stale_podman_resources(
 
 
 @pytest.mark.unit
+def test_kind_and_minikube_server_versions_match_pinned_kubectl_minor(
+    repo_root: Path,
+):
+    versions = json.loads((repo_root / "lima/tool-versions.json").read_text())
+    kubectl_version = versions["tools"]["kubectl"]["version"]
+    kubectl_minor = ".".join(kubectl_version.split(".")[:2])
+
+    kind_script = (repo_root / "lima/validate-kind.sh").read_text()
+    minikube_script = (repo_root / "lima/validate-minikube.sh").read_text()
+    kind_image = re.search(r"kindest/node:v(\d+\.\d+)\.\d+@sha256:", kind_script)
+    minikube_version = re.search(
+        r"kubernetes_version='v(\d+\.\d+)\.\d+'", minikube_script
+    )
+
+    assert kind_image is not None, "kind must pin its Kubernetes node image"
+    assert minikube_version is not None, "Minikube must pin its Kubernetes version"
+    assert kind_image.group(1) == kubectl_minor
+    assert minikube_version.group(1) == kubectl_minor
+
+
+@pytest.mark.unit
 def test_kvm2_backend_names_explicit_driver_and_resource_checks(repo_root: Path):
     script = (repo_root / "lima/validate-minikube.sh").read_text()
 
@@ -392,12 +690,43 @@ def test_kvm2_backend_names_explicit_driver_and_resource_checks(repo_root: Path)
     assert '--driver="$driver"' in script
     assert "LIBVIRT_DEFAULT_URI" in script
     assert "qemu-system-$(uname -m)" in script
+    assert 'state_tmp_dir="${TMPDIR:-/var/tmp}"' in script
+    assert "tmpfs | ramfs | devtmpfs | hugetlbfs)" in script
     assert "type=['\\\"]kvm" in script
     assert "resource_args=(list --all --name)" in script
     assert "resource_args=(net-list --all --name)" in script
     assert 'virsh -c "$LIBVIRT_DEFAULT_URI" "${resource_args[@]}"' in script
     assert 'check_no_stale_resources "libvirt virtual machines"' in script
     assert 'check_no_stale_resources "libvirt networks"' in script
-    assert '[[ "$output" == *"$profile"* ]]' in script
+    assert 'virsh -c "$LIBVIRT_DEFAULT_URI" dumpxml "$profile"' in script
+    assert 'virsh -c "$LIBVIRT_DEFAULT_URI" domstate "$profile"' in script
+    assert 'matching="$(grep -F "$profile" <<<"$output" || true)"' in script
+    assert '[[ -n "$matching" ]]' in script
+    assert "verify_backend_instance" in script
+    assert "kubernetes_version='v1.37.0'" in script
+    assert "KVM2 libvirt L2 VM" in script
+    assert "profile $profile is absent from libvirt" in script
     assert "--driver=docker" not in script
     assert "minikube delete --all" not in script
+
+
+@pytest.mark.unit
+def test_kvm2_preflight_refuses_tmpfs_before_creating_state(
+    repo_root: Path, tmp_path: Path
+):
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_executable(fake_bin / "findmnt", "#!/bin/sh\nprintf 'tmpfs\\n'\n")
+
+    result = subprocess.run(
+        ["/bin/bash", str(repo_root / "lima/validate-minikube.sh"), "kvm2"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={"PATH": str(fake_bin), "TMPDIR": str(tmp_path)},
+        timeout=10,
+    )
+
+    assert result.returncode != 0
+    assert "disk-backed temporary storage" in result.stderr
+    assert not list(tmp_path.glob("my-sandbox-minikube.*"))

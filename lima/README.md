@@ -470,11 +470,16 @@ Podman remains a separately supported rootless runtime. Its API socket is
 `$XDG_RUNTIME_DIR/podman/podman.sock`; invoking `podman` talks to Podman
 directly.
 Do not point Docker at that socket or expect Docker to fall back to Podman.
-`lima/validate-kind.sh` defaults to the Docker provider and selects the
-matching socket when `KIND_EXPERIMENTAL_PROVIDER=podman` is explicitly set.
-For direct kind commands, select the provider explicitly; kind's Podman
-provider invokes the `podman` CLI directly, while its Docker provider uses the
-Docker CLI and the default Docker CE socket.
+`lima/validate-kind.sh` requires an explicit `docker` or `podman` positional
+provider and sets the matching backend deliberately. Its Docker path verifies
+the manifest-pinned Docker CE RPMs, rootless user service, socket, and server
+version before using that endpoint. Its Podman path verifies rootless mode,
+clears inherited endpoint selectors, and refuses a configured default remote
+connection; kind's Podman provider invokes the `podman` CLI directly. Both paths
+inspect the selected runtime for a cluster-labeled node after create and verify
+its removal after delete.
+The #319 change replaces the old `validate-kind.sh [runs]`/environment-selector
+interface; pass the provider first, such as `lima/validate-kind.sh podman 1`.
 Docker and Podman keep separate image, container, and network stores; repull or
 explicitly save/load images when moving between runtimes.
 
@@ -520,36 +525,55 @@ Minikube v1.39 KVM2 is supported on x86_64 only and requires `/dev/kvm`, nested
 VMX/SVM, `qemu-kvm`, and working system libvirt. Select the intended backend:
 
 ```shell
-# Docker CE backend from #188; this is not the Podman API socket.
-minikube start --driver=docker
-
-# Rootless Podman, following Minikube's documented setup.
-minikube config set rootless true
-minikube start --driver=podman --container-runtime=containerd --cpus=2 --memory=4096
-
-# Nested VM through KVM2.
-minikube start --driver=kvm2 --container-runtime=containerd --cpus=2 --memory=4096
+# Run the complete five-path smoke matrix from inside the provisioned VM.
+# Pins: kind 0.33.0, Kubernetes 1.37.0, Minikube 1.39.0,
+# Docker CE 29.8.2, and kubectl 1.37.1.
+lima/validate-kind.sh docker 1       # kind through rootless Docker CE
+lima/validate-kind.sh podman 1       # kind through rootless Podman
+lima/validate-minikube.sh docker     # Minikube Docker CE driver
+lima/validate-minikube.sh podman     # Minikube rootless Podman driver
+TMPDIR=/var/tmp lima/validate-minikube.sh kvm2 # Minikube KVM2 L2 VM
 ```
 
-Minikube does not automatically fall back between backends. Docker and Podman
-run clusters as containers in the L1; KVM2 creates an L2 VM and has additional
-guest overhead. Podman and KVM2 test profiles each request 2 CPUs and 4 GiB of
-memory and run sequentially. The Lima L1 is configured for 8 CPUs and 16 GiB;
-leave enough resources for the L1 and its other workloads rather than running
-both profiles concurrently. The Lima provisioner applies the container-selinux
-labels to rootless Podman's graphroot; keep SELinux enforcing. The #318 smoke
-validator covers Podman and KVM2, while #319 owns the recurring full driver
-matrix. Minikube may log an E1008 cache warning for upstream #8426 before it
-pulls the KIC base image; the warning is nonfatal, and the smoke verifies a
-Ready node and running workload.
+Every validator invocation selects exactly one provider/driver; there is no
+validator default or fallback. Each validator creates private `KUBECONFIG`
+state, waits for a Ready node, runs the pinned BusyBox 1.37.0 image by digest,
+deletes the cluster, and checks the selected backend for test-owned resources.
+Partial-start failures run the same delete-and-audit cleanup; if a resource
+cannot be removed or inspected, the command fails and preserves private state
+for diagnosis.
+Kind pins the v0.33.0 release image `kindest/node:v1.37.0` by digest;
+Minikube explicitly starts Kubernetes v1.37.0. Both match kubectl 1.37.1's
+minor version.
+The KVM2 validator creates a multi-GiB L2 disk beneath `TMPDIR`. It defaults to
+disk-backed `/var/tmp` and refuses a `tmpfs` location such as `/tmp`, which is
+bounded and shared with other recursive VM tests.
+Docker CE and Podman stay on separate rootless sockets and independent image
+and container stores. Podman smoke rejects a configured default system
+connection so its CLI cannot silently select a remote host. KVM2 is additionally
+verified by observing the profile's
+live libvirt domain, proving that Minikube created an L2 VM rather than a
+container-backed cluster. Provider-wide default bridge networks are shared
+infrastructure, so validators preserve them and audit only resources scoped to
+the generated cluster/profile names.
 
-Run `lima/validate-minikube.sh podman` or
-`lima/validate-minikube.sh kvm2` for the corresponding isolated smoke. The
-validator reserves the `devbox-minikube-<mode>-` resource-name prefix and
-refuses to start if an interrupted run left matching containers, volumes,
-networks, or VMs behind. Recreate pre-#318 VMs to apply the Minikube and
-libvirt provisioning; until then, `devbox-toolchain-check` reports Minikube as
-missing. `--reprovision` does not replace the embedded system provisioner.
+Docker/Podman clusters run as containers in the L1; KVM2 creates an L2 VM and
+has additional guest overhead. Minikube test profiles request 2 CPUs and 4
+GiB of memory and run sequentially. The Lima L1 is configured for 8 CPUs and
+16 GiB; leave enough resources for the L1 and other workloads. The Lima
+provisioner applies container-selinux labels to rootless Podman's graphroot;
+keep SELinux enforcing. Minikube may log an E1008 cache warning for upstream
+issue 8426 before it pulls the KIC base image; the warning is nonfatal, and the
+smoke verifies a Ready node and running workload.
+
+The validators reserve `devbox-kind-<provider>-` and
+`devbox-minikube-<mode>-` resource prefixes and refuse to start if stale
+kind/Minikube containers, volumes, or networks are present (plus libvirt VMs
+for KVM2). An interrupted run of the older kind validator may leave resources
+under `devbox-kind-validation-`; inspect that legacy prefix before retrying.
+Recreate pre-#318 VMs to apply Minikube and libvirt provisioning; until then,
+`devbox-toolchain-check` reports Minikube as missing. `--reprovision` does not
+replace the embedded system provisioner.
 
 Changes to embedded provisioning scripts or `lima/devbox.yaml` require
 [recreating the VM](#recreating-the-vm). A manifest-only Docker version bump is
@@ -926,9 +950,12 @@ passes, verify from inside the VM (opened with
 - [ ] `devbox-toolchain-check` reports the pinned manifest versions and
       operator tools; `make --version`, `kind version`, `kubectl version
       --client`, `helm version`, and `pipenv --version` all succeed.
-- [ ] `~/src/my-sandbox/lima/validate-kind.sh` completes ten consecutive
-      create/delete cycles with the Docker provider; setting
-      `KIND_EXPERIMENTAL_PROVIDER=podman` exercises the separate Podman socket.
+- [ ] From the provisioned VM, all five explicit backend invocations complete:
+      `lima/validate-kind.sh docker 1`, `lima/validate-kind.sh podman 1`,
+      `lima/validate-minikube.sh {docker,podman}`, and
+      `TMPDIR=/var/tmp lima/validate-minikube.sh kvm2`. Each proves the
+      runtime or libvirt domain that created its cluster, waits for Ready,
+      runs BusyBox, deletes the cluster, and verifies resource cleanup.
 - [ ] `docker version` reports the manifest-pinned client and server, and the
       Docker smoke test succeeds while Podman's service/socket are stopped.
 - [ ] `~/.agents/skills/devbox-tools/SKILL.md` and the ast-grep skills are
