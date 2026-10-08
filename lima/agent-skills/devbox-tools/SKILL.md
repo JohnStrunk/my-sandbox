@@ -39,7 +39,7 @@ agent knows about a command because it is on `PATH`.
   as a cross-session security boundary.
 - `/tmp/opencode` is not host-mounted or persistent. Treat its contents as
   disposable; do not store project files, caches, or other data that must
-  survive VM cleanup, reset, or recreation. Keep persistent data in its normal
+  survive VM cleanup or recreation. Keep persistent data in its normal
   project or VM-state location instead.
 - The directory contract is provisioned by the Lima system script and
   readiness probe embedded when the VM is created. An older VM may receive this

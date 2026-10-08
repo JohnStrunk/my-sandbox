@@ -269,15 +269,15 @@ The OpenCode command being launched then starts it with the requested setting.
 If the service already has the requested level, it stays running. The
 preference persists for later OpenCode invocations until the opposite flag is
 used. When a flag is used with a shell or another command, devbox also exports
-the selected level into that command's guest environment. A debug-only lifecycle
-invocation stores the preference without
-opening a shell; a non-OpenCode command does not start the service, so the
-setting takes effect on the next OpenCode invocation.
+the selected level into that command's guest environment. On `--recreate`, a
+debug option applies to the fresh VM's shell or follow-on command; `--stop` and
+`--delete` reject debug options. A non-OpenCode command does not start the
+service, so the setting takes effect on the next OpenCode invocation.
 
 The VM writes logs to `~/.local/share/opencode/log/opencode.log`; this directory
 is a writable host mount, so the host-side path is also
 `~/.local/share/opencode/log/opencode.log`. Logs remain on the host after debug
-logging is disabled or the VM is reset/deleted. `--no-debug` does not erase
+logging is disabled or the VM is recreated/deleted. `--no-debug` does not erase
 existing logs; remove them manually when they are no longer needed. Before
 launching OpenCode, devbox restricts the host-shared log directory to mode
 `0700` and the log file to `0600`. This keeps logs private even if the managed
@@ -341,10 +341,11 @@ vice versa.
 ```shell
 devbox --stop          # graceful stop
 devbox                 # start on demand, then enter the current directory
-devbox --reprovision   # stop/start and re-run the embedded provisioners
-devbox --reset         # factory-reset, then start and provision again
-devbox --reset -- git status       # run a command after the reset
-devbox --reprovision -- opencode  # run a command after reprovisioning
+devbox --recreate      # create a fresh VM, then open its interactive shell
+devbox --recreate -- true # non-interactive recreation
+devbox --recreate -- git status   # run a command in the fresh VM
+devbox -r -- opencode            # short form
+devbox --stop && devbox -- git status # apply tool/manifest updates, then run a command
 devbox --delete        # unprotect and remove the VM; do not recreate it
 ```
 
@@ -358,26 +359,31 @@ alias points into the protected mount tree. Provisioning verifies these
 boundaries directly and refuses to protect a `SrcPath` parent inside the guest
 home.
 
-When `--reset` or `--reprovision` is followed by a command, `devbox` validates
-that the caller's current directory is mounted before changing the VM, completes
-the lifecycle action under the shared lock, then runs the exact command argv in
-the VM from that mapped directory. It uses the ordinary `devbox` command path,
-including its filtered host environment and OpenCode runtime configuration,
-and returns the command's exit status. If no command is supplied, only the
-lifecycle handling runs; `devbox` does not open the default interactive shell
-(the reprovision fingerprint check still runs). Put `--` before a command whose
-first argument begins with an option.
+`--recreate` validates that the caller's current directory is mounted before
+deleting anything, including when no follow-on command is supplied. It
+unprotects and deletes an existing configured VM (restoring protection if
+deletion fails), then creates a fresh VM from the active checkout's
+`lima/devbox.yaml` and waits for Lima's readiness checks. If no VM exists, it
+creates one directly. After the fresh VM is ready, an optional command runs
+with its exact argv from the mapped directory through the ordinary `devbox`
+guest runner, including its filtered host environment and OpenCode runtime
+configuration; `devbox` returns the command's exit status. Without a command,
+it opens the normal interactive shell in the new VM. Put `--` before a command
+whose first argument begins with an option.
 After the lock is released, a concurrent lifecycle action may win, so the
 follow-on command can fail rather than restarting the VM.
 
 `devbox` compares a running VM's provisioning fingerprint with the current
-checkout and warns when they differ; use `devbox --reprovision` to apply the
-current manifest and update the stamp. A stopped VM re-runs provisioning as it
-starts. `--reset` is destructive to VM-local state but preserves host-mounted
-projects, configuration, and the dedicated OpenCode L1 state. Edits to
-`lima/devbox.yaml` or embedded
-provisioning scripts still require the recreation procedure below; reset and
-reprovision operate on the existing instance's embedded template.
+checkout and warns when they differ. Stop and start the VM to apply
+manifest-only tool changes; edits to `lima/devbox.yaml` or embedded provisioning
+scripts require `devbox --recreate`, which uses the current checkout's template
+and provisioners rather than the old instance's embedded copy. Recreate is
+destructive to VM-local state but preserves host-mounted projects,
+configuration, and the dedicated OpenCode L1 state. Bare `devbox --recreate`
+opens the normal interactive shell after the new VM is ready; use a command such
+as `devbox --recreate -- true` for non-interactive automation. To refresh only
+manifest/tool updates and then run a scripted command, use
+`devbox --stop && devbox -- <command>`.
 
 `devbox -d` / `devbox --delete` removes the configured Lima instance without
 starting or recreating it; running it again when the instance is absent is
@@ -550,20 +556,17 @@ Changes to embedded provisioning scripts or `lima/devbox.yaml` require
 applied on VM restart; user provisioning enables the Docker service and
 restarts it after root provisioning when the provisioning fingerprint changes.
 An unchanged active daemon is left running. VMs
-created before Docker CE support must be migrated **before updating the shared
-checkout**. Their embedded system provisioner installs Podman only but reads the
-live manifest and tool installer; after the checkout adds Docker's manifest pin,
-the old provisioner fails during the next start or `--reprovision` because
-Docker CE is absent. `--reprovision` cannot update that embedded script.
-Preserve any VM-local Podman images or container data you need, then run
-`devbox --delete` and `devbox` after updating the checkout; host-mounted
-project/config files are preserved.
+created before Docker CE support may fail during the next start because their
+embedded system provisioner installs Podman only while the live manifest also
+requires Docker CE. Preserve any VM-local Podman images or container data you
+need, then run `devbox --recreate` from the updated checkout to replace the old
+embedded provisioner; host-mounted project/config files are preserved.
 
 If provisioning refuses to replace a non-managed
 `~/.config/systemd/user/docker.service`, inspect the file and
 `systemctl --user cat docker.service` before changing it. If it is safe to give
 that unit name to devbox, stop and disable it, remove only the conflicting unit
-file, then run `devbox --reprovision` so provisioning can install its managed
+file, then stop and start the VM so provisioning can install its managed
 rootless unit. Do not overwrite an existing service you still need.
 
 The VM keeps `net.ipv4.conf.default.route_localnet=0` to preserve the loopback
@@ -577,18 +580,22 @@ limactl protect devbox
 ```
 
 `limactl delete --force devbox` alone does not remove this protection; first
-run `limactl unprotect devbox`. The explicit `devbox --delete` operation does
-both. `devbox --reset` does not remove protection either; with pinned Lima 2.2,
-manually run `limactl unprotect <instance>` before resetting a protected VM,
-then run `limactl protect <instance>` again after reset if the instance still
-exists. Unlike `--reset`, `--delete` checks the original state and attempts to
-restore protection if deletion fails.
+run `limactl unprotect devbox`. The explicit `devbox --delete` and
+`devbox --recreate` operations do both. They check the original protection
+state and attempt to restore protection if deletion fails. A newly recreated
+VM is a new instance; protect it with `limactl protect devbox` after it passes
+readiness checks if you use that safeguard.
 
 ## Recreating the VM
 
-To pick up template or provisioning-script changes, recreate the instance.
-Version-only tool pin changes do not require a recreate; use the
-[drift/re-provision procedure](#tool-version-updates-and-drift). Host-side
+To pick up template or provisioning-script changes, run `devbox --recreate`.
+It maps the current directory before deleting the configured instance and, if
+one exists, unprotects and deletes it with protection rollback on failure. It
+then creates a new VM from the active checkout's `lima/devbox.yaml` and waits
+for readiness checks. If there is no old instance, it just creates the fresh
+one. With a command, it runs that command only after the VM is ready; without
+one, it opens the normal shell. Version-only tool pin changes do not require a
+recreate; stop and start the VM to apply them. Host-side
 data (`~/src`, `~/kb`, and the other mounts) is untouched; only VM-local state
 (guest home, VM-local caches, nested Podman storage, and other guest-local
 files) is lost. OpenCode's dedicated `~/.local/state/devbox-opencode` host
@@ -610,25 +617,12 @@ limactl shell devbox -- opencode service stop
 
 Skip this migration when the VM has no state to preserve. The destination
 `~/.local/state/devbox-opencode` is private to this L1 and persists across
-`devbox --reset`, `devbox --delete`, and manual recreation.
+`devbox --recreate`, `devbox --delete`, and manual recreation.
 
-```shell
-cd /path/to/my-sandbox
-src_path="$(readlink -f "$HOME/src")"
-repo_path="$(pwd -P)"
-kb_path="$(readlink -f "$HOME/kb")"
-limactl unprotect devbox          # remove protection before deleting
-limactl delete --force devbox
-limactl start "$repo_path/lima/devbox.yaml" \
-  --param "SrcPath=$src_path" \
-  --param "RepoPath=$repo_path" \
-  --param "KbPath=$kb_path" \
-  --param "GitUserName=$(git config --global user.name)" \
-  --param "GitUserEmail=$(git config --global user.email)"
-```
-
-After the new instance boots and passes readiness checks, restore deletion
-protection with `limactl protect devbox` if you use that safeguard.
+Run `devbox --recreate` from the active checkout to perform the replacement
+with the correct template, protection handling, workdir validation, and
+readiness checks. After the new instance is ready, restore deletion protection
+with `limactl protect devbox` if you use that safeguard.
 
 ## Shared vs VM-local state
 
@@ -680,7 +674,7 @@ directory names and do not treat task directories as a cross-session boundary.
 
 This path is not host-mounted or persistent. Treat its contents as temporary;
 do not put project files, caches, or other data there that must survive VM
-cleanup, reset, or recreation.
+cleanup or recreation.
 
 OpenCode's state directory combines TUI/model/history data with the
 single-owner service registration, so those files cannot be mounted
@@ -690,7 +684,7 @@ mount and never overwrites existing L1 data. The trusted L1 user can read the
 source mount, including the host's live service registration, but that file is
 not copied. The seed is one-way; later host preference changes do not flow
 into L1, and L1 state is not shared with nested L2s. Remove
-`~/.local/state/devbox-opencode` only when intentionally resetting that
+`~/.local/state/devbox-opencode` only when intentionally clearing that
 persistent L1 OpenCode state. The complete policy and validation limits are in
 [`mount-policy.md`](mount-policy.md).
 

@@ -23,27 +23,31 @@ devbox opencode        # start OpenCode in this project
 devbox --debug opencode # enable debug logs for all managed-service sessions
 devbox --no-debug opencode # disable managed-service debug logs
 devbox --stop          # gracefully stop the shared VM
-devbox --reprovision   # restart and apply current tool/provisioning changes
-devbox --reset         # factory-reset VM-local state and reprovision
-devbox --reset -- git status       # run a command after the reset
-devbox --reprovision -- opencode  # run a command after reprovisioning
+devbox --recreate      # create a fresh VM, then open its interactive shell
+devbox --recreate -- true # non-interactive recreation
+devbox --recreate -- git status   # run a command in the fresh VM
+devbox -r -- opencode            # short form; run a command after recreation
+devbox --stop && devbox -- git status # reapply manifest/tool updates, then run a command
 devbox --delete        # remove the VM without starting or recreating it
 ```
 
 The first invocation creates the VM from this checkout's Lima template. The
 launcher starts it on demand, maps the current project path into the guest, and
-rejects paths outside configured mounts. For `--reset` and `--reprovision`, an
-optional command runs only after the lifecycle action succeeds, in the mapped
-current directory, with the normal filtered environment; its exit status is
-returned by `devbox`. Without a command, the launcher performs only the
-lifecycle action and does not open the default interactive shell. Use `--`
-before a command that starts with an option.
+rejects paths outside configured mounts. `--recreate` validates that mapping
+before deleting the configured VM, then creates and starts a fresh VM from this
+checkout's Lima template. An optional command runs only after readiness checks
+pass, in the mapped current directory, with the normal filtered environment;
+its argv and exit status are preserved. Bare `devbox --recreate` opens the
+normal interactive shell in the fresh VM; use `devbox --recreate -- true` for
+non-interactive automation. Use `--` before a command that starts with an
+option.
 
-`devbox --reset` loses guest-local state but preserves host-mounted projects,
-configuration, and OpenCode L1 state. `devbox --delete` removes the configured
-Lima instance and its guest-local state without starting or recreating it; this
-explicitly removes Lima's protection before deletion. Host-mounted files remain
-intact. See the Lima guide for details and VM recreation requirements.
+`devbox --recreate` loses VM-local state but preserves host-mounted projects,
+configuration, and OpenCode L1 state. If the VM does not exist, recreation just
+creates it. `devbox --delete` removes the configured Lima instance and its
+guest-local state without starting or recreating it; this explicitly removes
+Lima's protection before deletion. Host-mounted files remain intact. See the
+Lima guide for details and VM recreation requirements.
 
 ## Worktrees and Python environments
 
@@ -234,9 +238,11 @@ PR.
 Review any change to `provenance.url_templates` against the base branch: those
 URLs select the assets checked by CI, and Renovate should only update the
 artifact version/digest records, not their provenance templates.
-Manifest-only updates are applied by
-`devbox --reprovision`; edits to embedded Lima provisioning or template files
-require recreating the VM.
+Manifest-only updates are applied when the VM next starts (for example, run
+`devbox --stop` and then `devbox`). For scripted manifest refresh followed by a
+command, use `devbox --stop && devbox -- <command>` (for example,
+`devbox --stop && devbox -- git status`); edits to embedded Lima provisioning
+or template files require `devbox --recreate`.
 
 ## Repository map
 

@@ -17,7 +17,8 @@ Commands:
 
 The active go.work takes precedence over go.mod. Use GOWORK=off to ignore a
 workspace file. Toolchains downloaded by Go are cached under the VM-local Go
-cache and survive ordinary stop/start and reprovisioning.
+cache and survive ordinary stop/start and provisioning updates on the same VM;
+recreating the VM starts with an empty cache.
 EOF
 }
 

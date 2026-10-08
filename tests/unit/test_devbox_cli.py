@@ -13,8 +13,9 @@ def test_devbox_help_describes_only_the_vm_workflow(devbox_path: Path):
     assert "Usage: devbox" in result.stdout
     assert "shared Lima VM" in result.stdout
     assert "--stop" in result.stdout
-    assert "--reset" in result.stdout
-    assert "--reprovision" in result.stdout
+    assert "-r, --recreate" in result.stdout
+    assert "--reset" not in result.stdout
+    assert "--reprovision" not in result.stdout
     assert "-d, --delete" in result.stdout
     assert "Explicitly unprotect and delete" in result.stdout
     assert "--container" not in result.stdout
@@ -40,7 +41,7 @@ def test_devbox_rejects_the_retired_container_mode(devbox_path: Path):
 
 @pytest.mark.unit
 def test_devbox_rejects_unknown_options(devbox_path: Path):
-    for option in ("--invalid-flag-xyz", "--kind"):
+    for option in ("--invalid-flag-xyz", "--kind", "--reset", "--reprovision"):
         result = run_bash_script(devbox_path, [option])
         assert result.returncode == 2
         assert f"Unknown option: {option}" in result.stderr
@@ -51,8 +52,9 @@ def test_devbox_rejects_unknown_options(devbox_path: Path):
 @pytest.mark.parametrize(
     "args",
     [
-        ["--delete", "--reset"],
-        ["--reset", "--reprovision"],
+        ["--delete", "--recreate"],
+        ["--recreate", "--stop"],
+        ["-r", "--delete"],
         ["--delete", "-d"],
     ],
 )

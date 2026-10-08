@@ -9,16 +9,15 @@ export XDG_DATA_HOME=
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") [--stop|--reset|--reprovision|-d|--delete]
-       [--debug|--no-debug] [-h|--help] [--] [command [arg ...]]
+Usage: $(basename "$0") [--stop|-r|--recreate] [--debug|--no-debug]
+       [-d|--delete] [-h|--help] [--] [command [arg ...]]
 
 Open a shell or run a command in the shared Lima VM at the current project
 directory. On first use, the VM is created from this checkout's Lima template.
 
 Options:
       --stop          Gracefully stop the shared Lima VM (no command)
-      --reset         Factory-reset and reprovision, then optionally run a command
-      --reprovision   Restart and reprovision, then optionally run a command
+  -r, --recreate      Delete and create a fresh VM, then run a command or shell
       --debug         Enable debug logging for the managed OpenCode service
       --no-debug      Disable debug logging for the managed OpenCode service
       -d, --delete    Explicitly unprotect and delete the VM; do not recreate it
@@ -27,9 +26,9 @@ Options:
 Arguments:
   command [arg ...]   Command to run in the VM (default shell for normal use)
 
-For --reset and --reprovision, an optional command runs only after the lifecycle
-action succeeds. Without a command, lifecycle handling runs without opening the
-default interactive shell.
+For --recreate, the current directory must map into the VM before the existing
+VM is deleted. After the fresh VM is ready, an optional command runs there;
+without a command, the default interactive shell opens.
 Use -- before a command that starts with an option. --stop and --delete accept
 no command, and lifecycle options cannot be combined.
 EOF
@@ -68,12 +67,8 @@ while [[ $# -gt 0 ]]; do
       set_lifecycle_action "$1" stop
       shift
       ;;
-    --reset)
-      set_lifecycle_action "$1" reset
-      shift
-      ;;
-    --reprovision)
-      set_lifecycle_action "$1" reprovision
+    -r | --recreate)
+      set_lifecycle_action "$1" recreate
       shift
       ;;
     -d | --delete)

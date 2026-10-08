@@ -2,8 +2,7 @@
 
 - The Lima VM is the only supported devbox runtime. Author and validate
   repository changes from inside the VM; use the host-side `devbox` launcher
-  to enter it. `devbox --stop`, `devbox --reset`, `devbox --reprovision`, and
-  `devbox --delete`
+  to enter it. `devbox --stop`, `devbox --recreate`, and `devbox --delete`
   manage the shared VM. See `lima/README.md` for host setup and lifecycle
   details.
 
@@ -12,8 +11,7 @@
   devbox                 # shell in the VM at this project path
   devbox opencode        # OpenCode in the VM
   devbox --stop
-  devbox --reprovision
-  devbox --reset
+  devbox --recreate
   ```
 
 - When working on this repo, you should use worktrees to isolate your work
