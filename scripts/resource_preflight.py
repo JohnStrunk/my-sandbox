@@ -12,6 +12,7 @@ from pathlib import Path
 
 INFRASTRUCTURE_EXIT = 125
 DEFAULT_CGROUP_ROOT = Path("/sys/fs/cgroup")
+PROC_CGROUP_FILE = Path("/proc/self/cgroup")
 MIN_PID_LIMIT = 4096
 MIN_PID_HEADROOM = 512
 MIN_CPU_LIMIT = 2.0
@@ -83,56 +84,109 @@ def _read_first_from_roots_status(
     return None, False
 
 
-def _current_cgroup_paths() -> dict[str, tuple[str, ...]]:
-    paths: dict[str, list[str]] = {}
+def _current_cgroup_paths(
+    proc_cgroup_file: Path,
+) -> dict[str | None, tuple[str, ...]]:
+    """Read and validate the process's cgroup paths, grouped by controller."""
+    paths: dict[str | None, list[str]] = {}
     try:
-        lines = Path("/proc/self/cgroup").read_text(encoding="utf-8").splitlines()
-    except (OSError, UnicodeError):
+        lines = proc_cgroup_file.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError, ValueError):
         return {}
     for line in lines:
         fields = line.split(":", 2)
         if len(fields) != 3:
             continue
         _, controllers, relative_path = fields
-        key = "unified" if not controllers else controllers
+        if _cgroup_path_components(relative_path) is None:
+            continue
+        if controllers and not _valid_controller_mount(controllers):
+            continue
+        key = None if not controllers else controllers
         paths.setdefault(key, []).append(relative_path)
     return {key: tuple(values) for key, values in paths.items()}
 
 
-def _join_cgroup_path(root: Path, relative_path: str) -> Path:
-    if relative_path in ("", "/"):
-        return root
-    return root / relative_path.lstrip("/")
+def _cgroup_path_components(relative_path: str) -> tuple[str, ...] | None:
+    """Return safe components for an absolute path from proc cgroup data."""
+    if "\0" in relative_path or not relative_path.startswith("/"):
+        return None
+    if relative_path == "/":
+        return ()
+    components = relative_path[1:].split("/")
+    if any(component in ("", ".", "..") for component in components):
+        return None
+    return tuple(components)
+
+
+def _valid_controller_mount(mount: str) -> bool:
+    """Check that a v1 controller list is safe to use as a mount component."""
+    if "\0" in mount or "/" in mount:
+        return False
+    controllers = mount.split(",")
+    return all(
+        controller and controller not in (".", "..") for controller in controllers
+    )
+
+
+def _join_cgroup_path(root: Path, relative_path: str) -> Path | None:
+    components = _cgroup_path_components(relative_path)
+    if components is None:
+        return None
+    return root.joinpath(*components)
 
 
 def _resource_roots(
-    cgroup_root: Path, controller: str, *, include_fallback: bool = True
+    cgroup_root: Path,
+    controller: str,
+    *,
+    include_fallback: bool = True,
+    membership_paths: dict[str | None, tuple[str, ...]] | None = None,
 ) -> tuple[Path, ...]:
     roots: list[Path] = []
-    if cgroup_root == DEFAULT_CGROUP_ROOT:
-        current_paths = _current_cgroup_paths()
-        for relative_path in current_paths.get("unified", ()):
-            roots.append(_join_cgroup_path(cgroup_root, relative_path))
-        for mount, relative_paths in current_paths.items():
-            if mount == "unified":
+    if membership_paths is not None:
+        for relative_path in membership_paths.get(None, ()):
+            candidate = _join_cgroup_path(cgroup_root, relative_path)
+            if candidate is not None:
+                roots.append(candidate)
+        for mount, relative_paths in membership_paths.items():
+            if mount is None:
+                continue
+            if not _valid_controller_mount(mount):
                 continue
             mounted_controllers = set(mount.split(","))
             if controller not in mounted_controllers:
                 continue
             for relative_path in relative_paths:
-                roots.append(_join_cgroup_path(cgroup_root / mount, relative_path))
-                roots.append(_join_cgroup_path(cgroup_root / controller, relative_path))
-    if not roots:
+                for base in (cgroup_root / mount, cgroup_root / controller):
+                    candidate = _join_cgroup_path(base, relative_path)
+                    if candidate is not None:
+                        roots.append(candidate)
+    # Explicit discovery with no active match must leave usage roots empty.
+    if not roots and (include_fallback or membership_paths is None):
         roots.extend((cgroup_root / controller, cgroup_root))
     if include_fallback:
         roots.append(cgroup_root / controller)
         if controller == "cpu":
             roots.extend((cgroup_root / "cpu,cpuacct", cgroup_root / "cpuset"))
         roots.append(cgroup_root)
+    try:
+        resolved_cgroup_root = cgroup_root.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return ()
     unique_roots: list[Path] = []
     for root in roots:
-        if root not in unique_roots:
-            unique_roots.append(root)
+        try:
+            resolved_root = root.resolve()
+        except (OSError, RuntimeError, ValueError):
+            continue
+        if (
+            resolved_root != resolved_cgroup_root
+            and resolved_cgroup_root not in resolved_root.parents
+        ):
+            continue
+        if resolved_root not in unique_roots:
+            unique_roots.append(resolved_root)
     return tuple(unique_roots)
 
 
@@ -260,21 +314,38 @@ def _memory_limit(roots: tuple[Path, ...]) -> tuple[int | None, bool]:
     return value, True
 
 
-def inspect_resources(cgroup_root: Path = DEFAULT_CGROUP_ROOT) -> ResourceReport:
+def inspect_resources(
+    cgroup_root: Path = DEFAULT_CGROUP_ROOT,
+    *,
+    proc_cgroup_file: Path | None = None,
+) -> ResourceReport:
     """Read cgroup limits, falling back to host capacity when unlimited."""
     try:
         host_cpu_count = len(os.sched_getaffinity(0))
     except (AttributeError, OSError):
         host_cpu_count = os.cpu_count() or 1
     host_cpu_count = max(1, host_cpu_count)
-    pids_roots = _resource_roots(cgroup_root, "pids")
-    cpu_roots = _resource_roots(cgroup_root, "cpu") + _resource_roots(
-        cgroup_root, "cpuset"
+    membership_paths = None
+    if cgroup_root == DEFAULT_CGROUP_ROOT or proc_cgroup_file is not None:
+        membership_paths = _current_cgroup_paths(proc_cgroup_file or PROC_CGROUP_FILE)
+    pids_roots = _resource_roots(cgroup_root, "pids", membership_paths=membership_paths)
+    cpu_roots = _resource_roots(
+        cgroup_root, "cpu", membership_paths=membership_paths
+    ) + _resource_roots(cgroup_root, "cpuset", membership_paths=membership_paths)
+    memory_roots = _resource_roots(
+        cgroup_root, "memory", membership_paths=membership_paths
     )
-    memory_roots = _resource_roots(cgroup_root, "memory")
-    pids_current_roots = _resource_roots(cgroup_root, "pids", include_fallback=False)
+    pids_current_roots = _resource_roots(
+        cgroup_root,
+        "pids",
+        include_fallback=False,
+        membership_paths=membership_paths,
+    )
     memory_current_roots = _resource_roots(
-        cgroup_root, "memory", include_fallback=False
+        cgroup_root,
+        "memory",
+        include_fallback=False,
+        membership_paths=membership_paths,
     )
     pids_raw, pids_limit_known = _read_first_from_roots_status(
         pids_roots, ("pids.max",)
@@ -466,6 +537,14 @@ def _argument_parser() -> argparse.ArgumentParser:
         help="cgroup hierarchy to inspect (default: /sys/fs/cgroup)",
     )
     parser.add_argument(
+        "--proc-cgroup",
+        type=Path,
+        help=(
+            f"membership file override; {PROC_CGROUP_FILE} is used by the "
+            "default root, while custom roots use membership only when supplied"
+        ),
+    )
+    parser.add_argument(
         "--fail-on-constrained",
         action="store_true",
         help="return status 125 without starting the test command",
@@ -475,7 +554,7 @@ def _argument_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _argument_parser().parse_args(argv)
-    report = inspect_resources(args.cgroup_root)
+    report = inspect_resources(args.cgroup_root, proc_cgroup_file=args.proc_cgroup)
     constrained = _constrained_resources(report)
     _print_report(report, constrained)
     return INFRASTRUCTURE_EXIT if constrained and args.fail_on_constrained else 0
