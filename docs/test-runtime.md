@@ -1,5 +1,24 @@
 # Test runtime and concurrency
 
+## Cgroup discovery
+
+With the default cgroup root, `scripts/resource_preflight.py` automatically
+uses `/proc/self/cgroup` to locate the process's active cgroup, including nested
+paths in unified cgroup v2 and controller mounts in cgroup v1. With a custom
+`--cgroup-root`, membership is used only when `--proc-cgroup` is supplied;
+otherwise the existing flat-tree lookup is preserved for candidates within the
+chosen root. Candidates that resolve outside that root are ignored. In
+membership-discovery mode, PID and memory usage is read from active membership
+paths, not substituted with an ancestor cgroup's value. If `/proc/self/cgroup`
+is unavailable at the default root, or a supplied `--proc-cgroup` override is
+missing, unreadable, or yields no valid matching membership, usage remains
+unknown rather than falling back to flat-root values. Missing or unreadable
+active usage files behave the same way; a known finite limit then constrains
+the budget.
+
+For deterministic tests with a synthetic cgroup tree, `--cgroup-root` selects
+the tree and `--proc-cgroup` supplies a fixture in `/proc/self/cgroup` format.
+
 ## Measurement environment
 
 The #302 baseline was measured inside the Fedora 44 Lima guest on an 8-vCPU,
