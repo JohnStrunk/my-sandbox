@@ -132,6 +132,10 @@ shared repository `AGENTS.md` or README.
     total_blocked_by: .issue_dependencies_summary.total_blocked_by}'
   ```
 
+- This example covers one page only. For exhaustive backlog selection across
+  more than 100 issues, add `--paginate` to the request and keep the explicit
+  projection.
+
 - A null or missing dependency count is unknown, not zero; verify candidates
   with `gh issue view NUMBER --json blockedBy,blocking` before claiming. Add one
   link with `gh issue edit ISSUE --add-blocked-by DEPENDENCY`, or remove one

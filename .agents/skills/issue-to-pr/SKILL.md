@@ -21,11 +21,16 @@ Select the highest-value open, unassigned, unblocked issue. This repo labels
 issues for exactly that decision (see the triage vocabulary in `AGENTS.md`);
 use the labels first and reserve full-body reads for what they cannot answer.
 
-1. Enumerate candidates with one bounded API call and an explicit `--jq`
-   projection of shortlist fields, without returning full issue objects:
+1. Enumerate candidates with `gh api --paginate` and `per_page=100`, plus an
+   explicit `--jq` projection of shortlist fields, without returning full issue
+   objects. `--paginate` follows REST `Link: rel="next"` pages until all pages
+   are exhausted, covering backlogs larger than 100 issues. `gh` applies the
+   `--jq` projection to each page separately; keep the per-issue projection so
+   only shortlist fields are emitted. Read issue bodies or comments only after
+   candidates are shortlisted:
 
    ```shell
-   gh api 'repos/OWNER/REPO/issues?state=open&per_page=100' --jq \
+   gh api --paginate 'repos/OWNER/REPO/issues?state=open&per_page=100' --jq \
      '.[] | select(has("pull_request") | not) | {number, title,
      labels: [.labels[].name],
      assignees: [.assignees[].login],
