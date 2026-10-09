@@ -150,11 +150,9 @@ fingerprint="$(printf '%s\n%s\n%s\n%s\n%s\n%s\n' \
   | sha256sum | awk '{print $1}')"
 fingerprint_file="$HOME/.local/share/devbox-toolchain/provisioning.fingerprint"
 previous_fingerprint="$(cat "$fingerprint_file" 2>/dev/null || true)"
-provisioning_fingerprint_changed=false
 if [[ -n "$previous_fingerprint" \
   && "$previous_fingerprint" != "$fingerprint" ]]; then
   echo "devbox: toolchain fingerprint changed; applying updated manifest pins" >&2
-  provisioning_fingerprint_changed=true
 fi
 
 # Seed Git identity only when unset; route GitHub remotes through HTTPS/gh.
@@ -294,8 +292,7 @@ if [[ -n "$host_agents" && -d "$host_agents" ]]; then
   fi
 fi
 
-# Install Docker's documented rootless user unit directly instead of running
-# the vendor setup helper as the guest, which can read host-mounted credentials.
+# Rootless Podman's API socket is managed by the guest user's systemd manager.
 XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 export XDG_RUNTIME_DIR
 export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
@@ -308,70 +305,12 @@ for _ in {1..30}; do
   sleep 1
 done
 if [[ "$user_manager_ready" != true ]]; then
-  echo "devbox: systemd user manager is unavailable for rootless runtimes" >&2
+  echo "devbox: systemd user manager is unavailable for rootless Podman" >&2
   exit 1
 fi
 
-docker_user_unit_dir="$HOME/.config/systemd/user"
-docker_user_unit="$docker_user_unit_dir/docker.service"
-if [[ -L "$HOME/.config" || -L "$HOME/.config/systemd" \
-  || -L "$docker_user_unit_dir" || -L "$docker_user_unit" ]]; then
-  echo "devbox: refusing symlinked rootless Docker user service path" >&2
-  exit 1
-fi
-install -d -m 0700 "$docker_user_unit_dir"
-docker_user_unit_tmp="$(mktemp "$docker_user_unit_dir/docker.service.XXXXXX")"
-cat >"$docker_user_unit_tmp" <<'EOF'
-[Unit]
-Description=Docker Application Container Engine (Rootless)
-Documentation=https://docs.docker.com/go/rootless/
-Requires=dbus.socket
-StartLimitIntervalSec=60s
-StartLimitBurst=3
-
-[Service]
-Environment=PATH=/usr/bin:/sbin:/usr/sbin:/usr/local/bin
-ExecStart=/usr/bin/dockerd-rootless.sh
-ExecReload=/bin/kill -s HUP $MAINPID
-TimeoutSec=0
-RestartSec=2
-Restart=always
-LimitNOFILE=infinity
-LimitNPROC=infinity
-LimitCORE=infinity
-TasksMax=infinity
-Delegate=yes
-Type=notify
-NotifyAccess=all
-KillMode=mixed
-
-[Install]
-WantedBy=default.target
-EOF
-if [[ -e "$docker_user_unit" ]]; then
-  if [[ ! -f "$docker_user_unit" ]] \
-    || ! cmp -s "$docker_user_unit_tmp" "$docker_user_unit"; then
-    rm -f -- "$docker_user_unit_tmp"
-    echo "devbox: refusing to replace a non-managed Docker user service" >&2
-    exit 1
-  fi
-  rm -f -- "$docker_user_unit_tmp"
-else
-  install -m 0644 "$docker_user_unit_tmp" "$docker_user_unit"
-  rm -f -- "$docker_user_unit_tmp"
-fi
-systemctl --user daemon-reload
-systemctl --user enable docker.service
-# Linger may have started the previous daemon before the RPM pin was applied.
-if systemctl --user is-active --quiet docker.service; then
-  if [[ "$provisioning_fingerprint_changed" == true ]]; then
-    systemctl --user restart docker.service
-  fi
-else
-  systemctl --user start docker.service
-fi
-
-# Podman remains an independent rootless runtime with its own API socket.
+# Docker CE is provisioned as a rootful system service by the system script.
+# Keep the user manager solely for rootless Podman's independent API socket.
 systemctl --user enable --now podman.socket
 
 # OpenCode is not started here; its first credential-aware shell owns the service.

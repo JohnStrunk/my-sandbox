@@ -476,8 +476,7 @@ export UV_CACHE_DIR="${UV_CACHE_DIR:-$HOME/.cache/uv}"
 export HF_HOME="${HF_HOME:-/var/lib/devbox-toolbuilder/.cache/semble/huggingface}"
 export SEMBLE_CACHE_LOCATION="${SEMBLE_CACHE_LOCATION:-$HOME/.cache/semble/index}"
 export PLAYWRIGHT_MCP_BROWSER="${PLAYWRIGHT_MCP_BROWSER:-chromium}"
-# Replace the Podman-era value so guest Docker clients use Docker CE.
-export DOCKER_HOST="unix://${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/docker.sock"
+# Leave DOCKER_HOST unset so the Docker CLI uses the rootful local socket.
 export KIND_EXPERIMENTAL_PROVIDER="${KIND_EXPERIMENTAL_PROVIDER:-docker}"
 export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}"
 EOF
@@ -644,10 +643,10 @@ fi
 rpm --import "$docker_gpg_key_file"
 
 # Docker CE comes from Docker's official Fedora repository. Keep Engine, CLI,
-# rootless extras, and containerd.io on canonical version pins. Engine and CLI
-# use distinct RPM epochs; request exact name/epoch/version but let the repo
-# select the current Fedora release build. Skip RPM scriptlets; the Docker units
-# are configured explicitly below and in user provisioning.
+# and containerd.io on canonical version pins. Engine and CLI use distinct RPM
+# epochs; request exact name/epoch/version but let the repo select the current
+# Fedora release build. Skip RPM scriptlets; the system Docker units are enabled
+# explicitly below.
 docker_repo_file=/etc/yum.repos.d/docker-ce.repo
 docker_repo_tmp="$(new_temp_dir)/docker-ce.repo"
 cat >"$docker_repo_tmp" <<'EOF'
@@ -667,8 +666,8 @@ docker_version="$(manifest_version docker_ce)"
 containerd_version="$(manifest_version containerd_io)"
 docker_ce_expected="docker-ce 3 ${docker_version}"
 docker_cli_expected="docker-ce-cli 1 ${docker_version}"
-docker_rootless_expected="docker-ce-rootless-extras 0 ${docker_version}"
 containerd_expected="containerd.io 0 ${containerd_version}"
+docker_rpms_changed=false
 docker_rpm_identity() {
   rpm -q --queryformat '%{NAME} %{EPOCHNUM} %{VERSION}' "$1" \
     2>/dev/null || true
@@ -676,16 +675,14 @@ docker_rpm_identity() {
 docker_rpms_match_pins() {
   [[ "$(docker_rpm_identity docker-ce)" == "$docker_ce_expected" ]] \
     && [[ "$(docker_rpm_identity docker-ce-cli)" == "$docker_cli_expected" ]] \
-    && [[ "$(docker_rpm_identity docker-ce-rootless-extras)" \
-      == "$docker_rootless_expected" ]] \
     && [[ "$(docker_rpm_identity containerd.io)" == "$containerd_expected" ]]
 }
 if ! docker_rpms_match_pins; then
+  docker_rpms_changed=true
   dnf install -y --enablerepo=docker-ce-stable \
     --setopt=install_weak_deps=False --setopt=tsflags=noscripts \
     "docker-ce-3:${docker_version}" \
     "docker-ce-cli-1:${docker_version}" \
-    "docker-ce-rootless-extras-${docker_version}" \
     "containerd.io-${containerd_version}"
   dnf clean all
   rm -rf /var/cache/dnf
@@ -708,22 +705,31 @@ assert_rpm_owner() {
 }
 assert_rpm_owner /usr/bin/docker docker-ce-cli
 assert_rpm_owner /usr/bin/dockerd docker-ce
-assert_rpm_owner /usr/bin/dockerd-rootless.sh docker-ce-rootless-extras
 assert_rpm_owner /usr/bin/containerd containerd.io
 if rpm -q podman-docker >/dev/null 2>&1; then
   echo "devbox: refusing podman-docker; Docker must use Docker CE" >&2
   exit 1
 fi
 
-# Never leave Docker's rootful system daemon/socket or system containerd active.
-# The supported daemon is started separately by the guest's rootless user unit.
+# Docker CE's system daemon runs as root and serves /var/run/docker.sock through
+# the package-provided socket unit. The RPM scriptlets are skipped above, so
+# enable the complete system service stack explicitly.
+if ! getent group docker >/dev/null; then
+  groupadd --system docker
+fi
+# The guest user needs access to passed-through KVM devices, the system
+# libvirt API used by Minikube's KVM2 driver, and the rootful Docker socket.
+usermod --append --groups kvm,libvirt,docker "$DEVBOX_USER"
 systemctl daemon-reload
-for unit in docker.service docker.socket containerd.service; do
-  if systemctl cat "$unit" >/dev/null 2>&1; then
-    systemctl disable --now "$unit"
-  fi
-done
-systemctl daemon-reload
+systemctl enable --now containerd.service docker.socket docker.service
+if [[ "$docker_rpms_changed" == true ]]; then
+  # Restart the daemons after an RPM pin update so they do not keep running
+  # binaries that DNF replaced while the VM was shutting down or booting. Do
+  # this after enable --now so both units are active even on a fresh VM, and
+  # independent of which service happened to start first during boot.
+  systemctl restart containerd.service
+  systemctl restart docker.service
+fi
 
 # Preserve Red Hat internal TLS trust for guest tools and integrations.
 # These pins are embedded in the VM at create time. A writable shared-checkout
@@ -764,9 +770,6 @@ if [[ ! -L "$compat_ca_bundle" ]] \
   ln -sfn "$ca_bundle" "$compat_ca_bundle"
 fi
 
-# The guest user needs access to passed-through KVM devices and the system
-# libvirt API used by Minikube's KVM2 driver.
-usermod --append --groups kvm,libvirt "$DEVBOX_USER"
 modprobe kvm || true
 case "$(uname -m)" in
   x86_64) modprobe kvm_intel || modprobe kvm_amd || true ;;

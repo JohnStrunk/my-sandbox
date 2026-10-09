@@ -17,6 +17,7 @@ from tests.conftest import (
     guest_runtime_environment,
     lima_vm_start_command,
     pytest_terminal_summary,
+    runtime_offline_guard,
     vm_start_timeout,
     vm_test_environment,
 )
@@ -200,6 +201,27 @@ def test_guest_runtime_allowlist_contains_only_unix_socket_endpoints(
         "DBUS_SESSION_BUS_ADDRESS": f"unix:path={runtime_dir / 'bus'}",
     }
     assert "GH_TOKEN" not in runtime_env
+
+
+@pytest.mark.unit
+def test_docker_offline_guard_checks_sudo_before_touching_system_units():
+    script = runtime_offline_guard("docker")
+
+    assert "sudo -n true" in script
+    assert "require passwordless sudo" in script
+    assert script.index("sudo -n true") < script.index(
+        'runtime_systemctl stop "${runtime_name}.service"'
+    )
+    assert 'runtime_systemctl() { sudo -n systemctl "$@"; }' in script
+
+
+@pytest.mark.unit
+def test_podman_offline_guard_uses_the_user_service_manager():
+    script = runtime_offline_guard("podman")
+
+    assert "sudo -n" not in script
+    assert 'runtime_systemctl() { systemctl --user "$@"; }' in script
+    assert "podman/podman.sock" in script
 
 
 @pytest.mark.unit

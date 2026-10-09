@@ -396,7 +396,9 @@ def test_system_script_adds_user_to_kvm_and_libvirt_groups(repo_root: Path):
     system_script = _script(repo_root, "provision-system.sh")
 
     assert 'DEVBOX_USER="{{.User}}"' in system_script
-    assert 'usermod --append --groups kvm,libvirt "$DEVBOX_USER"' in system_script
+    assert (
+        'usermod --append --groups kvm,libvirt,docker "$DEVBOX_USER"' in system_script
+    )
 
 
 @pytest.mark.unit
@@ -434,7 +436,9 @@ def test_system_script_provisions_libvirt_for_minikube_kvm2(repo_root: Path):
     assert (
         "systemctl enable --now virtqemud.socket virtnetworkd.socket" in system_script
     )
-    assert 'usermod --append --groups kvm,libvirt "$DEVBOX_USER"' in system_script
+    assert (
+        'usermod --append --groups kvm,libvirt,docker "$DEVBOX_USER"' in system_script
+    )
 
 
 @pytest.mark.unit
@@ -486,11 +490,12 @@ def test_external_gcloud_rpm_skips_root_scriptlets(repo_root: Path):
 
 
 @pytest.mark.unit
-def test_docker_ce_uses_pinned_signature_checked_rpms_and_rootless_service(
+def test_docker_ce_uses_pinned_signature_checked_rpms_and_rootful_services(
     repo_root: Path,
 ):
     system_script = _script(repo_root, "provision-system.sh")
     user_script = _script(repo_root, "provision-user.sh")
+    docker_preflight = _script(repo_root, "docker-ce-preflight.sh")
     manifest = _template(repo_root)
     tool_versions = (repo_root / "lima/tool-versions.json").read_text()
     docker_key = (repo_root / "lima/keys/docker-ce.asc").read_bytes()
@@ -515,41 +520,52 @@ def test_docker_ce_uses_pinned_signature_checked_rpms_and_rootless_service(
     assert "manifest_version containerd_io" in system_script
     assert '"docker-ce-3:${docker_version}"' in system_script
     assert '"docker-ce-cli-1:${docker_version}"' in system_script
-    assert '"docker-ce-rootless-extras-${docker_version}"' in system_script
     assert '"containerd.io-${containerd_version}"' in system_script
-    assert "docker_release" not in system_script
-    assert "rpm -q --queryformat '%{NAME} %{EPOCHNUM} %{VERSION}'" in system_script
-    assert "--setopt=tsflags=noscripts" in system_script
+    assert "docker-ce-rootless-extras" not in system_script
     assert "assert_rpm_owner /usr/bin/docker docker-ce-cli" in system_script
     assert "assert_rpm_owner /usr/bin/dockerd docker-ce" in system_script
     assert "assert_rpm_owner /usr/bin/containerd containerd.io" in system_script
+    assert "docker_release" not in system_script
+    assert "rpm -q --queryformat '%{NAME} %{EPOCHNUM} %{VERSION}'" in system_script
+    assert "--setopt=tsflags=noscripts" in system_script
     assert "rpm -q podman-docker" in system_script
     assert (
         'KIND_EXPERIMENTAL_PROVIDER="${KIND_EXPERIMENTAL_PROVIDER:-docker}"'
         in system_script
     )
-    assert "Replace the Podman-era value" in system_script
-    assert 'systemctl disable --now "$unit"' in system_script
-    assert 'XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"' in user_script
-    assert "export XDG_RUNTIME_DIR" in user_script
+    assert "Leave DOCKER_HOST unset" in system_script
+    assert "getent group docker" in system_script
+    assert "groupadd --system docker" in system_script
     assert (
-        'export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"'
-        in user_script
+        'usermod --append --groups kvm,libvirt,docker "$DEVBOX_USER"' in system_script
     )
-    assert "systemctl --user show-environment" in user_script
-    assert "dockerd-rootless-setuptool.sh install" not in user_script
-    assert "ExecStart=/usr/bin/dockerd-rootless.sh" in user_script
-    assert "Requires=dbus.socket" in user_script
-    assert "Type=notify" in user_script
-    assert "Delegate=yes" in user_script
-    assert "WantedBy=default.target" in user_script
-    assert "systemctl --user daemon-reload" in user_script
-    assert "systemctl --user enable docker.service" in user_script
-    assert "systemctl --user start docker.service" in user_script
-    assert "systemctl --user restart docker.service" in user_script
-    assert "provisioning_fingerprint_changed=false" in user_script
-    assert '[[ "$provisioning_fingerprint_changed" == true ]]' in user_script
+    for unit in ("containerd.service", "docker.socket", "docker.service"):
+        assert unit in system_script
+        assert unit in docker_preflight
+    assert "systemctl enable" in system_script
+    assert "export DOCKER_HOST=" not in system_script
+    assert "docker-ce-rootless-extras" not in user_script
+    assert "dockerd-rootless" not in user_script
     assert "systemctl --user enable --now podman.socket" in user_script
+    assert "systemctl --user" not in docker_preflight
+    assert "systemctl is-active --quiet" in docker_preflight
+    assert "systemctl is-enabled --quiet" in docker_preflight
+    assert "MainPID" in docker_preflight and "docker.service" in docker_preflight
+    assert "stat -c" in docker_preflight and "/proc/${daemon_pid}" in docker_preflight
+    assert "rootful uid 0" in docker_preflight
+    assert re.search(r"unset\s+[^\n]*\bDOCKER_CONTEXT\b", docker_preflight)
+    assert re.search(r"unset\s+[^\n]*\bDOCKER_HOST\b", docker_preflight)
+    assert "unix:///var/run/docker.sock" in docker_preflight
+    assert "rootful Docker socket is missing" in docker_preflight
+    assert "docker-ce-rootless-extras" not in docker_preflight
+    assert "containerd.io" in docker_preflight
+    assert ".tools.docker_ce.version" in docker_preflight
+    assert "containerd_io" in docker_preflight
+    assert "{{.Client.Version}}|{{.Server.Version}}" in docker_preflight
+    assert "docker_rpms_changed=false" in system_script
+    assert 'if [[ "$docker_rpms_changed" == true ]]; then' in system_script
+    assert "systemctl restart containerd.service" in system_script
+    assert "systemctl restart docker.service" in system_script
     assert "docker" in manifest["probes"][0]["description"].lower()
 
 
@@ -559,17 +575,23 @@ def test_readiness_checks_distinct_docker_ce_and_podman_endpoints(
 ):
     probe = _script(repo_root, "probe-readiness.sh")
 
-    assert 'DOCKER_SOCKET="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/docker.sock"' in probe
-    assert (
-        'PODMAN_SOCKET="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock"'
-        in probe
-    )
+    assert "/var/run/docker.sock" in probe
+    assert "DOCKER_SOCKET=/var/run/docker.sock" in probe
+    assert 'ROOTLESS_DOCKER_SOCKET="$RUNTIME_DIR/docker.sock"' in probe
+    assert 'PODMAN_SOCKET="$RUNTIME_DIR/podman/podman.sock"' in probe
     assert "systemctl --user is-active --quiet docker.service" in probe
-    assert "rootful Docker system services must remain inactive" in probe
-    assert "rootful Docker system services must remain disabled" in probe
-    assert "the rootful system containerd service must remain inactive" in probe
-    assert "the rootful system containerd service must remain disabled" in probe
-    assert "the guest user must not be a member of the rootful docker group" in probe
+    assert "systemctl --user is-enabled --quiet docker.service" in probe
+    assert "obsolete rootless Docker user unit is enabled or active" in probe
+    assert "obsolete rootless Docker socket is present" in probe
+    assert "for unit in containerd.service docker.socket docker.service; do" in probe
+    assert 'systemctl is-active --quiet "$unit"' in probe
+    assert 'systemctl is-enabled --quiet "$unit"' in probe
+    assert "grep -qx docker" in probe
+    assert "guest session lacks rootful docker-group access" in probe
+    assert "the rootful Docker socket is not available" in probe
+    assert "root:docker:660" in probe
+    assert "the guest user cannot access the rootful Docker socket" in probe
+    assert 'docker_daemon_uid" == 0' in probe
     assert "http://d/version" in probe
     assert ".tools.docker_ce.version" in probe
     assert '--unix-socket "$PODMAN_SOCKET" http://d/_ping' in probe

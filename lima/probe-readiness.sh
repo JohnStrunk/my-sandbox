@@ -17,9 +17,12 @@ export HF_HOME="$TOOL_BUILDER_HOME/.cache/semble/huggingface"
 export SEMBLE_CACHE_LOCATION="$HOME/.cache/semble/index"
 export PLAYWRIGHT_BROWSERS_PATH="$TOOL_BUILDER_HOME/.cache/ms-playwright"
 export PLAYWRIGHT_MCP_BROWSER=chromium
-DOCKER_SOCKET="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/docker.sock"
-PODMAN_SOCKET="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock"
-[[ "$DOCKER_SOCKET" != "$PODMAN_SOCKET" ]] \
+RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+DOCKER_SOCKET=/var/run/docker.sock
+ROOTLESS_DOCKER_SOCKET="$RUNTIME_DIR/docker.sock"
+PODMAN_SOCKET="$RUNTIME_DIR/podman/podman.sock"
+[[ "$DOCKER_SOCKET" != "$PODMAN_SOCKET" \
+  && "$ROOTLESS_DOCKER_SOCKET" != "$PODMAN_SOCKET" ]] \
   || fail "Docker and Podman must use different API sockets"
 
 OPENCODE_TMP=/tmp/opencode
@@ -194,7 +197,7 @@ if ! virt_host_validation="$(virt-host-validate qemu 2>&1)"; then
     "and host virtualization"
 fi
 
-# Lima sets subordinate IDs and cgroup delegation for rootless engines.
+# Lima sets subordinate IDs and cgroup delegation for rootless Podman.
 check_subordinate_ids() {
   local file="$1"
   awk -F: -v user="$(id -un)" \
@@ -203,29 +206,43 @@ check_subordinate_ids() {
 }
 check_subordinate_ids /etc/subuid
 check_subordinate_ids /etc/subgid
-systemctl --user is-enabled --quiet docker.service \
-  || fail "the rootless Docker user service is not enabled"
-systemctl --user is-active --quiet docker.service \
-  || fail "the rootless Docker user service is not active"
-if systemctl is-active --quiet docker.service \
-  || systemctl is-active --quiet docker.socket; then
-  fail "rootful Docker system services must remain inactive"
+for unit in containerd.service docker.socket docker.service; do
+  systemctl is-enabled --quiet "$unit" \
+    || fail "the rootful Docker system unit $unit is not enabled"
+  systemctl is-active --quiet "$unit" \
+    || fail "the rootful Docker system unit $unit is not active"
+done
+if ! docker_daemon_pid="$(
+  systemctl show --property=MainPID --value docker.service
+)"; then
+  fail "cannot inspect the rootful Docker system service process"
 fi
-if systemctl is-enabled --quiet docker.service \
-  || systemctl is-enabled --quiet docker.socket; then
-  fail "rootful Docker system services must remain disabled"
+[[ "$docker_daemon_pid" =~ ^[1-9][0-9]*$ ]] \
+  || fail "the rootful Docker system service has no valid MainPID"
+if ! docker_daemon_uid="$(stat -c '%u' "/proc/$docker_daemon_pid")"; then
+  fail "cannot inspect the rootful Docker process owner"
 fi
-if systemctl is-active --quiet containerd.service; then
-  fail "the rootful system containerd service must remain inactive"
+[[ "$docker_daemon_uid" == 0 ]] \
+  || fail "the Docker system service process is not owned by root"
+getent group docker >/dev/null \
+  || fail "the rootful Docker socket group is missing"
+id -nG | tr ' ' '\n' | grep -qx docker \
+  || fail "guest session lacks rootful docker-group access"
+if systemctl --user is-active --quiet docker.service \
+  || systemctl --user is-enabled --quiet docker.service; then
+  fail "obsolete rootless Docker user unit is enabled or active; "\
+    "recreate the VM"
 fi
-if systemctl is-enabled --quiet containerd.service; then
-  fail "the rootful system containerd service must remain disabled"
-fi
-if id -nG | tr ' ' '\n' | grep -qx docker; then
-  fail "the guest user must not be a member of the rootful docker group"
-fi
+[[ ! -S "$ROOTLESS_DOCKER_SOCKET" ]] \
+  || fail "obsolete rootless Docker socket is present; recreate the VM"
 test -S "$DOCKER_SOCKET" \
-  || fail "the rootless Docker socket is not available"
+  || fail "the rootful Docker socket is not available"
+docker_socket_metadata="$(stat -c '%U:%G:%a' "$DOCKER_SOCKET")"
+[[ "$docker_socket_metadata" == root:docker:660 ]] \
+  || fail "Docker socket has $docker_socket_metadata; expected "\
+    "root:docker:660"
+[[ -r "$DOCKER_SOCKET" && -w "$DOCKER_SOCKET" ]] \
+  || fail "the guest user cannot access the rootful Docker socket"
 test -S "$PODMAN_SOCKET" \
   || fail "the rootless Podman API socket is not available"
 [[ "$(stat -fc %T /sys/fs/cgroup)" == cgroup2fs ]] \

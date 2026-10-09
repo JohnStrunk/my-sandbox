@@ -26,44 +26,54 @@ DEFAULT_VM_START_TIMEOUT = 3600.0
 VM_START_TIMEOUT_ENV_VAR = "DEVBOX_VM_START_TIMEOUT"
 
 
-def user_runtime_offline_guard(runtime: str) -> str:
-    """Return guest-shell setup that stops and restores one rootless runtime."""
-    socket_path = {
-        "docker": "docker.sock",
-        "podman": "podman/podman.sock",
-    }.get(runtime)
-    if socket_path is None:
-        raise ValueError(f"unsupported rootless runtime: {runtime}")
+def runtime_offline_guard(runtime: str) -> str:
+    """Return guest-shell setup that stops and restores one selected runtime."""
+    if runtime == "docker":
+        systemctl_prefix = "sudo -n systemctl"
+        socket_path = "/var/run/docker.sock"
+        privilege_precheck = (
+            "sudo -n true || { "
+            'echo "Docker-offline VM tests require passwordless sudo" >&2; '
+            "exit 1; }"
+        )
+    elif runtime == "podman":
+        systemctl_prefix = "systemctl --user"
+        socket_path = "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock"
+        privilege_precheck = ":"
+    else:
+        raise ValueError(f"unsupported runtime: {runtime}")
 
     script = r"""
+__PRIVILEGE_PRECHECK__
 runtime_name=__RUNTIME__
-runtime_socket="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/__SOCKET_PATH__"
+runtime_socket="__SOCKET_PATH__"
+runtime_systemctl() { __SYSTEMCTL_PREFIX__ "$@"; }
 runtime_service_was_active=false
 runtime_socket_was_active=false
-if systemctl --user is-active --quiet "${runtime_name}.service"; then
+if runtime_systemctl is-active --quiet "${runtime_name}.service"; then
   runtime_service_was_active=true
 fi
-if systemctl --user is-active --quiet "${runtime_name}.socket"; then
+if runtime_systemctl is-active --quiet "${runtime_name}.socket"; then
   runtime_socket_was_active=true
 fi
-restore_user_runtime() {
+restore_runtime() {
   local status="${1:-$?}"
   trap - EXIT HUP INT TERM
   if [[ "$runtime_service_was_active" == true ]]; then
-    systemctl --user start "${runtime_name}.service" || status=1
+    runtime_systemctl start "${runtime_name}.service" || status=1
   else
-    systemctl --user stop "${runtime_name}.service" >/dev/null 2>&1 || status=1
+    runtime_systemctl stop "${runtime_name}.service" >/dev/null 2>&1 || status=1
   fi
   if [[ "$runtime_socket_was_active" == true ]]; then
-    systemctl --user start "${runtime_name}.socket" || status=1
+    runtime_systemctl start "${runtime_name}.socket" || status=1
   else
-    systemctl --user stop "${runtime_name}.socket" >/dev/null 2>&1 || true
+    runtime_systemctl stop "${runtime_name}.socket" >/dev/null 2>&1 || true
   fi
   exit "$status"
 }
-verify_user_runtime_offline() {
-  if systemctl --user is-active --quiet "${runtime_name}.service" \
-    || systemctl --user is-active --quiet "${runtime_name}.socket"; then
+verify_runtime_offline() {
+  if runtime_systemctl is-active --quiet "${runtime_name}.service" \
+    || runtime_systemctl is-active --quiet "${runtime_name}.socket"; then
     echo "${runtime_name} service/socket remained active during smoke" >&2
     return 1
   fi
@@ -75,17 +85,19 @@ verify_user_runtime_offline() {
   fi
   return 0
 }
-trap restore_user_runtime EXIT
+trap restore_runtime EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-systemctl --user stop "${runtime_name}.socket" >/dev/null 2>&1 || true
-systemctl --user stop "${runtime_name}.service"
-verify_user_runtime_offline
+runtime_systemctl stop "${runtime_name}.socket" >/dev/null 2>&1 || true
+runtime_systemctl stop "${runtime_name}.service"
+verify_runtime_offline
 """
     return (
         script.replace("__RUNTIME__", runtime)
         .replace("__SOCKET_PATH__", socket_path)
+        .replace("__SYSTEMCTL_PREFIX__", systemctl_prefix)
+        .replace("__PRIVILEGE_PRECHECK__", privilege_precheck)
         .strip()
     )
 
@@ -272,6 +284,25 @@ class LimaVM:
                 f"{result.stderr.strip()}"
             )
         return name
+
+
+def skip_if_guest_provisioning_is_stale(repo_root: Path, devbox_vm: LimaVM) -> None:
+    """Skip VM runtime checks when a reused guest has embedded old scripts."""
+    if devbox_vm.name is not None or os.environ.get("MY_SANDBOX_VM_TEST_FRESH") == "1":
+        return
+    fingerprint_path = (
+        f"{devbox_vm.guest_home}/.local/share/devbox-toolchain/provisioning.fingerprint"
+    )
+    guest_fingerprint = devbox_vm.run(["cat", fingerprint_path], timeout=30)
+    if (
+        guest_fingerprint.returncode != 0
+        or guest_fingerprint.stdout.strip()
+        != expected_lima_provisioning_fingerprint(repo_root)
+    ):
+        pytest.skip(
+            "the current guest has stale provisioning inputs; use a fresh VM "
+            "or recreate it before checking the current toolchain"
+        )
 
 
 def vm_start_timeout() -> float:
