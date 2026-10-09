@@ -343,7 +343,7 @@
       }
     },
     "semble": {
-      "version": "0.6.0",
+      "version": "0.6.1",
       "datasource": "pypi",
       "depName": "semble",
       "integrity": "version-only",
