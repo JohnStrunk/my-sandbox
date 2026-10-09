@@ -1,6 +1,4 @@
 import atexit
-import os
-import socket
 import subprocess
 import uuid
 from pathlib import Path
@@ -21,10 +19,6 @@ def _fake_tools(tmp_path: Path) -> tuple[Path, dict[str, str]]:
     runtime_alias = Path("/tmp") / f"k{uuid.uuid4().hex[:8]}"
     runtime_alias.symlink_to(runtime_dir, target_is_directory=True)
     atexit.register(runtime_alias.unlink, missing_ok=True)
-    docker_socket = runtime_alias / "docker.sock"
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.bind(str(docker_socket))
-    sock.close()
     log = tmp_path / "kind.log"
     resources = tmp_path / "resources"
     resources.mkdir()
@@ -88,6 +82,10 @@ esac
 set -euo pipefail
 if [[ -n "${DOCKER_CONTEXT:-}" ]]; then
   echo 'unexpected Docker context override' >&2
+  exit 65
+fi
+if [[ "${DOCKER_HOST:-}" != unix:///var/run/docker.sock ]]; then
+  echo 'Docker did not target the rootful system socket' >&2
   exit 65
 fi
 printf '%s|%s\\n' "$*" "${DOCKER_HOST:-<unset>}" >>"$DOCKER_LOG"
@@ -232,12 +230,12 @@ if [[ "${PREFLIGHT_WARNING:-}" == 1 ]]; then
 fi
 case "$*" in
   *'/docker') printf 'docker-ce-cli\\n' ;;
-  *'/dockerd-rootless.sh') printf 'docker-ce-rootless-extras\\n' ;;
   *'/dockerd') printf 'docker-ce\\n' ;;
+  *'/containerd') printf 'containerd.io\\n' ;;
   *' podman-docker') exit 1 ;;
-  *' docker-ce') printf '29.8.2\\n' ;;
-  *' docker-ce-cli') printf '29.8.2\\n' ;;
-  *' docker-ce-rootless-extras') printf '29.8.2\\n' ;;
+  *' docker-ce') printf '%s\\n' "${DOCKER_PACKAGE_VERSION:-29.8.2}" ;;
+  *' docker-ce-cli') printf '%s\\n' "${DOCKER_PACKAGE_VERSION:-29.8.2}" ;;
+  *' containerd.io') printf '%s\\n' "${CONTAINERD_PACKAGE_VERSION:-2.3.6}" ;;
   *) echo "unexpected rpm invocation: $*" >&2; exit 64 ;;
 esac
 """,
@@ -247,28 +245,40 @@ esac
         "#!/bin/sh\n"
         'if [ "${PREFLIGHT_WARNING:-}" = 1 ]; then '
         "echo 'simulated jq warning' >&2; fi\n"
-        "printf '29.8.2\\n'\n",
+        'case "$*" in *containerd_io*) printf "2.3.6\\n" ;; '
+        '*) printf "29.8.2\\n" ;; esac\n',
     )
     _write_executable(
         fake_bin / "stat",
         "#!/usr/bin/env bash\n"
         'if [[ "${PREFLIGHT_WARNING:-}" == 1 ]]; then '
         "echo 'simulated stat warning' >&2; fi\n"
+        'if [[ "$*" == *"/proc/${DOCKER_DAEMON_PID}"* ]]; then '
+        'printf "%s\\n" "${DOCKER_DAEMON_UID:-0}"; exit 0; fi\n'
         'exec /usr/bin/stat "$@"\n',
     )
     _write_executable(
         fake_bin / "systemctl",
         """#!/usr/bin/env bash
-if [[ "$1" == --user ]]; then
-  if [[ "$2" == show ]]; then
-    if [[ "${PREFLIGHT_WARNING:-}" == 1 ]]; then
-      echo 'simulated systemctl warning' >&2
-    fi
-    printf '%s\\n' "$DOCKER_DAEMON_PID"
-  fi
-  exit 0
+if [[ "${PREFLIGHT_WARNING:-}" == 1 ]]; then
+  echo 'simulated systemctl warning' >&2
 fi
-exit 1
+case "$1" in
+  is-active)
+    for argument in "$@"; do
+      [[ "$argument" != "${SYSTEMD_INACTIVE_UNIT:-}" ]] || exit 1
+    done
+    exit 0
+    ;;
+  is-enabled)
+    for argument in "$@"; do
+      [[ "$argument" != "${SYSTEMD_DISABLED_UNIT:-}" ]] || exit 1
+    done
+    exit 0
+    ;;
+  show) printf '%s\\n' "$DOCKER_DAEMON_PID" ;;
+  *) exit 64 ;;
+esac
 """,
     )
     _write_executable(
@@ -280,7 +290,8 @@ exit 1
     env = {
         "PATH": f"{fake_bin}:/usr/bin:/bin",
         "HOME": str(tmp_path),
-        "DOCKER_DAEMON_PID": str(os.getpid()),
+        "DOCKER_DAEMON_PID": "1",
+        "DOCKER_DAEMON_UID": "0",
         "TMPDIR": str(tmp_path / "tmp"),
         "XDG_RUNTIME_DIR": str(runtime_alias),
         "KIND_LOG": str(log),
@@ -317,6 +328,7 @@ def test_kind_validation_explicitly_uses_backend_ready_node_and_workload(
     if provider == "docker":
         env = {
             **env,
+            "DOCKER_HOST": "unix:///untrusted/docker.sock",
             "DOCKER_CONTEXT": "untrusted-context",
             "PREFLIGHT_WARNING": "1",
         }
@@ -382,10 +394,7 @@ def test_kind_validation_explicitly_uses_backend_ready_node_and_workload(
     if provider == "docker":
         docker_calls = Path(env["DOCKER_LOG"]).read_text().splitlines()
         assert any(call.startswith("version ") for call in docker_calls)
-        assert all(
-            f"unix://{env['XDG_RUNTIME_DIR']}/docker.sock" in call
-            for call in docker_calls
-        )
+        assert all("unix:///var/run/docker.sock" in call for call in docker_calls)
     else:
         podman_calls = Path(env["PODMAN_LOG"]).read_text().splitlines()
         assert any(call.startswith("info ") for call in podman_calls)
@@ -569,7 +578,41 @@ def test_kind_docker_provider_rejects_non_ce_endpoint_before_cluster_creation(
 
     assert result.returncode != 0
     assert "reported client/server 29.8.2|5.7.0" in result.stderr
+    assert "rootful Docker" in result.stderr
     assert not log.exists()
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("override", "value", "diagnostic"),
+    [
+        ("SYSTEMD_INACTIVE_UNIT", "docker.service", "docker.service"),
+        ("SYSTEMD_INACTIVE_UNIT", "docker.socket", "docker.socket"),
+        ("SYSTEMD_INACTIVE_UNIT", "containerd.service", "containerd.service"),
+        ("SYSTEMD_DISABLED_UNIT", "docker.service", "docker.service"),
+        ("SYSTEMD_DISABLED_UNIT", "docker.socket", "docker.socket"),
+        ("SYSTEMD_DISABLED_UNIT", "containerd.service", "containerd.service"),
+        ("DOCKER_PACKAGE_VERSION", "9.9.9", "manifest pins 29.8.2"),
+        ("CONTAINERD_PACKAGE_VERSION", "9.9.9", "manifest pins 2.3.6"),
+        ("DOCKER_DAEMON_UID", "1000", "1000"),
+    ],
+)
+def test_kind_docker_preflight_rejects_unready_rootful_engine_before_cluster_creation(
+    repo_root: Path,
+    tmp_path: Path,
+    override: str,
+    value: str,
+    diagnostic: str,
+):
+    log, env = _fake_tools(tmp_path)
+    result = _run(repo_root, {**env, override: value}, "docker", "1")
+
+    assert result.returncode != 0
+    assert diagnostic in result.stderr
+    assert "rootful Docker" in result.stderr
+    assert not log.exists(), (
+        "Docker preflight failures must stop before kind cluster creation"
+    )
 
 
 @pytest.mark.unit

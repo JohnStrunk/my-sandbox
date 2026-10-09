@@ -3,10 +3,11 @@
 A secure, VM-native development environment for AI-assisted coding and modern
 software projects. `devbox` enters one shared Fedora Lima VM at the current
 project directory; OpenCode and the pinned development toolchain run inside that
-VM. Docker CE and Podman are available as separate rootless runtimes in the
-guest. The Docker CLI uses its own Engine by default; Podman remains available
-for explicitly selected workflows. Kind has separate Docker CE and Podman
-providers; the validation commands require the provider to be selected.
+VM. Docker CE runs as the rootful system daemon inside the guest and the Docker
+CLI uses `/var/run/docker.sock` by default. Podman remains a separate rootless
+runtime for explicitly selected workflows, with its own socket and storage.
+Kind has separate Docker CE and Podman providers; the validation commands
+require the provider to be selected.
 
 The VM template, host requirements, mounts, provisioning, and lifecycle details
 are documented in [`lima/README.md`](lima/README.md).
@@ -125,6 +126,9 @@ the [mount table](lima/README.md#shared-vs-vm-local-state) for details.
 - Host configuration and credentials are mounted behind a protected parent,
   and provider environment variables cross into the VM only through the
   launcher's explicit allowlist.
+- Docker group and socket access are guest-root-equivalent: the daemon can
+  access and modify data available through VM mounts. This does not grant
+  host-root access; Docker remains inside the Lima guest.
 - When EnMaaS credentials are forwarded, project OpenCode config can override
   `providers.*.settings.baseURL` while `{env:ENMAAS_API_KEY}` remains available.
   Only run OpenCode with forwarded EnMaaS credentials in trusted projects.

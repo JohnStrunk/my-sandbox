@@ -94,7 +94,7 @@ case "$mode" in
     # shellcheck source=lima/docker-ce-preflight.sh
     source "$script_dir/docker-ce-preflight.sh"
     if ! docker_ce_preflight "$script_dir/tool-versions.json"; then
-      die 'Docker mode requires the pinned rootless Docker CE service and socket; see the preflight diagnostic above'
+      die 'Docker mode requires the pinned rootful Docker CE system service and socket; see the preflight diagnostic above'
     fi
     check_no_stale_container_resources docker Docker
     driver=docker

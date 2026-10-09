@@ -170,48 +170,57 @@ shared repository `AGENTS.md` or README.
 
 ### Docker CE and Podman runtimes (Lima)
 
-- Both runtimes are available independently. Docker CE Engine, its official
-  `docker` CLI, `docker-ce-rootless-extras`, and pinned `containerd.io` are
+- Docker CE Engine, its official `docker` CLI, and pinned `containerd.io` are
   installed from Docker's signature-checked Fedora repository. The Docker CE
-  and containerd versions are manifest-pinned.
-- The `docker` CLI uses the rootless per-user Docker service at
-  `unix:///run/user/$(id -u)/docker.sock` by default. Use `docker version` to
-  inspect its client and server and `devbox-toolchain-check` to check the pinned
-  CLI version. Readiness also checks the server version against the manifest.
-- Rootless Docker requires `newuidmap`/`newgidmap`, cgroup v2, and at least
-  65,536 subordinate UIDs and GIDs. Lima provisions these prerequisites; the
-  readiness probe checks them.
+  and containerd versions are manifest-pinned. Docker runs as the rootful
+  system daemon inside the Lima guest; rootless Docker extras and its per-user
+  service are not part of the supported runtime.
+- Provisioning enables system `docker.service`, `docker.socket`, and
+  `containerd.service` at boot and adds the guest user to the `docker` group.
+  With no CLI endpoint or context override, `docker` connects to
+  `/var/run/docker.sock`; there is no rootless `DOCKER_HOST` default. Use
+  `docker version` to inspect its client and server and
+  `devbox-toolchain-check` to check the pinned CLI version. Readiness also
+  checks the server version against the manifest.
 - The optional Buildx and Compose plugin RPMs are not installed; `docker buildx`
   and `docker compose` are unavailable. With `DOCKER_BUILDKIT` unset, `docker
   build` currently uses the deprecated legacy-builder fallback; setting
   `DOCKER_BUILDKIT=1` fails without Buildx. Do not assume modern BuildKit image
   builds are supported by this profile.
-- Docker CE is not a Podman alias or wrapper. Do not point `DOCKER_HOST` at
-  Podman's API socket, install `podman-docker`, or add the guest to the rootful
-  `docker` group. The Docker daemon runs as the guest user and can access data
-  available to that user; rootless mode is not a boundary from guest-user data.
-- Podman remains available through the `podman` command and its separate
-  `$XDG_RUNTIME_DIR/podman/podman.sock` API socket. Select a kind backend
-  explicitly with `lima/validate-kind.sh docker [runs]` or
-  `lima/validate-kind.sh podman [runs]`; the validator requires the provider
-  argument and does not inherit a possibly mismatched `DOCKER_HOST`.
+- Docker group/socket access is guest-root-equivalent: the daemon can expose
+  or modify data available through VM mounts. This does not grant host-root
+  access; Docker remains inside the Lima guest. Do not point Docker at Podman's
+  API socket or install `podman-docker`.
+- Podman remains independently available through the `podman` command and its
+  rootless `$XDG_RUNTIME_DIR/podman/podman.sock` API socket and separate store.
+  Select a kind backend explicitly with `lima/validate-kind.sh docker [runs]`
+  or `lima/validate-kind.sh podman [runs]`; the validator requires the provider
+  argument and does not fall back between runtimes.
 - kind's Podman provider invokes the `podman` CLI directly; its Docker provider
-  uses the Docker CLI and the default Docker CE `DOCKER_HOST`.
+  uses the Docker CLI and explicitly pins
+  `DOCKER_HOST=unix:///var/run/docker.sock` after clearing Docker context
+  overrides. The Minikube Docker validator does the same.
 - Docker and Podman do not share image, container, or network state; repull or
   explicitly save/load an image when switching runtimes.
 - Minikube's Docker, Podman, and KVM2 drivers are distinct modes; see the
   Minikube entry below. No driver automatically falls back to another.
-- To troubleshoot Docker, inspect `systemctl --user status docker.service`,
-  `journalctl --user -u docker.service`, and the distinct Docker/Podman socket
-  paths. The Docker service is enabled for VM boot through user lingering.
+- To troubleshoot Docker, inspect
+  `systemctl --no-pager status docker.service docker.socket containerd.service`
+  and `sudo journalctl -u docker.service -u containerd.service`.
+  Check `DOCKER_HOST` and `DOCKER_CONTEXT` if the CLI does not use
+  `/var/run/docker.sock`; keep the Docker and Podman socket paths distinct.
+- Changes to embedded provisioning require `devbox --recreate` for an existing
+  VM. Recreation loses guest-local state; rootless Docker data is not migrated
+  into the separate rootful Docker store.
 
 ### Kubernetes operator profile (Lima)
 
 - Available in the Lima VM: GNU `make`, `kind`, `kubectl`, Helm, Python/pip,
   Pipenv, and the VM-local `~/.local/share/kubebuilder-envtest` asset store.
 - Select kind's experimental `docker` or `podman` provider explicitly. The
-  Docker provider verifies the manifest-pinned Docker CE packages, rootless
-  user service, selected socket, and server version. The Podman provider checks
+  Docker provider verifies the manifest-pinned Docker CE packages, system
+  service/socket, explicitly selected `/var/run/docker.sock` endpoint, and
+  server version. The Podman provider checks
   rootless mode, clears inherited endpoint selectors, and rejects a configured
   default system connection; kind invokes Podman's CLI directly.
   `lima/validate-kind.sh {docker,podman} [runs]` exercises repeated cluster,
@@ -233,12 +242,13 @@ shared repository `AGENTS.md` or README.
   Use it when a project needs a Minikube cluster or Minikube-specific driver
   behavior; the validator takes one explicit backend argument and fails rather
   than falling back or skipping when its required capability is unavailable.
-- Docker CE (the backend from #188, not Podman's socket): run
+- Docker CE (not Podman's socket): run
   `lima/validate-minikube.sh docker`. It verifies the official, manifest-pinned
-  Docker CE CLI/Engine/rootless-extras RPMs, active user service, and server
-  version on the explicit rootless socket. It proves the profile's container
-  through that endpoint and audits containers, volumes, and networks after
-  deletion. Manual starts should include `--kubernetes-version=v1.37.0`.
+  Docker CE CLI/Engine RPMs, active system service/socket, and server version
+  on the explicitly pinned `/var/run/docker.sock` endpoint after clearing
+  context overrides. It proves the profile's container through that endpoint
+  and audits containers, volumes, and networks after deletion. Manual starts
+  should include `--kubernetes-version=v1.37.0`.
 - Rootless Podman (per Minikube's documented setup): run
   `lima/validate-minikube.sh podman`; the validator sets rootless mode in its
   private Minikube home, proves the profile's container through Podman, and

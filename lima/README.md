@@ -2,9 +2,10 @@
 
 This directory holds the Lima template for the **VM-only devbox**. A single
 Fedora guest runs OpenCode directly inside it with the full manifest-pinned
-toolchain. Docker CE is the default rootless Docker API runtime; Podman is a
-separate runtime for explicitly selected workflows. Nested virtualization
-supports L2 test VMs, kind, and minikube. Project files are
+toolchain. Docker CE runs as the rootful system daemon inside the guest and is
+the default Docker API runtime; Podman is a separate rootless runtime for
+explicitly selected workflows. Nested virtualization supports L2 test VMs,
+kind, and minikube. Project files are
 shared at their host paths inside the VM. Host-shared directories are protected
 from the package builder; configuration and credentials are mounted behind a
 root-owned parent and exposed only to the guest user.
@@ -424,8 +425,8 @@ its exact version, plus `make`, Python/pip, and ShellCheck.
 
 ### Docker CE and Podman runtimes
 
-The VM provisions **Docker CE Engine, its official CLI, Docker's rootless
-extras, and `containerd.io`** from Docker's Fedora stable RPM repository. The
+The VM provisions **Docker CE Engine, its official CLI, and `containerd.io`**
+from Docker's Fedora stable RPM repository. The
 manifest pins Docker CE 29.8.2 and containerd 2.3.6 for both supported
 architectures. The RPM release suffix is resolved from the official repo for
 Fedora 44; package versions and epochs are checked after installation. DNF
@@ -440,14 +441,11 @@ package.
 The `containerd_io` pin follows the containerd version packaged by Docker; its
 Renovate updates are disabled until Docker publishes a matching Fedora RPM for
 both supported architectures. A unit-test allowlist also blocks a Docker-only
-pin bump; when updating either version, verify all four RPMs for Fedora 44
-x86_64 and aarch64, then update both pins and the reviewed pair together.
+pin bump; when updating either version, verify the Engine, CLI, and containerd
+RPMs for Fedora 44 x86_64 and aarch64, then update both pins and the reviewed
+pair together.
 
-Rootless mode requires `newuidmap`/`newgidmap`, cgroup v2, and at least 65,536
-subordinate UIDs and GIDs. Lima supplies the subordinate-ID ranges and cgroup
-delegation; the readiness probe checks the prerequisites. The provisioner writes
-Docker's documented per-user systemd unit directly instead of running the
-vendor setup utility with the guest's host-mounted credentials. The optional
+Docker runs as the rootful system daemon inside the Lima guest. The optional
 `docker-buildx-plugin` and `docker-compose-plugin` RPMs are not installed, so
 `docker buildx` and `docker compose` are unavailable by default.
 With `DOCKER_BUILDKIT` unset, `docker build` currently falls back to Docker's
@@ -457,27 +455,31 @@ BuildKit image builds. Use Podman's separate `podman build` store or add a
 pinned Buildx plugin before relying on Docker image builds; the legacy fallback
 may be removed in a future CLI release.
 
-Docker uses a rootless **per-user systemd service**. Provisioning enables
-`docker.service`; Lima's user lingering lets it start at VM boot and survive
-logout. The default `DOCKER_HOST` is
-`unix:///run/user/<uid>/docker.sock`. The rootful system `docker.service`,
-`docker.socket`, and `containerd.service` remain disabled, and the guest is not
-added to a `docker` group.
-The daemon runs with the guest user's privileges, not host-root privileges, and
-can access files and credentials available to that guest user.
+Provisioning enables the system `docker.service`, `docker.socket`, and
+`containerd.service` at boot, and adds the guest user to the `docker` group.
+With no CLI endpoint or context override, Docker connects to its local
+`/var/run/docker.sock`; provisioning does not set a rootless `DOCKER_HOST`
+default. Rootless Docker extras and the per-user Docker service are not part of
+the supported runtime.
+
+Access to the Docker group or socket is guest-root-equivalent: Docker can expose
+or modify data available through the VM's mounts. This grants no host-root
+access; the daemon and its privileges remain inside the Lima guest.
 
 Podman remains a separately supported rootless runtime. Its API socket is
 `$XDG_RUNTIME_DIR/podman/podman.sock`; invoking `podman` talks to Podman
 directly.
 Do not point Docker at that socket or expect Docker to fall back to Podman.
-`lima/validate-kind.sh` requires an explicit `docker` or `podman` positional
-provider and sets the matching backend deliberately. Its Docker path verifies
-the manifest-pinned Docker CE RPMs, rootless user service, socket, and server
-version before using that endpoint. Its Podman path verifies rootless mode,
-clears inherited endpoint selectors, and refuses a configured default remote
-connection; kind's Podman provider invokes the `podman` CLI directly. Both paths
-inspect the selected runtime for a cluster-labeled node after create and verify
-its removal after delete.
+The kind and Minikube validators require an explicit backend and do not fall
+back to another runtime. Their Docker paths pin
+`DOCKER_HOST=unix:///var/run/docker.sock`, clear Docker context overrides, and
+check the manifest-pinned Docker CE packages, system service/socket, and server
+version. Their Podman paths preserve rootless mode, use Podman's own
+`$XDG_RUNTIME_DIR/podman/podman.sock` and independent store, clear inherited
+endpoint selectors, and reject a configured default remote connection; kind's
+Podman provider invokes the `podman` CLI directly. Neither runtime falls back
+to the other. Both kind paths inspect the selected runtime for a cluster-labeled
+node after create and verify its removal after delete.
 The #319 change replaces the old `validate-kind.sh [runs]`/environment-selector
 interface; pass the provider first, such as `lima/validate-kind.sh podman 1`.
 Docker and Podman keep separate image, container, and network stores; repull or
@@ -489,18 +491,21 @@ Verify both runtimes and their separation with:
 devbox-toolchain-check            # checks the pinned Docker CLI version
 docker version                    # reports both client and Docker CE server
 rpm -qf /usr/bin/docker /usr/bin/dockerd
-systemctl --user status docker.service
+systemctl --no-pager status docker.service docker.socket containerd.service
+docker info
 podman info
 ```
 
-The readiness probe separately checks the Docker user service/socket and the
+The readiness probe separately checks the Docker system service/socket and the
 manifest-pinned Docker server API version, then pings Podman's own socket. The
 provisioned-VM test creates, runs, and removes a container through Docker CE,
 then creates and deletes a kind cluster with the explicit Docker provider while
 the Podman service and socket are stopped. For troubleshooting, inspect
-`systemctl --user status docker.service` and
-`journalctl --user -u docker.service`; the Docker and Podman sockets must remain
-distinct.
+`systemctl --no-pager status docker.service docker.socket containerd.service`,
+and `sudo journalctl -u docker.service -u containerd.service`,
+and the Docker and Podman socket paths; they must remain distinct. Check for
+`DOCKER_HOST` or `DOCKER_CONTEXT` overrides if the Docker CLI does not use the
+local endpoint.
 
 The strict kind/Minikube driver matrix is tracked in
 [#319](https://github.com/JohnStrunk/my-sandbox/issues/319), and Minikube
@@ -528,7 +533,7 @@ VMX/SVM, `qemu-kvm`, and working system libvirt. Select the intended backend:
 # Run the complete five-path smoke matrix from inside the provisioned VM.
 # Pins: kind 0.33.0, Kubernetes 1.37.0, Minikube 1.39.0,
 # Docker CE 29.8.2, and kubectl 1.37.1.
-lima/validate-kind.sh docker 1       # kind through rootless Docker CE
+lima/validate-kind.sh docker 1       # kind through the guest's rootful Docker CE
 lima/validate-kind.sh podman 1       # kind through rootless Podman
 lima/validate-minikube.sh docker     # Minikube Docker CE driver
 lima/validate-minikube.sh podman     # Minikube rootless Podman driver
@@ -548,10 +553,11 @@ minor version.
 The KVM2 validator creates a multi-GiB L2 disk beneath `TMPDIR`. It defaults to
 disk-backed `/var/tmp` and refuses a `tmpfs` location such as `/tmp`, which is
 bounded and shared with other recursive VM tests.
-Docker CE and Podman stay on separate rootless sockets and independent image
-and container stores. Podman smoke rejects a configured default system
-connection so its CLI cannot silently select a remote host. KVM2 is additionally
-verified by observing the profile's
+Docker CE and Podman stay on separate sockets and independent image and
+container stores. Docker group/socket access is guest-root-equivalent and can
+access VM-mounted data, but is not host-root. Podman smoke rejects a configured
+default system connection so its CLI cannot silently select a remote host. KVM2
+is additionally verified by observing the profile's
 live libvirt domain, proving that Minikube created an L2 VM rather than a
 container-backed cluster. Provider-wide default bridge networks are shared
 infrastructure, so validators preserve them and audit only resources scoped to
@@ -572,26 +578,18 @@ kind/Minikube containers, volumes, or networks are present (plus libvirt VMs
 for KVM2). An interrupted run of the older kind validator may leave resources
 under `devbox-kind-validation-`; inspect that legacy prefix before retrying.
 Recreate pre-#318 VMs to apply Minikube and libvirt provisioning; until then,
-`devbox-toolchain-check` reports Minikube as missing. `--reprovision` does not
+`devbox-toolchain-check` reports Minikube as missing. A normal restart does not
 replace the embedded system provisioner.
 
 Changes to embedded provisioning scripts or `lima/devbox.yaml` require
 [recreating the VM](#recreating-the-vm). A manifest-only Docker version bump is
-applied on VM restart; user provisioning enables the Docker service and
-restarts it after root provisioning when the provisioning fingerprint changes.
-An unchanged active daemon is left running. VMs
-created before Docker CE support may fail during the next start because their
-embedded system provisioner installs Podman only while the live manifest also
-requires Docker CE. Preserve any VM-local Podman images or container data you
-need, then run `devbox --recreate` from the updated checkout to replace the old
-embedded provisioner; host-mounted project/config files are preserved.
-
-If provisioning refuses to replace a non-managed
-`~/.config/systemd/user/docker.service`, inspect the file and
-`systemctl --user cat docker.service` before changing it. If it is safe to give
-that unit name to devbox, stop and disable it, remove only the conflicting unit
-file, then stop and start the VM so provisioning can install its managed
-rootless unit. Do not overwrite an existing service you still need.
+applied on VM restart. Applying embedded changes for the rootful Docker runtime
+to an existing VM requires `devbox --recreate`; a normal restart does not
+replace the provisioner embedded in that VM. Recreation loses
+VM-local state. Rootless Docker data from an older VM is not migrated into the
+separate rootful Docker store. Preserve any VM-local Podman images or container
+data you need before recreating; host-mounted project/config files are
+preserved.
 
 The VM keeps `net.ipv4.conf.default.route_localnet=0` to preserve the loopback
 routing boundary; a rootless Podman published-port smoke test passed with it
@@ -843,13 +841,16 @@ integration work.
 - **Fedora 44** cloud image, digest-pinned (x86_64 and aarch64).
 - **qemu/KVM**, `nestedVirtualization: true`, default `cpuType` (host),
   8 CPUs / 16 GiB RAM / 100 GiB sparse disk.
-- **Rootless Docker CE and Podman**: Lima's boot scripts provide static
+- **Rootless Podman prerequisites**: Lima's boot scripts provide static
   `/etc/subuid` and `/etc/subgid` ranges (65,536 IDs), cgroup-v2 delegation,
-  and linger. Provisioning installs Docker CE from its official
-  signature-checked Fedora repository, separately pins `containerd.io`, and
-  enables its rootless user service/socket. Podman/netavark remains
-  independently available with its own API socket and bridge configuration;
-  neither runtime aliases or falls back to the other.
+  and linger.
+- **Rootful Docker CE and rootless Podman**: provisioning installs Docker CE
+  from its official signature-checked Fedora repository, separately pins
+  `containerd.io`, enables system `docker.service`, `docker.socket`, and
+  `containerd.service` at boot, and adds the guest user to the `docker` group.
+  Docker uses `/var/run/docker.sock` by default. Podman/netavark remains
+  independently available with its own rootless API socket, store, and bridge
+  configuration; neither runtime aliases or falls back to the other.
 - **Manifest-pinned tools**: OpenCode, Go + `devbox-go`, uv, Rust, Node/npm,
   Playwright CLI + bundled Chromium, ast-grep + its skills, Semble + prefetched
   model, Repomix, Hadolint, markdownlint-cli2, pre-commit, acli, Google

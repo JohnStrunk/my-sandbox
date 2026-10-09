@@ -8,31 +8,14 @@ from tests.conftest import (
     LimaVM,
     expected_lima_provisioning_fingerprint,
     expected_lima_system_script_sha256,
-    user_runtime_offline_guard,
+    runtime_offline_guard,
+    skip_if_guest_provisioning_is_stale,
 )
-
-
-def _skip_if_guest_provisioning_is_stale(repo_root: Path, devbox_vm: LimaVM) -> None:
-    if devbox_vm.name is not None or os.environ.get("MY_SANDBOX_VM_TEST_FRESH") == "1":
-        return
-    fingerprint_path = (
-        f"{devbox_vm.guest_home}/.local/share/devbox-toolchain/provisioning.fingerprint"
-    )
-    guest_fingerprint = devbox_vm.run(["cat", fingerprint_path], timeout=30)
-    if (
-        guest_fingerprint.returncode != 0
-        or guest_fingerprint.stdout.strip()
-        != expected_lima_provisioning_fingerprint(repo_root)
-    ):
-        pytest.skip(
-            "the current guest has stale provisioning inputs; use a fresh VM "
-            "or recreate it before checking the current toolchain"
-        )
 
 
 @pytest.mark.vm
 def test_provisioned_vm_toolchain_matches_manifest(repo_root: Path, devbox_vm: LimaVM):
-    _skip_if_guest_provisioning_is_stale(repo_root, devbox_vm)
+    skip_if_guest_provisioning_is_stale(repo_root, devbox_vm)
     result = devbox_vm.run(["devbox-toolchain-check"], timeout=300)
 
     assert result.returncode == 0, (
@@ -46,12 +29,13 @@ def test_provisioned_vm_toolchain_matches_manifest(repo_root: Path, devbox_vm: L
 def test_docker_ce_and_kind_run_while_podman_is_stopped(
     repo_root: Path, devbox_vm: LimaVM
 ):
-    _skip_if_guest_provisioning_is_stale(repo_root, devbox_vm)
+    skip_if_guest_provisioning_is_stale(repo_root, devbox_vm)
 
     command = r"""
 set -euo pipefail
 repo_path="$1"
-docker_socket="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/docker.sock"
+docker_socket=/var/run/docker.sock
+rootless_docker_socket="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/docker.sock"
 podman_socket="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock"
 expected_version="$(
   jq -er '.tools.docker_ce.version | sub("^v"; "")' \
@@ -61,58 +45,52 @@ expected_containerd_version="$(
   jq -er '.tools.containerd_io.version | sub("^v"; "")' \
     /etc/devbox/tool-versions.json
 )"
+unset DOCKER_HOST DOCKER_CONTEXT
 docker_cli_path="$(command -v docker)"
 # shellcheck disable=SC1091
 source /etc/profile.d/devbox-toolchain.sh
-[[ "$DOCKER_HOST" == "unix://${docker_socket}" ]]
-export DOCKER_HOST="unix://${docker_socket}"
 
 [[ "$docker_socket" != "$podman_socket" ]]
+[[ ! -S "$rootless_docker_socket" ]]
 [[ -S "$docker_socket" ]]
-[[ "$DOCKER_HOST" == "unix://${docker_socket}" ]]
+[[ -z "${DOCKER_HOST:-}" ]]
+[[ -z "${DOCKER_CONTEXT:-}" ]]
+[[ "$(docker context show)" == default ]]
+[[ "$(docker context inspect default --format '{{.Endpoints.docker.Host}}')" \
+  == unix:///var/run/docker.sock ]]
 [[ "$docker_cli_path" == /usr/bin/docker ]]
 [[ "$(rpm -qf --queryformat '%{NAME}' "$docker_cli_path")" == docker-ce-cli ]]
 [[ "$(rpm -qf --queryformat '%{NAME}' /usr/bin/dockerd)" == docker-ce ]]
-[[ "$(rpm -qf --queryformat '%{NAME}' /usr/bin/dockerd-rootless.sh)" \
-  == docker-ce-rootless-extras ]]
 [[ "$(rpm -qf --queryformat '%{NAME}' /usr/bin/containerd)" == containerd.io ]]
 [[ "$(rpm -q --queryformat '%{VERSION}' docker-ce)" == "$expected_version" ]]
 [[ "$(rpm -q --queryformat '%{VERSION}' docker-ce-cli)" == "$expected_version" ]]
-[[ "$(rpm -q --queryformat '%{VERSION}' docker-ce-rootless-extras)" \
-  == "$expected_version" ]]
 [[ "$(rpm -q --queryformat '%{VERSION}' containerd.io)" \
   == "$expected_containerd_version" ]]
 if rpm -q podman-docker >/dev/null 2>&1; then
   echo "podman-docker must not provide the Docker CLI" >&2
   exit 1
 fi
-for plugin in docker-buildx-plugin docker-compose-plugin; do
+for plugin in docker-ce-rootless-extras docker-buildx-plugin docker-compose-plugin; do
   if rpm -q "$plugin" >/dev/null 2>&1; then
     echo "$plugin is not part of the supported Docker CE profile" >&2
     exit 1
   fi
 done
-if systemctl is-active --quiet docker.service \
-  || systemctl is-active --quiet docker.socket \
-  || systemctl is-active --quiet containerd.service; then
-  echo "rootful Docker/containerd services must remain inactive" >&2
+for unit in containerd.service docker.socket docker.service; do
+  systemctl is-enabled --quiet "$unit"
+  systemctl is-active --quiet "$unit"
+done
+if systemctl --user is-active --quiet docker.service \
+  || systemctl --user is-enabled --quiet docker.service; then
+  echo "the obsolete rootless Docker user unit must not be enabled or active" >&2
   exit 1
 fi
-if systemctl is-enabled --quiet docker.service \
-  || systemctl is-enabled --quiet docker.socket \
-  || systemctl is-enabled --quiet containerd.service; then
-  echo "rootful Docker services must not be enabled" >&2
-  exit 1
-fi
-if id -nG | tr ' ' '\n' | grep -qx docker; then
-  echo "the guest must not be a member of the rootful docker group" >&2
-  exit 1
-fi
-
-systemctl --user is-active --quiet docker.service
-docker_service_pid="$(systemctl --user show --property=MainPID --value docker.service)"
+id -nG | tr ' ' '\n' | grep -qx docker
+docker_service_pid="$(systemctl show --property=MainPID --value docker.service)"
 [[ "$docker_service_pid" =~ ^[1-9][0-9]*$ ]]
-[[ "$(stat -c %u "/proc/${docker_service_pid}")" == "$(id -u)" ]]
+[[ "$(stat -c %u "/proc/${docker_service_pid}")" == 0 ]]
+[[ "$(stat -c '%U:%G:%a' "$docker_socket")" == root:docker:660 ]]
+[[ -r "$docker_socket" && -w "$docker_socket" ]]
 client_version="$(docker version --format '{{.Client.Version}}')"
 server_version="$(docker version --format '{{.Server.Version}}')"
 [[ "$client_version" == "$expected_version" ]]
@@ -134,7 +112,7 @@ restore_services() {
   if [[ -n "$build_log" ]]; then
     rm -f -- "$build_log"
   fi
-  restore_user_runtime "$status"
+  restore_runtime "$status"
 }
 trap restore_services EXIT
 
@@ -167,10 +145,10 @@ rm -f -- "$build_log"
 build_log=""
 "$repo_path/lima/validate-kind.sh" docker 1
 podman info >/dev/null
-verify_user_runtime_offline
+verify_runtime_offline
 """
     command = command.replace(
-        "__PODMAN_OFFLINE_GUARD__", user_runtime_offline_guard("podman")
+        "__PODMAN_OFFLINE_GUARD__", runtime_offline_guard("podman")
     )
     result = devbox_vm.run(
         ["bash", "-ceu", command, "docker-ce-smoke", devbox_vm.repo_path],
@@ -188,14 +166,16 @@ verify_user_runtime_offline
 
 @pytest.mark.vm
 def test_minikube_docker_ce_backend_runs_inside_the_provisioned_vm(
+    repo_root: Path,
     devbox_vm: LimaVM,
 ):
+    skip_if_guest_provisioning_is_stale(repo_root, devbox_vm)
     validator = shlex.quote(f"{devbox_vm.repo_path}/lima/validate-minikube.sh")
     home = shlex.quote(devbox_vm.guest_home)
     command = (
         f"export HOME={home}; "
-        + user_runtime_offline_guard("podman")
-        + f"\nbash {validator} docker\nverify_user_runtime_offline"
+        + runtime_offline_guard("podman")
+        + f"\nbash {validator} docker\nverify_runtime_offline"
     )
     result = devbox_vm.run(
         ["bash", "-ceu", command],
@@ -204,7 +184,7 @@ def test_minikube_docker_ce_backend_runs_inside_the_provisioned_vm(
     )
 
     assert result.returncode == 0, (
-        "Minikube did not use the pinned rootless Docker CE backend and complete "
+        "Minikube did not use the pinned rootful Docker CE backend and complete "
         "its cluster/workload smoke test. Check the strict Docker CE preflight "
         "diagnostic; this backend test is not skipped when dependencies are "
         "missing.\n"
@@ -216,20 +196,22 @@ def test_minikube_docker_ce_backend_runs_inside_the_provisioned_vm(
 
 @pytest.mark.vm
 def test_minikube_podman_backend_runs_inside_the_provisioned_vm(
+    repo_root: Path,
     devbox_vm: LimaVM,
 ):
+    skip_if_guest_provisioning_is_stale(repo_root, devbox_vm)
     validator = shlex.quote(f"{devbox_vm.repo_path}/lima/validate-minikube.sh")
     home = shlex.quote(devbox_vm.guest_home)
     command = (
         f"export HOME={home}; "
-        + user_runtime_offline_guard("docker")
+        + runtime_offline_guard("docker")
         + r"""
-export DOCKER_HOST="unix://${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/docker.sock"
+export DOCKER_HOST=unix:///var/run/docker.sock
 export CONTAINER_HOST="unix:///nonexistent/podman.sock"
 export CONTAINER_CONNECTION=issue-319-untrusted-connection
 export PODMAN_HOST="unix:///nonexistent/legacy-podman.sock"
 """
-        + f"\nbash {validator} podman\nverify_user_runtime_offline"
+        + f"\nbash {validator} podman\nverify_runtime_offline"
     )
     result = devbox_vm.run(
         ["bash", "-ceu", command],

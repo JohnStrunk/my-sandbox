@@ -49,7 +49,7 @@ case "$provider" in
     # shellcheck source=lima/docker-ce-preflight.sh
     source "$script_dir/docker-ce-preflight.sh"
     if ! docker_ce_preflight "$script_dir/tool-versions.json"; then
-      die 'Docker provider requires the pinned rootless Docker CE service and socket; see the preflight diagnostic above'
+      die 'Docker provider requires the pinned rootful Docker CE system service and socket; see the preflight diagnostic above'
     fi
     ;;
   podman)

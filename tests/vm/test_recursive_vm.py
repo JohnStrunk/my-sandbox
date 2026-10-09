@@ -6,7 +6,12 @@ from pathlib import Path
 import pytest
 import yaml
 
-from tests.conftest import LimaVM, user_runtime_offline_guard, vm_start_timeout
+from tests.conftest import (
+    LimaVM,
+    runtime_offline_guard,
+    skip_if_guest_provisioning_is_stale,
+    vm_start_timeout,
+)
 
 
 @pytest.mark.recursive
@@ -265,19 +270,22 @@ done
 
 
 @pytest.mark.e2e_kind
-def test_kind_cluster_runs_inside_the_provisioned_vm(devbox_vm: LimaVM):
+def test_kind_cluster_runs_inside_the_provisioned_vm(
+    repo_root: Path, devbox_vm: LimaVM
+):
+    skip_if_guest_provisioning_is_stale(repo_root, devbox_vm)
     home = shlex.quote(devbox_vm.guest_home)
     validate_kind = shlex.quote(f"{devbox_vm.repo_path}/lima/validate-kind.sh")
     command = (
         f"export HOME={home}; "
-        + user_runtime_offline_guard("docker")
+        + runtime_offline_guard("docker")
         + r"""
-export DOCKER_HOST="unix://${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/docker.sock"
+export DOCKER_HOST=unix:///var/run/docker.sock
 export CONTAINER_HOST="unix:///nonexistent/podman.sock"
 export CONTAINER_CONNECTION=issue-319-untrusted-connection
 export PODMAN_HOST="unix:///nonexistent/legacy-podman.sock"
 """
-        + f"\nbash {validate_kind} podman 1\nverify_user_runtime_offline"
+        + f"\nbash {validate_kind} podman 1\nverify_runtime_offline"
     )
     result = devbox_vm.run(
         ["bash", "-ceu", command],
