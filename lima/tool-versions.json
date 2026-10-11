@@ -50,7 +50,7 @@
       }
     },
     "rust": {
-      "version": "1.98.1",
+      "version": "1.99",
       "datasource": "rust-version",
       "depName": "rust",
       "integrity": "version-only",
@@ -150,7 +150,7 @@
       }
     },
     "opencode": {
-      "version": "2.0.20",
+      "version": "2.0.21",
       "datasource": "npm",
       "depName": "@opencode/cli",
       "integrity": "version-only",
@@ -450,7 +450,7 @@
       }
     },
     "renovatebot_hooks": {
-      "version": "44.121.4",
+      "version": "44.126.0",
       "datasource": "github-tags",
       "depName": "renovatebot/pre-commit-hooks",
       "integrity": "version-only",
