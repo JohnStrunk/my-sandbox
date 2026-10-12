@@ -2,7 +2,7 @@
 name = "devbox-the-source-mcp"
 version = "0.1.0"
 description = "Locked runtime environment for the devbox The Source MCP server"
-requires-python = "==3.14.7"
+requires-python = "==3.14.8"
 dependencies = ["igloo-mcp"]
 
 [tool.uv]
