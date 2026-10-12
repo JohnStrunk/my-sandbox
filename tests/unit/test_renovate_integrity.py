@@ -412,6 +412,23 @@ def test_docker_ce_renovate_pin_normalizes_moby_release_tags(repo_root: Path):
 
 
 @pytest.mark.unit
+def test_rust_renovate_pin_uses_full_semver(repo_root: Path):
+    manifest = json.loads((repo_root / "lima" / "tool-versions.json").read_text())
+    rust = manifest["tools"]["rust"]
+    config = (repo_root / ".github" / "renovate.json5").read_text()
+    jsonata_manager = _config_object(config, '"customType": "jsonata"')
+
+    assert rust["datasource"] == "rust-version"
+    assert rust["versioning"] == "semver"
+    assert re.fullmatch(r"\d+\.\d+\.\d+", rust["version"])
+    assert '"versioning": $v.versioning' in jsonata_manager
+    assert (
+        '"versioningTemplate": "{{#if versioning}}{{{versioning}}}'
+        '{{else}}semver-coerced{{/if}}"'
+    ) in jsonata_manager
+
+
+@pytest.mark.unit
 def test_docker_engine_and_containerd_rpm_pair_requires_review(repo_root: Path):
     manifest = json.loads((repo_root / "lima" / "tool-versions.json").read_text())
     tools = manifest["tools"]
