@@ -719,7 +719,22 @@ if ! getent group docker >/dev/null; then
 fi
 # The guest user needs access to passed-through KVM devices, the system
 # libvirt API used by Minikube's KVM2 driver, and the rootful Docker socket.
+existing_groups="$(id -nG "$DEVBOX_USER")"
+groups_changed=false
+for required_group in kvm libvirt docker; do
+  if [[ " $existing_groups " != *" $required_group "* ]]; then
+    groups_changed=true
+  fi
+done
 usermod --append --groups kvm,libvirt,docker "$DEVBOX_USER"
+if [[ "$groups_changed" == true ]]; then
+  # Lima's persistent SSH ControlMaster keeps the groups from its original
+  # login. End that session so the next guest command gets the updated groups.
+  # This system provisioner runs under cloud-init as root, outside that session.
+  # This may also stop the user manager; the later user provisioner starts the
+  # rootless Podman socket again. logind can report no session this early.
+  loginctl terminate-user "$DEVBOX_USER" || true
+fi
 systemctl daemon-reload
 systemctl enable --now containerd.service docker.socket docker.service
 if [[ "$docker_rpms_changed" == true ]]; then

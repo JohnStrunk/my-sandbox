@@ -195,6 +195,45 @@ def test_readiness_uses_builder_check_stamp_not_guest_tool_execution(
 
 
 @pytest.mark.unit
+def test_new_group_memberships_terminate_stale_lima_session(repo_root: Path):
+    system_script = _script(repo_root, "provision-system.sh")
+    probe = _script(repo_root, "probe-readiness.sh")
+
+    group_snapshot = 'existing_groups="$(id -nG "$DEVBOX_USER")"'
+    membership_check = 'if [[ " $existing_groups " != *" $required_group "* ]]; then'
+    usermod = 'usermod --append --groups kvm,libvirt,docker "$DEVBOX_USER"'
+    conditional_termination = 'if [[ "$groups_changed" == true ]]; then'
+    terminate_session = 'loginctl terminate-user "$DEVBOX_USER"'
+    assert (
+        system_script.index(group_snapshot)
+        < system_script.index(membership_check)
+        < system_script.index(usermod)
+    )
+    assert (
+        system_script.index(usermod)
+        < system_script.index(conditional_termination)
+        < system_script.index(terminate_session)
+    )
+    assert conditional_termination in system_script
+    assert 'loginctl terminate-user "$DEVBOX_USER" || true' in system_script
+    assert "groups_changed=false" in system_script
+    assert "groups_changed=true" in system_script
+    assert "for required_group in kvm libvirt docker; do" in system_script
+    termination_block = re.search(
+        r'if \[\[ "\$groups_changed" == true \]\]; then\n(?P<body>.*?)\nfi',
+        system_script,
+        re.DOTALL,
+    )
+    assert termination_block
+    assert terminate_session in termination_block.group("body")
+
+    # Readiness must continue checking effective session groups and actual
+    # socket access, rather than trusting only the group database.
+    assert "id -nG | tr ' ' '\\n' | grep -qx docker" in probe
+    assert '[[ -r "$DOCKER_SOCKET" && -w "$DOCKER_SOCKET" ]]' in probe
+
+
+@pytest.mark.unit
 def test_readiness_checks_private_guest_task_scratch(repo_root: Path):
     probe = _script(repo_root, "probe-readiness.sh")
 
