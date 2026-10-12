@@ -457,6 +457,11 @@ may be removed in a future CLI release.
 
 Provisioning enables the system `docker.service`, `docker.socket`, and
 `containerd.service` at boot, and adds the guest user to the `docker` group.
+When system provisioning adds any of the required `kvm`, `libvirt`, or `docker`
+groups, it terminates Lima's earlier SSH login so the ControlMaster is
+recreated with the updated supplementary groups. The readiness retry starts the
+user manager, and the later user provisioner re-enables the rootless Podman
+socket before readiness can pass.
 With no CLI endpoint or context override, Docker connects to its local
 `/var/run/docker.sock`; provisioning does not set a rootless `DOCKER_HOST`
 default. Rootless Docker extras and the per-user Docker service are not part of

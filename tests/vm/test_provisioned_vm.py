@@ -26,6 +26,42 @@ def test_provisioned_vm_toolchain_matches_manifest(repo_root: Path, devbox_vm: L
 
 
 @pytest.mark.vm
+def test_subsequent_guest_command_has_current_group_access(
+    repo_root: Path, devbox_vm: LimaVM
+):
+    skip_if_guest_provisioning_is_stale(repo_root, devbox_vm)
+
+    access_command = r"""
+set -euo pipefail
+unset DOCKER_HOST DOCKER_CONTEXT CONTAINER_HOST CONTAINER_CONNECTION PODMAN_HOST
+groups="$(id -nG)"
+for required_group in kvm libvirt docker; do
+  printf '%s\n' "$groups" | tr ' ' '\n' | grep -qx "$required_group"
+done
+[[ -r /dev/kvm && -w /dev/kvm ]]
+virsh -c qemu:///system list --all >/dev/null
+virsh -c qemu:///system net-list --all >/dev/null
+docker_socket=/var/run/docker.sock
+podman_socket="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock"
+[[ -S "$docker_socket" && -r "$docker_socket" && -w "$docker_socket" ]]
+[[ "$(stat -c '%U:%G:%a' "$docker_socket")" == root:docker:660 ]]
+[[ "$(docker context inspect default --format '{{.Endpoints.docker.Host}}')" \
+  == unix:///var/run/docker.sock ]]
+docker info >/dev/null
+[[ -S "$podman_socket" ]]
+podman info >/dev/null
+"""
+    result = devbox_vm.run(
+        ["bash", "-ceu", access_command], timeout=180, use_guest_runtime=True
+    )
+    assert result.returncode == 0, (
+        "A subsequent guest command lacks current KVM, libvirt, or Docker group "
+        "access, or cannot query the Docker/Podman APIs.\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+
+
+@pytest.mark.vm
 def test_docker_ce_and_kind_run_while_podman_is_stopped(
     repo_root: Path, devbox_vm: LimaVM
 ):
