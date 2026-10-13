@@ -24,6 +24,10 @@ def test_provisioned_vm_toolchain_matches_manifest(repo_root: Path, devbox_vm: L
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
     assert "ERROR:" not in result.stdout
+    expected_ruby_version = json.loads(
+        (repo_root / "lima" / "tool-versions.json").read_text()
+    )["tools"]["ruby"]["version"]
+    assert f"OK: ruby: {expected_ruby_version}" in result.stdout.splitlines()
 
 
 @pytest.mark.vm

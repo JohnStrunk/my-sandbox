@@ -72,7 +72,7 @@ mount. Repository-specific agent instructions are in [`AGENTS.md`](AGENTS.md).
 
 The full toolchain is provisioned from
 [`lima/tool-versions.json`](lima/tool-versions.json) and includes OpenCode, Go,
-Rust, Node.js, Python/uv, Playwright, ast-grep,
+Rust, Ruby, Node.js, Python/uv, Playwright, ast-grep,
 Semble, Repomix, cloud and productivity CLIs, linters, and release inspection
 utilities. The VM also includes GNU make, kind, Minikube v1.39.0, kubectl,
 Krew v0.5.0 in the guest-user `~/.krew` plugin store, Helm, and Pipenv. Use

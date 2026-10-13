@@ -291,6 +291,21 @@ def test_vm_skill_documents_private_ephemeral_task_scratch(repo_root: Path):
 
 
 @pytest.mark.unit
+def test_vm_skill_documents_ruby_runtime_verification(repo_root: Path):
+    skill = (repo_root / LIMA_DIR / "agent-skills/devbox-tools/SKILL.md").read_text()
+    ruby_guidance = " ".join(
+        skill.split("### Ruby", 1)[1].split("\n### ", 1)[0].split()
+    )
+
+    assert "Ruby 4.0.7 from Fedora 44's version-qualified RPM" in ruby_guidance
+    assert "manifest pin on a version currently available in Fedora 44" in ruby_guidance
+    assert "update manually after Fedora publishes a matching RPM" in ruby_guidance
+    assert "`ruby`" in ruby_guidance
+    assert "`ruby --version`" in ruby_guidance
+    assert "`devbox-toolchain-check`" in ruby_guidance
+
+
+@pytest.mark.unit
 def test_vm_skill_documents_safe_docker_buildx_usage_and_recreation(
     repo_root: Path,
 ):
@@ -421,6 +436,7 @@ def test_provision_and_probe_scripts_are_referenced_and_valid(
     assert len(probes) == 1
     assert probes[0]["mode"] == "readiness"
     assert "file" not in probes[0]
+    # Lima embeds the probe script, so keep the inline copy in sync.
     assert probes[0]["script"] == _script(repo_root, "probe-readiness.sh")
 
     for name in _SCRIPTS:
@@ -487,6 +503,19 @@ def test_probe_checks_exactly_the_mounted_paths(repo_root: Path):
         'state_seed_options="$(findmnt -rn -M "$state_seed_mount" -o OPTIONS)"' in probe
     )
     assert "knowledge base is not readable via canonical path" in probe
+
+
+@pytest.mark.unit
+def test_probe_requires_ruby_on_the_guest_path(repo_root: Path):
+    probe = _script(repo_root, "probe-readiness.sh")
+    required_tools = re.search(
+        r"^for tool in \\\n(.*?)^do$",
+        probe,
+        re.DOTALL | re.MULTILINE,
+    )
+
+    assert required_tools
+    assert "ruby" in required_tools.group(1).replace("\\", " ").split()
 
 
 @pytest.mark.unit
@@ -578,6 +607,33 @@ def test_system_script_installs_checksum_pinned_minikube(repo_root: Path):
     assert 'verify_download minikube "$arch" "$tmp/minikube"' in system_script
     assert 'install -m 0755 "$tmp/minikube" /usr/local/bin/minikube' in system_script
     assert 'record_artifact_integrity minikube "$MINIKUBE_FINGERPRINT"' in system_script
+
+
+@pytest.mark.unit
+def test_system_script_installs_and_verifies_manifest_pinned_ruby(repo_root: Path):
+    system_script = _script(repo_root, "provision-system.sh")
+    version_read = re.search(
+        r'(?m)^\s*(?P<version_var>[A-Z_][A-Z0-9_]*)="\$\(manifest_version ruby\)"',
+        system_script,
+    )
+    assert version_read, "Ruby's version must come from the tool manifest"
+    version_var = re.escape(version_read.group("version_var"))
+
+    install = re.search(
+        rf'\bdnf\s+install\b[^\n]*"ruby-\$\{{{version_var}\}}"', system_script
+    )
+    assert install, "Ruby install must use a version-qualified Fedora package"
+    assert system_script.count("/usr/bin/ruby --version") == 2
+
+    post_install = system_script[install.end() :]
+    version_command = re.search(r"/usr/bin/ruby\s+--version\b", post_install)
+    version_check = re.search(
+        rf'"\$[A-Za-z_][A-Za-z0-9_]*"\s*!=\s*"ruby \$\{{{version_var}\}} ',
+        post_install,
+    )
+    assert version_command, "Ruby version must be checked after package installation"
+    assert version_check, "Installed Ruby must be compared with the manifest pin"
+    assert version_command.start() < version_check.start()
 
 
 @pytest.mark.unit

@@ -113,6 +113,9 @@ existing instance; recreate it to pick them up (see
 manifest, and the root-owned tool assets are read from the checkout at every
 start. Version-only changes in the live tool manifest are applied on
 stop/start without recreating the VM.
+Ruby support adds Ruby to embedded system provisioning and readiness checks.
+Existing VMs must use `devbox --recreate`; an old embedded installer can fail
+against the live manifest.
 
 ## Using the VM
 
@@ -880,14 +883,14 @@ integration work.
   Docker uses `/var/run/docker.sock` by default. Podman/netavark remains
   independently available with its own rootless API socket, store, and bridge
   configuration; neither runtime aliases or falls back to the other.
-- **Manifest-pinned tools**: OpenCode, Go + `devbox-go`, uv, Rust, Node/npm,
-  Playwright CLI + bundled Chromium, ast-grep + its skills, Semble + prefetched
-  model, Repomix, Hadolint, markdownlint-cli2, pre-commit, acli, Google
-  Workspace CLI, Antigravity CLI, kind, Minikube v1.39.0,
-  kubectl, Krew v0.5.0, Helm, and Pipenv. Assets
-  declaring SHA-256 integrity are verified before installation; version-only
-  assets are fetched over HTTPS at their exact pinned versions without a
-  manifest-level digest check.
+- **Manifest-pinned tools**: OpenCode, Go + `devbox-go`, uv, Rust, Ruby,
+  Node/npm, Playwright CLI + bundled Chromium, ast-grep + its skills, Semble +
+  prefetched model, Repomix, Hadolint, markdownlint-cli2, pre-commit, acli,
+  Google Workspace CLI, Antigravity CLI, kind, Minikube v1.39.0, kubectl,
+  Krew v0.5.0, Helm, and Pipenv. Assets declaring SHA-256 integrity are
+  verified before installation; version-only direct-download assets are
+  fetched over HTTPS at their exact pinned versions without a manifest-level
+  digest check.
 - **Operator profile**: GNU make, kind, Minikube v1.39.0, kubectl, Helm,
   Python/pip, and Pipenv.
 - **Additional CLIs/utilities**: `gh`, `glab`, `gcloud`, `gws`, ShellCheck,
@@ -911,7 +914,15 @@ the installed versions.
 The manifest explicitly marks each downloaded tool or skill `sha256` or
 `version-only`. Docker CE and containerd use version-only manifest pins, with
 their official RPM packages signature-checked by DNF against the pinned Docker
-key. Checksum-managed releases are
+key. Ruby 4.0.7 is installed from Fedora 44's version-qualified RPM in the
+`updates` repository, not the GA `fedora` repository. Since `updates` can drop
+superseded versions, fresh provisioning can fail after it advances. Before
+creating or recreating a VM, keep the manual manifest pin on a version
+currently available in Fedora 44, not an upstream ruby-lang release. Renovate
+automatic updates for Ruby are disabled; update the pin manually after Fedora
+publishes a matching RPM. The toolchain checker verifies the pinned runtime
+version, and DNF verifies the RPM's Fedora package signature. Checksum-managed
+releases are
 **Hadolint**, **uv**, **Antigravity CLI**, **limactl**, **kind**, **Minikube**,
 **Krew**, the **ast-grep release binaries**, and **acli**. Each has separate
 amd64 and arm64 records; their exact upstream versions and SHA-256 values are

@@ -559,6 +559,21 @@ if ((${#missing[@]})); then
   rm -rf /var/cache/dnf
 fi
 
+# Fedora's ruby RPM exposes /usr/bin/ruby on the guest's normal PATH. Keep its
+# runtime version in sync with the tool manifest.
+RUBY_VERSION="$(manifest_version ruby)"
+ruby_output="$(/usr/bin/ruby --version 2>/dev/null)" || ruby_output=""
+if [[ "$ruby_output" != "ruby ${RUBY_VERSION} "* ]]; then
+  dnf install -y --setopt=install_weak_deps=False "ruby-${RUBY_VERSION}"
+  dnf clean all
+  rm -rf /var/cache/dnf
+  ruby_output="$(/usr/bin/ruby --version 2>/dev/null)" || ruby_output=""
+fi
+if [[ "$ruby_output" != "ruby ${RUBY_VERSION} "* ]]; then
+  echo "devbox: Ruby runtime does not match manifest pin ${RUBY_VERSION}: ${ruby_output:-unavailable}" >&2
+  exit 1
+fi
+
 # Rootless Podman stores image layers below the guest user's home. Relabel its
 # graphroot with container-selinux's expected contexts before the user socket
 # starts; inherited home-directory labels can block container processes from

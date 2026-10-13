@@ -25,6 +25,8 @@ def _version_output(name: str, version: str) -> str:
         return f"go version go{version} linux/amd64"
     if name == "rust":
         return f"rustc {version} (commit 48a229cea 2026-09-01)"
+    if name == "ruby":
+        return f"ruby {version} (2026-01-01) [x86_64-linux]"
     if name == "kind":
         return f"kind v{version} go1.27.1 linux/amd64"
     if name == "minikube":
@@ -85,6 +87,61 @@ def test_lima_toolchain_check_verifies_each_manifest_consumer(
     assert {line.split(":", 1)[0] for line in successes} >= declared
     assert any(line.startswith("make:") for line in successes)
     assert any(line.startswith("pip:") for line in successes)
+
+
+@pytest.mark.unit
+def test_lima_toolchain_check_parses_ruby_version(repo_root: Path, tmp_path: Path):
+    manifest = _manifest(repo_root)
+    manifest_path = _write_manifest(tmp_path / "manifest.json", manifest)
+    expected_version = manifest["tools"]["ruby"]["version"]
+    successful = _successful_runner(manifest)
+    commands = []
+
+    def runner(command):
+        commands.append(tuple(command))
+        return successful(command)
+
+    successes, errors = check_toolchain(manifest_path, runner)
+
+    assert errors == []
+    assert ("ruby", "--version") in commands
+    assert f"ruby: {expected_version}" in successes
+
+
+@pytest.mark.unit
+def test_lima_toolchain_check_reports_missing_ruby(repo_root: Path, tmp_path: Path):
+    manifest = _manifest(repo_root)
+    manifest_path = _write_manifest(tmp_path / "manifest.json", manifest)
+    successful = _successful_runner(manifest)
+
+    def runner(command):
+        if command[0] == "ruby":
+            raise FileNotFoundError("ruby")
+        return successful(command)
+
+    successes, errors = check_toolchain(manifest_path, runner)
+
+    assert not any(line.startswith("ruby:") for line in successes)
+    assert any(
+        error.startswith("ruby:") and "ruby --version" in error for error in errors
+    )
+
+
+@pytest.mark.unit
+def test_lima_toolchain_check_reports_mismatched_ruby(repo_root: Path, tmp_path: Path):
+    manifest = _manifest(repo_root)
+    manifest_path = _write_manifest(tmp_path / "manifest.json", manifest)
+    expected_version = manifest["tools"]["ruby"]["version"]
+    mismatched_version = "0.0.1" if expected_version == "0.0.0" else "0.0.0"
+    runner = _successful_runner(manifest, {"ruby": mismatched_version})
+
+    _, errors = check_toolchain(manifest_path, runner)
+
+    assert any(
+        f"ruby: installed version {mismatched_version}, expected {expected_version}"
+        in error
+        for error in errors
+    )
 
 
 @pytest.mark.unit
