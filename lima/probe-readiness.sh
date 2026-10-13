@@ -152,8 +152,6 @@ test -x "$HOME/.local/bin/semble" \
 test -d "$PLAYWRIGHT_BROWSERS_PATH" \
   || fail "Playwright Chromium is not installed"
 test -d "$HF_HOME" || fail "Semble HF_HOME is not VM-local"
-test -d "$HOME/.local/share/kubebuilder-envtest" \
-  || fail "the VM-local setup-envtest asset cache is missing"
 test -r "$HOME/.agents/skills/devbox-tools/SKILL.md" \
   || fail "VM-owned devbox-tools skill is not staged"
 test -r "$HOME/.agents/skills/ast-grep/SKILL.md" \

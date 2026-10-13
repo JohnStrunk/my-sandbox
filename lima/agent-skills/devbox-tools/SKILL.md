@@ -216,7 +216,7 @@ shared repository `AGENTS.md` or README.
 ### Kubernetes operator profile (Lima)
 
 - Available in the Lima VM: GNU `make`, `kind`, `kubectl`, Helm, Python/pip,
-  Pipenv, and the VM-local `~/.local/share/kubebuilder-envtest` asset store.
+  and Pipenv.
 - Select kind's experimental `docker` or `podman` provider explicitly. The
   Docker provider verifies the manifest-pinned Docker CE packages, system
   service/socket, explicitly selected `/var/run/docker.sock` endpoint, and

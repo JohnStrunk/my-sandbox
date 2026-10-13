@@ -195,6 +195,35 @@ def test_readiness_uses_builder_check_stamp_not_guest_tool_execution(
 
 
 @pytest.mark.unit
+def test_envtest_asset_store_is_not_provisioned_required_or_documented(
+    repo_root: Path,
+):
+    envtest_references = ("kubebuilder-envtest", "setup-envtest")
+    provisioning_and_probe_files = (
+        "lima/provision-system.sh",
+        "lima/provision-user.sh",
+        "lima/provision-tools.sh",
+        "lima/probe-readiness.sh",
+        "lima/devbox.yaml",
+    )
+
+    for relative_path in provisioning_and_probe_files:
+        source = (repo_root / relative_path).read_text()
+        for reference in envtest_references:
+            assert reference not in source, relative_path
+
+    for relative_path in (
+        "README.md",
+        "lima/README.md",
+        "lima/mount-policy.md",
+        "lima/agent-skills/devbox-tools/SKILL.md",
+    ):
+        documentation = (repo_root / relative_path).read_text()
+        for reference in envtest_references:
+            assert reference not in documentation, relative_path
+
+
+@pytest.mark.unit
 def test_new_group_memberships_terminate_stale_lima_session(repo_root: Path):
     system_script = _script(repo_root, "provision-system.sh")
     probe = _script(repo_root, "probe-readiness.sh")

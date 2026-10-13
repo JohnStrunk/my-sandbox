@@ -75,7 +75,7 @@ The full toolchain is provisioned from
 Rust, Node.js, Python/uv, Playwright, ast-grep,
 Semble, Repomix, cloud and productivity CLIs, linters, and release inspection
 utilities. The VM also includes GNU make, kind, Minikube v1.39.0, kubectl, Helm,
-Pipenv, and a VM-local setup-envtest asset-store location. Use
+and Pipenv. Use
 `devbox-toolchain-check` to compare installed tool versions with the manifest
 and `devbox-go --doctor` to see a Go project's selected toolchain.
 
