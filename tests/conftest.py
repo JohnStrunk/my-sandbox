@@ -814,6 +814,7 @@ def devbox_vm(
                 "PATH": ":".join(
                     (
                         f"{guest_home}/.local/bin",
+                        f"{guest_home}/.krew/bin",
                         f"{guest_home}/.cargo/bin",
                         "/var/lib/devbox-toolbuilder/.local/bin",
                         "/var/lib/devbox-toolbuilder/.cargo/bin",

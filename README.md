@@ -74,8 +74,8 @@ The full toolchain is provisioned from
 [`lima/tool-versions.json`](lima/tool-versions.json) and includes OpenCode, Go,
 Rust, Node.js, Python/uv, Playwright, ast-grep,
 Semble, Repomix, cloud and productivity CLIs, linters, and release inspection
-utilities. The VM also includes GNU make, kind, Minikube v1.39.0, kubectl, Helm,
-and Pipenv. Use
+utilities. The VM also includes GNU make, kind, Minikube v1.39.0, kubectl,
+Krew v0.5.0 in the guest-user `~/.krew` plugin store, Helm, and Pipenv. Use
 `devbox-toolchain-check` to compare installed tool versions with the manifest
 and `devbox-go --doctor` to see a Go project's selected toolchain.
 
@@ -211,8 +211,8 @@ python3 scripts/verify_provenance.py
 
 Every tool and downloaded agent skill in the manifest declares an explicit
 `integrity` policy: `sha256` or `version-only`. The checksum-managed release
-binaries—Hadolint, uv, Antigravity CLI, Lima, kind, Minikube, ast-grep, and
-Atlassian CLI (`acli`)—have separate amd64/arm64 artifact records with exact
+binaries—Hadolint, uv, Antigravity CLI, Lima, kind, Minikube, ast-grep, Krew,
+and Atlassian CLI (`acli`)—have separate amd64/arm64 artifact records with exact
 upstream versions and SHA-256 digests. Renovate's regex manager models GitHub
 release assets as `github-release-attachments` dependencies. For acli, separate
 custom datasources extract each Linux URL's version and its following SHA-256

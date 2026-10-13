@@ -255,6 +255,87 @@ shared repository `AGENTS.md` or README.
 - Runtime and version-check coverage is in `tests/unit/test_lima_toolchain.py`
   and `tests/unit/test_lima_template.py`.
 
+### Krew plugins
+
+- **Provisioned VM:** `kubectl krew` is the manifest-pinned Krew v0.5.0 manager,
+  installed at `${KREW_ROOT:-$HOME/.krew}`. Use `kubectl krew search ctx` and
+  `kubectl krew install ctx`; inspect or remove plugins with `kubectl krew list`
+  and `kubectl krew uninstall ctx`. If overriding `KREW_ROOT`, keep it set at
+  runtime and keep `$KREW_ROOT/bin` on `PATH`.
+- For one-off plugin work in a provisioned VM, initialize a private store with
+  the installed/pinned manager before updating its fresh index. Plugins and the
+  index stay task/job-local and are removed at the end:
+
+  ```shell
+  set -euo pipefail
+  manager="${KREW_ROOT:-$HOME/.krew}/bin/kubectl-krew"
+  task_root="$(mktemp -d /tmp/opencode/krew.XXXXXXXX)"
+  trap 'rm -rf -- "$task_root"' EXIT
+  export KREW_ROOT="$task_root/store"
+  export PATH="$KREW_ROOT/bin:$PATH"
+  "$manager" install krew
+  install -D -m 0755 "$manager" "$KREW_ROOT/bin/kubectl-krew"
+  expected_version="$(jq -er '.tools.krew.version' /etc/devbox/tool-versions.json)"
+  kubectl krew version | grep -Fq "v$expected_version"
+  kubectl krew update
+  kubectl krew install ctx
+  ```
+
+- **Non-provisioned Linux/CI job without Krew:** bootstrap the project's pinned
+  archive into a private root. Run the bootstrap and all Krew commands in one
+  job-scoped shell from the checkout root, or set `KREW_TOOL_VERSIONS` to the
+  manifest path, so the trap cleans the root after use:
+
+  ```shell
+  set -euo pipefail
+  export KREW_ROOT="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/krew.XXXXXXXX")"
+  trap 'rm -rf -- "$KREW_ROOT"' EXIT
+  export PATH="$KREW_ROOT/bin:$PATH"
+  case "$(uname -m)" in
+    x86_64) KREW_ARCH=amd64 ;;
+    aarch64) KREW_ARCH=arm64 ;;
+    *) echo "unsupported architecture" >&2; exit 1 ;;
+  esac
+  manifest="${KREW_TOOL_VERSIONS:-$PWD/lima/tool-versions.json}"
+  release="$(jq -er --arg arch "$KREW_ARCH" \
+    '.tools.krew.artifacts[$arch].version' "$manifest")"
+  digest="$(jq -er --arg arch "$KREW_ARCH" \
+    '.tools.krew.artifacts[$arch].sha256' "$manifest")"
+  cd "$KREW_ROOT"
+  archive="krew-linux_${KREW_ARCH}.tar.gz"
+  curl --retry 3 --retry-connrefused -fsSL \
+    "https://github.com/kubernetes-sigs/krew/releases/download/${release}/${archive}" \
+    -o "$archive"
+  printf '%s  %s\n' "$digest" "$archive" | sha256sum -c -
+  tar -xzf "$archive" "./krew-linux_${KREW_ARCH}"
+  "./krew-linux_${KREW_ARCH}" install krew
+  install -D -m 0755 "./krew-linux_${KREW_ARCH}" "$KREW_ROOT/bin/kubectl-krew"
+  kubectl krew version | grep -Fq "$release"
+  kubectl krew update
+  kubectl krew install ctx
+  ```
+
+  The manifest digest is checked before the extracted bootstrap is executed.
+  `install krew` initializes the home/index; the checksum-verified archive
+  member then replaces the index-installed manager before it is invoked. The
+  version check and fail-fast shell stop the job on installation or version
+  errors.
+  For multi-step CI jobs, persist `KREW_ROOT` and `$KREW_ROOT/bin` through the
+  job's environment/PATH mechanism and remove the root in an always-run final
+  step. VolSync's workflow is an example of this ephemeral per-job pattern; do
+  not copy its current `latest` URL as a version pin. If CI cannot reach the
+  pinned release or plugin index, use native `kubectl` commands or skip an
+  optional plugin-dependent step.
+- Review a plugin before installation. Krew verifies the plugin artifact digest,
+  but installing and especially running third-party plugins executes local
+  code; plugins may read or change local files and may use the active
+  kubeconfig to affect a cluster. Install only plugins needed for the task and
+  do not run them against a sensitive cluster without review.
+- The toolchain check verifies `kubectl krew version`; the provisioned-VM test
+  installs and uninstalls a plugin using a temporary root without a cluster.
+  Manifest pin changes apply on VM restart; changes to embedded provisioning or
+  the readiness probe require `devbox --recreate` for an existing VM.
+
 ### Minikube in Lima
 
 - Runtime command: `minikube` v1.39.0, pinned with SHA-256 per architecture.

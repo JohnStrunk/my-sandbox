@@ -1,4 +1,5 @@
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -26,6 +27,7 @@ _CHECKSUM_MANAGED_TOOLS = {
     "antigravity_cli",
     "ast_grep",
     "hadolint",
+    "krew",
     "kind",
     "limactl",
     "minikube",
@@ -416,6 +418,7 @@ def test_manifest_declares_lima_consumers(repo_root: Path):
         "hadolint",
         "helm",
         "kind",
+        "krew",
         "kubectl",
         "limactl",
         "markdownlint_cli2",
@@ -435,6 +438,52 @@ def test_manifest_declares_lima_consumers(repo_root: Path):
         consumers = manifest["tools"][tool]["consumers"]
         assert consumers.get("lima") is True, tool
     assert "github_mcp_server" not in manifest["tools"]
+
+
+@pytest.mark.unit
+def test_krew_manifest_pins_verified_architecture_artifacts(repo_root: Path):
+    manifest = json.loads((repo_root / "lima" / "tool-versions.json").read_text())
+    krew = manifest["tools"]["krew"]
+
+    version = krew["version"]
+    assert re.fullmatch(r"\d+\.\d+\.\d+", version)
+    assert krew["integrity"] == "sha256"
+    assert set(krew["artifacts"]) == {"amd64", "arm64"}
+    url_templates = krew["provenance"]["url_templates"]
+    for arch in ("amd64", "arm64"):
+        artifact = krew["artifacts"][arch]
+        assert artifact["version"] == f"v{version}"
+        assert artifact["depName"] == f"kubernetes-sigs/krew-{arch}"
+        assert re.fullmatch(r"[0-9a-f]{64}", artifact["sha256"])
+        assert url_templates[f"artifacts.{arch}.sha256"] == (
+            "https://github.com/kubernetes-sigs/krew/releases/download/"
+            f"{{artifacts.{arch}.version}}/krew-linux_{arch}.tar.gz"
+        )
+
+
+@pytest.mark.unit
+def test_krew_provisioner_extracts_the_dot_prefixed_archive_member(repo_root: Path):
+    provisioner = (repo_root / "lima" / "provision-user.sh").read_text()
+
+    assert (
+        'tar -C "$tmp" -xzf "$tmp/$archive" "./krew-linux_${KREW_ARCH}"' in provisioner
+    )
+
+
+@pytest.mark.unit
+def test_krew_bootstrap_overwrite_precedes_post_install_version_check(
+    repo_root: Path,
+):
+    provisioner = (repo_root / "lima" / "provision-user.sh").read_text()
+    install = provisioner.index('    "$bootstrap" install krew')
+    overwrite = provisioner.index(
+        'install -D -m 0755 "$bootstrap" "$KREW_ROOT/bin/kubectl-krew"', install
+    )
+    version_check = provisioner.index(
+        '  krew_installed_version="$(kubectl krew version', install
+    )
+
+    assert install < overwrite < version_check
 
 
 @pytest.mark.unit

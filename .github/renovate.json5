@@ -64,6 +64,14 @@
       "minimumGroupSize": 3,
     },
     {
+      "description": "Group Krew version and architecture artifact updates",
+      "matchPackageNames": [
+        "kubernetes-sigs/krew",
+      ],
+      "groupName": "krew release artifacts",
+      "minimumGroupSize": 3,
+    },
+    {
       "description": "Group Minikube version and architecture artifact updates",
       "matchPackageNames": [
         "kubernetes/minikube",

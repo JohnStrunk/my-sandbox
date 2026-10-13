@@ -43,6 +43,10 @@ _VERSION_COMMANDS: dict[str, tuple[Command, re.Pattern[str]]] = {
         re.compile(r"\bminikube version:\s*v?(\d+\.\d+\.\d+)\b"),
     ),
     "kubectl": (("kubectl", "version", "--client", "-o", "json"), re.compile(r"")),
+    "krew": (
+        ("kubectl", "krew", "version"),
+        re.compile(r"(?m)^GitTag\s*:?\s*v?(\d+\.\d+\.\d+)\s*$"),
+    ),
     "pipenv": (("pipenv", "--version"), re.compile(r"\b(\d{4}\.\d+\.\d+)\b")),
     "repomix": (("repomix", "--version"), re.compile(r"\bv?(\d+\.\d+\.\d+)\b")),
     "ast_grep": (("ast-grep", "--version"), re.compile(r"\bv?(\d+\.\d+\.\d+)\b")),
@@ -104,6 +108,8 @@ def _actual_version(name: str, output: str) -> str | None:
 def check_toolchain(
     manifest_path: Path,
     runner: Runner = _default_runner,
+    *,
+    skip_tools: frozenset[str] = frozenset(),
 ) -> tuple[list[str], list[str]]:
     """Return human-readable successes and errors for the guest toolchain."""
 
@@ -125,6 +131,8 @@ def check_toolchain(
         and spec["consumers"].get("lima") is True
     )
     for name in declared:
+        if name in skip_tools:
+            continue
         spec = tools[name]
         expected = spec.get("version")
         command_spec = _VERSION_COMMANDS.get(name)
@@ -180,8 +188,17 @@ def main() -> int:
         default=Path("/etc/devbox/tool-versions.json"),
         help="manifest used by Lima provisioning",
     )
+    parser.add_argument(
+        "--skip-tool",
+        action="append",
+        default=[],
+        choices=sorted(_VERSION_COMMANDS),
+        help="skip a Lima-managed tool installed in a later provisioning phase",
+    )
     args = parser.parse_args()
-    successes, errors = check_toolchain(args.manifest)
+    successes, errors = check_toolchain(
+        args.manifest, skip_tools=frozenset(args.skip_tool)
+    )
     for line in successes:
         print(f"OK: {line}")
     for line in errors:
