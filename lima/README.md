@@ -700,6 +700,7 @@ checkout-relative `knowledge-base/` symlink.
 | `~/.cache/{go,uv,semble/index}` | VM-local | Guest-writable Go, uv, and Semble index caches |
 | `/usr/local/node` | VM-local | Manifest-pinned Node.js and npm runtime |
 | `~/.cargo` | VM-local | Guest-local Cargo cache; Rust toolchain is read from builder install |
+| `~/.krew` | VM-local | Guest-user-owned Krew manager, plugin binaries, and index store |
 | `~/.local/state/devbox-toolchain` | VM-local | The Source MCP server virtualenv |
 | `~/.local/share/devbox-toolchain` | VM-local | Provisioning metadata and fingerprints |
 | `~/.gitconfig` | VM-local | Git identity, HTTPS rewrite |
@@ -883,7 +884,7 @@ integration work.
   Playwright CLI + bundled Chromium, ast-grep + its skills, Semble + prefetched
   model, Repomix, Hadolint, markdownlint-cli2, pre-commit, acli, Google
   Workspace CLI, Antigravity CLI, kind, Minikube v1.39.0,
-  kubectl, Helm, and Pipenv. Assets
+  kubectl, Krew v0.5.0, Helm, and Pipenv. Assets
   declaring SHA-256 integrity are verified before installation; version-only
   assets are fetched over HTTPS at their exact pinned versions without a
   manifest-level digest check.
@@ -912,9 +913,9 @@ The manifest explicitly marks each downloaded tool or skill `sha256` or
 their official RPM packages signature-checked by DNF against the pinned Docker
 key. Checksum-managed releases are
 **Hadolint**, **uv**, **Antigravity CLI**, **limactl**, **kind**, **Minikube**,
-the **ast-grep release binaries**, and **acli**. Each has separate amd64 and
-arm64 records; their exact upstream versions and SHA-256 values are verified
-before installation. The top-level
+**Krew**, the **ast-grep release binaries**, and **acli**. Each has separate
+amd64 and arm64 records; their exact upstream versions and SHA-256 values are
+verified before installation. The top-level
 `version` remains the provisioning alias, and the validator requires both
 artifact versions to normalize to it. The ast-grep agent-skill archive is also
 verified against its pinned commit's SHA-256.

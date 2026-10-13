@@ -8,7 +8,7 @@ fail() {
 }
 
 TOOL_BUILDER_HOME=/var/lib/devbox-toolbuilder
-PATH="$HOME/.local/bin:$HOME/.cargo/bin:$TOOL_BUILDER_HOME/.local/bin:$TOOL_BUILDER_HOME/.cargo/bin:/usr/local/node/bin:/usr/local/go/bin:/usr/local/bin:$PATH"
+PATH="${KREW_ROOT:-$HOME/.krew}/bin:$HOME/.local/bin:$HOME/.cargo/bin:$TOOL_BUILDER_HOME/.local/bin:$TOOL_BUILDER_HOME/.cargo/bin:/usr/local/node/bin:/usr/local/go/bin:/usr/local/bin:$PATH"
 export PATH
 export UV_CACHE_DIR="$HOME/.cache/uv"
 export CARGO_HOME="$HOME/.cargo"
@@ -130,6 +130,8 @@ for tool in \
 do
   command -v "$tool" >/dev/null 2>&1 || fail "$tool is not installed"
 done
+kubectl krew version >/dev/null 2>&1 \
+  || fail "kubectl krew plugin is not installed"
 
 # Version commands ran under the isolated package builder. Check its stamp
 # instead of executing third-party tools in this probe.

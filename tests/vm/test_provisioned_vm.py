@@ -1,3 +1,4 @@
+import json
 import os
 import shlex
 from pathlib import Path
@@ -330,6 +331,103 @@ def test_project_utility_commands_are_discoverable(devbox_vm: LimaVM):
 
 
 @pytest.mark.vm
+def test_krew_is_available_in_a_login_shell(repo_root: Path, devbox_vm: LimaVM):
+    skip_if_guest_provisioning_is_stale(repo_root, devbox_vm)
+    expected_version = json.loads(
+        (repo_root / "lima" / "tool-versions.json").read_text()
+    )["tools"]["krew"]["version"]
+    command = r"""
+set -euo pipefail
+export HOME="$1"
+expected_version="$2"
+version_output="$(bash -lc 'kubectl krew version')"
+grep -Fq 'GitTag' <<<"$version_output"
+grep -Fq "v$expected_version" <<<"$version_output"
+printf '%s\n' "$version_output"
+"""
+    result = devbox_vm.run(
+        [
+            "bash",
+            "-ceu",
+            command,
+            "krew-login-shell",
+            devbox_vm.guest_home,
+            expected_version,
+        ],
+        timeout=60,
+    )
+
+    assert result.returncode == 0, (
+        "Krew is not available from a provisioned login shell.\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+
+
+@pytest.mark.vm
+def test_krew_plugin_install_uninstall_uses_temporary_store(
+    repo_root: Path, devbox_vm: LimaVM
+):
+    skip_if_guest_provisioning_is_stale(repo_root, devbox_vm)
+    expected_version = json.loads(
+        (repo_root / "lima" / "tool-versions.json").read_text()
+    )["tools"]["krew"]["version"]
+    command = r"""
+set -euo pipefail
+guest_krew_bin="$1"
+persistent_store="$2"
+expected_version="$3"
+task_root="$(mktemp -d /tmp/opencode/krew-test.XXXXXXXX)"
+trap 'rm -rf -- "$task_root"' EXIT
+export HOME="$task_root/home"
+mkdir -p "$HOME"
+unset KUBECONFIG
+export KREW_ROOT="$task_root/store"
+export PATH="$KREW_ROOT/bin:$guest_krew_bin:$PATH"
+test ! -e "$HOME/.kube/config"
+
+persistent_snapshot() {
+  if [[ -e "$persistent_store" ]]; then
+    find "$persistent_store" -printf '%y %P\n' | sort
+    find "$persistent_store" -type f -exec sha256sum -- {} + | sort
+  fi
+}
+persistent_snapshot >"$task_root/persistent-before"
+
+"$guest_krew_bin/kubectl-krew" install krew
+"$guest_krew_bin/kubectl-krew" install krew
+install -D -m 0755 "$guest_krew_bin/kubectl-krew" \
+  "$KREW_ROOT/bin/kubectl-krew"
+kubectl krew version | grep -Fq "v$expected_version"
+kubectl krew update
+kubectl krew install ctx
+test -x "$KREW_ROOT/bin/kubectl-ctx"
+kubectl krew uninstall ctx
+test ! -e "$KREW_ROOT/bin/kubectl-ctx"
+
+persistent_snapshot >"$task_root/persistent-after"
+cmp -s "$task_root/persistent-before" "$task_root/persistent-after"
+"""
+    result = devbox_vm.run(
+        [
+            "bash",
+            "-ceu",
+            command,
+            "krew-plugin-roundtrip",
+            f"{devbox_vm.guest_home}/.krew/bin",
+            f"{devbox_vm.guest_home}/.krew",
+            expected_version,
+        ],
+        timeout=600,
+    )
+
+    assert result.returncode == 0, (
+        "Krew could not install and uninstall a plugin in its temporary store, "
+        "or changed the persistent plugin store.\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+
+
+@pytest.mark.vm
 def test_minikube_agent_guidance_is_staged(devbox_vm: LimaVM):
     skill_path = f"{devbox_vm.guest_home}/.agents/skills/devbox-tools/SKILL.md"
     result = devbox_vm.run(
@@ -455,6 +553,7 @@ test -r "$source"
 test -r "$active"
 cmp -s "$source" "$active"
 grep -q 'name: "devbox-tools"' "$active"
+grep -q '### Krew plugins' "$active"
 test -r {shlex.quote(ast_grep_path)}
 test -r {shlex.quote(outline_path)}
 """

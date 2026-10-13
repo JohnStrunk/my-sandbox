@@ -19,6 +19,8 @@ def _write_manifest(path: Path, manifest: dict) -> Path:
 def _version_output(name: str, version: str) -> str:
     if name == "kubectl":
         return json.dumps({"clientVersion": {"gitVersion": f"v{version}"}})
+    if name == "krew":
+        return f"OPTION            VALUE\nGitTag            v{version}\n"
     if name == "go":
         return f"go version go{version} linux/amd64"
     if name == "rust":
@@ -119,6 +121,46 @@ def test_lima_toolchain_check_reports_manifest_version_mismatch(
         f"{tool_name}: installed version 0.0.0, expected {expected_version}" in error
         for error in errors
     )
+
+
+@pytest.mark.unit
+def test_lima_toolchain_check_verifies_the_krew_version(
+    repo_root: Path, tmp_path: Path
+):
+    manifest = _manifest(repo_root)
+    manifest_path = _write_manifest(tmp_path / "manifest.json", manifest)
+    expected_version = manifest["tools"]["krew"]["version"]
+    runner = _successful_runner(manifest, {"krew": "0.0.1"})
+
+    _, errors = check_toolchain(manifest_path, runner)
+
+    assert any(
+        f"krew: installed version 0.0.1, expected {expected_version}" in error
+        for error in errors
+    )
+
+
+@pytest.mark.unit
+def test_lima_toolchain_check_can_skip_later_user_managed_tools(
+    repo_root: Path, tmp_path: Path
+):
+    manifest = _manifest(repo_root)
+    manifest_path = _write_manifest(tmp_path / "manifest.json", manifest)
+    runner = _successful_runner(manifest, {"krew": "0.0.1"})
+
+    successes, errors = check_toolchain(
+        manifest_path, runner, skip_tools=frozenset({"krew"})
+    )
+
+    assert errors == []
+    assert not any(line.startswith("krew:") for line in successes)
+
+
+@pytest.mark.unit
+def test_isolated_toolbuilder_defers_krew_until_user_provisioning(repo_root: Path):
+    script = (repo_root / "lima/provision-tools.sh").read_text()
+
+    assert "--skip-tool krew" in script
 
 
 @pytest.mark.unit

@@ -26,7 +26,9 @@ MANIFEST=/var/lib/devbox-vm/tool-versions.json
 TOOL_BUILDER_HOME=/var/lib/devbox-toolbuilder
 export CARGO_HOME="$HOME/.cargo"
 export RUSTUP_HOME="$TOOL_BUILDER_HOME/.rustup"
-export PATH="$HOME/.local/bin:$CARGO_HOME/bin:$TOOL_BUILDER_HOME/.local/bin:$TOOL_BUILDER_HOME/.cargo/bin:/usr/local/node/bin:/usr/local/go/bin:$PATH"
+KREW_ROOT="${KREW_ROOT:-$HOME/.krew}"
+export KREW_ROOT
+export PATH="$KREW_ROOT/bin:$HOME/.local/bin:$CARGO_HOME/bin:$TOOL_BUILDER_HOME/.local/bin:$TOOL_BUILDER_HOME/.cargo/bin:/usr/local/node/bin:/usr/local/go/bin:$PATH"
 export UV_CACHE_DIR="$HOME/.cache/uv"
 export GOPATH="$HOME/.cache/go"
 export GOCACHE="$GOPATH/build-cache"
@@ -40,6 +42,61 @@ manifest_agent_skill() {
   local tool="$1" field="$2"
   jq -er --arg tool "$tool" --arg field "$field" \
     '.tools[$tool].agent_skill[$field]' "$MANIFEST"
+}
+
+manifest_version() {
+  local tool="$1" version
+  version="$(jq -er --arg tool "$tool" '.tools[$tool].version' "$MANIFEST")"
+  if [[ ! "$version" =~ ^v?[0-9]+(\.[0-9]+){1,3}([+-][A-Za-z0-9.]+)?$ ]]; then
+    echo "devbox: invalid version for manifest tool '$tool'" >&2
+    return 1
+  fi
+  printf '%s\n' "${version#v}"
+}
+
+manifest_arch() {
+  case "$(uname -m)" in
+    x86_64) printf '%s\n' amd64 ;;
+    aarch64) printf '%s\n' arm64 ;;
+    *) echo "devbox: unsupported architecture: $(uname -m)" >&2; return 1 ;;
+  esac
+}
+
+manifest_artifact_version() {
+  local tool="$1" arch="$2" version artifact_version
+  version="$(manifest_version "$tool")"
+  artifact_version="$(jq -er --arg tool "$tool" --arg arch "$arch" \
+    '.tools[$tool].artifacts[$arch].version' "$MANIFEST")"
+  if [[ ! "$artifact_version" =~ ^v?[0-9]+(\.[0-9]+){1,3}([+-][A-Za-z0-9.]+)?$ ]] \
+    || [[ "${artifact_version#v}" != "$version" ]]; then
+    echo "devbox: invalid or unsynchronized $arch release tag for manifest tool '$tool'" >&2
+    return 1
+  fi
+  printf '%s\n' "$artifact_version"
+}
+
+manifest_integrity_fingerprint() {
+  local tool="$1" arch="$2" version artifact_version checksum
+  version="$(manifest_version "$tool")"
+  artifact_version="$(manifest_artifact_version "$tool" "$arch")"
+  checksum="$(jq -er --arg tool "$tool" --arg arch "$arch" \
+    '.tools[$tool].artifacts[$arch].sha256' "$MANIFEST")"
+  if [[ ! "$checksum" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "devbox: invalid SHA-256 digest for manifest tool '$tool' ($arch)" >&2
+    return 1
+  fi
+  printf '%s|sha256|%s|%s\n' "$version" "$artifact_version" "$checksum"
+}
+
+verify_download() {
+  local tool="$1" arch="$2" path="$3" checksum
+  checksum="$(jq -er --arg tool "$tool" --arg arch "$arch" \
+    '.tools[$tool].artifacts[$arch].sha256' "$MANIFEST")"
+  if [[ ! "$checksum" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "devbox: invalid SHA-256 digest for manifest tool '$tool' ($arch)" >&2
+    return 1
+  fi
+  printf '%s  %s\n' "$checksum" "$path" | sha256sum -c -
 }
 
 copy_if_changed() {
@@ -264,6 +321,50 @@ if [[ ! -f "$ast_grep_skill_state" ]] \
   cp -R "$skill_root/outline" "$HOME/.agents/skills/ast-grep-outline"
   printf '%s\n' "$AST_GREP_SKILL_STATE_VALUE" >"$ast_grep_skill_state"
   rm -rf -- "$tmp"
+fi
+
+# Krew is a kubectl plugin, so install it into the guest user's plugin store.
+# verify_download checks the architecture-specific release archive before the
+# archive's bootstrap binary is executed.
+KREW_ARCH="$(manifest_arch)"
+KREW_VERSION="$(manifest_version krew)"
+KREW_ARTIFACT_VERSION="$(manifest_artifact_version krew "$KREW_ARCH")"
+KREW_FINGERPRINT="$(manifest_integrity_fingerprint krew "$KREW_ARCH")"
+krew_installed_version="$(kubectl krew version 2>/dev/null \
+  | sed -nE 's/^GitTag[[:space:]]*:?[[:space:]]*v?([0-9]+\.[0-9]+\.[0-9]+).*$/\1/p' \
+  | head -n1 || true)"
+krew_fingerprint_file="$HOME/.local/share/devbox-toolchain/krew.integrity"
+krew_recorded_fingerprint="$(cat "$krew_fingerprint_file" 2>/dev/null || true)"
+if [[ "$krew_installed_version" != "$KREW_VERSION" \
+  || "$krew_recorded_fingerprint" != "$KREW_FINGERPRINT" \
+  || ! -x "$KREW_ROOT/bin/kubectl-krew" ]]; then
+  (
+    tmp="$(mktemp -d "$HOME/.cache/krew.XXXXXX")"
+    trap 'rm -rf -- "$tmp"' EXIT
+    archive="krew-linux_${KREW_ARCH}.tar.gz"
+    curl --retry 3 --retry-connrefused -fsSL \
+      "https://github.com/kubernetes-sigs/krew/releases/download/${KREW_ARTIFACT_VERSION}/${archive}" \
+      -o "$tmp/$archive"
+    verify_download krew "$KREW_ARCH" "$tmp/$archive"
+    tar -C "$tmp" -xzf "$tmp/$archive" "./krew-linux_${KREW_ARCH}"
+    bootstrap="$tmp/krew-linux_${KREW_ARCH}"
+    if [[ ! -x "$bootstrap" ]]; then
+      echo "devbox: downloaded Krew archive has no executable bootstrap" >&2
+      exit 1
+    fi
+    "$bootstrap" install krew
+    install -D -m 0755 "$bootstrap" "$KREW_ROOT/bin/kubectl-krew"
+  )
+  krew_installed_version="$(kubectl krew version 2>/dev/null \
+    | sed -nE 's/^GitTag[[:space:]]*:?[[:space:]]*v?([0-9]+\.[0-9]+\.[0-9]+).*$/\1/p' \
+    | head -n1 || true)"
+  if [[ "$krew_installed_version" != "$KREW_VERSION" ]]; then
+    echo "devbox: installed Krew version '${krew_installed_version:-unknown}', expected $KREW_VERSION" >&2
+    exit 1
+  fi
+  krew_fingerprint_tmp="$(mktemp "$krew_fingerprint_file.XXXXXX")"
+  printf '%s\n' "$KREW_FINGERPRINT" >"$krew_fingerprint_tmp"
+  mv -f "$krew_fingerprint_tmp" "$krew_fingerprint_file"
 fi
 
 # Expose host agent configuration and non-conflicting skills through the

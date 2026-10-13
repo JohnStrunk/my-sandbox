@@ -235,8 +235,10 @@ trap - EXIT
 
 install -D -m 0755 "$TOOL_ASSETS/semble" "$HOME/.local/bin/semble"
 
+# Krew is guest-user-owned and installed by provision-user.sh after this
+# isolated builder runs. Check every other manifest-pinned tool here.
 /usr/bin/python3 -I -S "$TOOL_ASSETS/check_toolchain.py" \
-  --manifest "$MANIFEST"
+  --manifest "$MANIFEST" --skip-tool krew
 
 # Runtime can execute the read-only browser and read/update only the model
 # cache. This account remains unable to traverse the guest's host-config parent.
