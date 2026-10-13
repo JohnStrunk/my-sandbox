@@ -130,7 +130,6 @@ mkdir -p \
   "$HOME/.cache/uv" \
   "$HOME/.cache/go/build-cache" \
   "$HOME/.cache/semble/index" \
-  "$HOME/.local/share/kubebuilder-envtest" \
   "$HOME/.local/share/devbox-toolchain" \
   "$HOME/.local/bin" \
   "$HOME/.cargo/bin" \

@@ -25,9 +25,9 @@ mounts all of `$HOME`.**
 
 The paths below remain L1-local and are not host mounts: the toolbuilder and
 its package caches, `~/.cache/{go,uv,semble}`, `~/.cargo`,
-`~/.local/share/kubebuilder-envtest`, `~/.local/share/devbox-toolchain`, and
-`~/.local/state/devbox-toolchain`. Worktree Python environments should use a
-unique VM-local `UV_PROJECT_ENVIRONMENT` rather than the shared checkout.
+`~/.local/share/devbox-toolchain`, and `~/.local/state/devbox-toolchain`.
+Worktree Python environments should use a unique VM-local
+`UV_PROJECT_ENVIRONMENT` rather than the shared checkout.
 
 The persistent `~/.local/state/devbox-opencode` mount is for the repository's
 single L1 instance per host home. `DEVBOX_LIMA_INSTANCE` changes the Lima name,

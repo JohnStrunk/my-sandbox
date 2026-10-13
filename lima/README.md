@@ -676,7 +676,6 @@ checkout-relative `knowledge-base/` symlink.
 | `~/.cache/{go,uv,semble/index}` | VM-local | Guest-writable Go, uv, and Semble index caches |
 | `/usr/local/node` | VM-local | Manifest-pinned Node.js and npm runtime |
 | `~/.cargo` | VM-local | Guest-local Cargo cache; Rust toolchain is read from builder install |
-| `~/.local/share/kubebuilder-envtest` | VM-local | `setup-envtest` default asset store |
 | `~/.local/state/devbox-toolchain` | VM-local | The Source MCP server virtualenv |
 | `~/.local/share/devbox-toolchain` | VM-local | Provisioning metadata and fingerprints |
 | `~/.gitconfig` | VM-local | Git identity, HTTPS rewrite |
@@ -865,8 +864,7 @@ integration work.
   assets are fetched over HTTPS at their exact pinned versions without a
   manifest-level digest check.
 - **Operator profile**: GNU make, kind, Minikube v1.39.0, kubectl, Helm,
-  Python/pip, Pipenv, and a VM-local `~/.local/share/kubebuilder-envtest`
-  asset-store location.
+  Python/pip, and Pipenv.
 - **Additional CLIs/utilities**: `gh`, `glab`, `gcloud`, `gws`, ShellCheck,
   `tokei`, `just`, `difft`, `hyperfine`, `fd`, `file`, `diff`, and `patch`.
 - **Red Hat internal TLS trust**: three CA roots are SHA-256 pinned in the
