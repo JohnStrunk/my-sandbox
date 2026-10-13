@@ -291,6 +291,36 @@ def test_vm_skill_documents_private_ephemeral_task_scratch(repo_root: Path):
 
 
 @pytest.mark.unit
+def test_vm_skill_documents_safe_docker_buildx_usage_and_recreation(
+    repo_root: Path,
+):
+    skill = (repo_root / LIMA_DIR / "agent-skills/devbox-tools/SKILL.md").read_text()
+    normalized_skill = " ".join(skill.split())
+    readme = " ".join((repo_root / LIMA_DIR / "README.md").read_text().split())
+
+    assert "docker --context default build" in skill
+    assert "env -u DOCKER_HOST -u DOCKER_CONTEXT" in skill
+    assert "docker buildx version" in skill
+    assert "DOCKER_BUILDKIT=1" in skill
+    assert "guest-root-equivalent" in skill
+    assert "podman build" in skill
+    assert "not a drop-in replacement for BuildKit-only features" in normalized_skill
+    assert (
+        "Only the default `docker` driver is covered by this profile"
+        in normalized_skill
+    )
+    assert (
+        "`--allow` entitlements are outside the supported profile" in normalized_skill
+    )
+    assert (
+        "Changes to embedded provisioning require `devbox --recreate`"
+        in normalized_skill
+    )
+    assert "Existing VMs must be recreated with `devbox --recreate`" in readme
+    assert "boot-time toolchain/readiness validation can fail" in readme
+
+
+@pytest.mark.unit
 def test_probe_checks_readonly_host_agent_mount(repo_root: Path):
     probe = _script(repo_root, "probe-readiness.sh")
 
@@ -571,6 +601,7 @@ def test_docker_ce_uses_pinned_signature_checked_rpms_and_rootful_services(
 
     assert '"docker_ce"' in tool_versions
     assert '"containerd_io"' in tool_versions
+    assert '"docker_buildx_plugin"' in tool_versions
     assert f"DOCKER_GPG_KEY_SHA256={docker_key_sha256}" in system_script
     assert "copy_repo_file lima/keys/docker-ce.asc" in system_script
     assert 'rpm --import "$docker_gpg_key_file"' in system_script
@@ -586,13 +617,25 @@ def test_docker_ce_uses_pinned_signature_checked_rpms_and_rootful_services(
     assert "--enablerepo=docker-ce-stable" in system_script
     assert "manifest_version docker_ce" in system_script
     assert "manifest_version containerd_io" in system_script
+    assert "manifest_version docker_buildx_plugin" in system_script
     assert '"docker-ce-3:${docker_version}"' in system_script
     assert '"docker-ce-cli-1:${docker_version}"' in system_script
     assert '"containerd.io-${containerd_version}"' in system_script
+    assert '"docker-buildx-plugin-0:${docker_buildx_version}"' in system_script
+    assert (
+        'docker_buildx_expected="docker-buildx-plugin 0 ${docker_buildx_version}"'
+        in system_script
+    )
+    assert "docker_rpm_identity docker-buildx-plugin" in system_script
+    assert "docker-buildx-plugin" in system_script
     assert "docker-ce-rootless-extras" not in system_script
     assert "assert_rpm_owner /usr/bin/docker docker-ce-cli" in system_script
     assert "assert_rpm_owner /usr/bin/dockerd docker-ce" in system_script
     assert "assert_rpm_owner /usr/bin/containerd containerd.io" in system_script
+    assert (
+        "assert_rpm_owner /usr/libexec/docker/cli-plugins/docker-buildx "
+        "docker-buildx-plugin" in system_script
+    )
     assert "docker_release" not in system_script
     assert "rpm -q --queryformat '%{NAME} %{EPOCHNUM} %{VERSION}'" in system_script
     assert "--setopt=tsflags=noscripts" in system_script

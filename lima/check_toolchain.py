@@ -56,6 +56,10 @@ _VERSION_COMMANDS: dict[str, tuple[Command, re.Pattern[str]]] = {
         ("containerd", "--version"),
         re.compile(r"\bv?(\d+\.\d+\.\d+)\b"),
     ),
+    "docker_buildx_plugin": (
+        ("docker", "buildx", "version"),
+        re.compile(r"\bv?(\d+\.\d+\.\d+)\b"),
+    ),
     "google_workspace_cli": (
         ("gws", "--version"),
         re.compile(r"\bv?(\d+\.\d+\.\d+)\b"),

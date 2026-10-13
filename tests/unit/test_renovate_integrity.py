@@ -379,6 +379,7 @@ def test_docker_ce_renovate_pin_normalizes_moby_release_tags(repo_root: Path):
     manifest = json.loads((repo_root / "lima" / "tool-versions.json").read_text())
     docker_ce = manifest["tools"]["docker_ce"]
     containerd_io = manifest["tools"]["containerd_io"]
+    buildx = manifest["tools"]["docker_buildx_plugin"]
     config = (repo_root / ".github" / "renovate.json5").read_text()
     version_group = _config_object(config, '"groupName": "devbox tool versions"')
     extract_rule = _config_object(
@@ -389,6 +390,10 @@ def test_docker_ce_renovate_pin_normalizes_moby_release_tags(repo_root: Path):
         config,
         '"description": "Wait for Docker\'s Fedora repo before bumping containerd.io"',
     )
+    buildx_rule = _config_object(
+        config,
+        '"description": "Wait for Docker\'s Fedora repo before bumping Buildx"',
+    )
 
     assert docker_ce["datasource"] == "github-releases"
     assert docker_ce["depName"] == "moby/moby"
@@ -397,6 +402,11 @@ def test_docker_ce_renovate_pin_normalizes_moby_release_tags(repo_root: Path):
     assert containerd_io["depName"] == "containerd/containerd"
     assert re.fullmatch(r"\d+\.\d+\.\d+", containerd_io["version"])
     assert '"moby/moby"' in version_group
+    assert buildx["datasource"] == "github-releases"
+    assert buildx["depName"] == "docker/buildx"
+    assert re.fullmatch(r"\d+\.\d+\.\d+", buildx["version"])
+    assert '"docker/buildx"' in version_group
+    assert '"enabled": false' in buildx_rule
     assert '"containerd/containerd"' in containerd_rule
     assert '"enabled": false' in containerd_rule
     assert (
@@ -429,16 +439,22 @@ def test_rust_renovate_pin_uses_full_semver(repo_root: Path):
 
 
 @pytest.mark.unit
-def test_docker_engine_and_containerd_rpm_pair_requires_review(repo_root: Path):
+def test_docker_engine_containerd_and_buildx_rpm_set_requires_review(
+    repo_root: Path,
+):
     manifest = json.loads((repo_root / "lima" / "tool-versions.json").read_text())
     tools = manifest["tools"]
-    pinned_pair = (tools["docker_ce"]["version"], tools["containerd_io"]["version"])
-    reviewed_pairs = {("29.8.2", "2.3.6")}
+    pinned_set = (
+        tools["docker_ce"]["version"],
+        tools["containerd_io"]["version"],
+        tools["docker_buildx_plugin"]["version"],
+    )
+    reviewed_sets = {("29.8.2", "2.3.6", "0.38.0")}
 
-    assert pinned_pair in reviewed_pairs, (
+    assert pinned_set in reviewed_sets, (
         "Review Docker Fedora 44 stable RPM metadata for x86_64 and aarch64, "
-        "then update docker_ce, containerd_io, and this approved version pair "
-        f"together; got {pinned_pair!r}"
+        "then update docker_ce, containerd_io, docker_buildx_plugin, and this "
+        f"approved version set together; got {pinned_set!r}"
     )
 
 

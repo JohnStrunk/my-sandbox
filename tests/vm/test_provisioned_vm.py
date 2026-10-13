@@ -81,6 +81,10 @@ expected_containerd_version="$(
   jq -er '.tools.containerd_io.version | sub("^v"; "")' \
     /etc/devbox/tool-versions.json
 )"
+expected_buildx_version="$(
+  jq -er '.tools.docker_buildx_plugin.version | sub("^v"; "")' \
+    /etc/devbox/tool-versions.json
+)"
 unset DOCKER_HOST DOCKER_CONTEXT
 docker_cli_path="$(command -v docker)"
 # shellcheck disable=SC1091
@@ -106,12 +110,18 @@ if rpm -q podman-docker >/dev/null 2>&1; then
   echo "podman-docker must not provide the Docker CLI" >&2
   exit 1
 fi
-for plugin in docker-ce-rootless-extras docker-buildx-plugin docker-compose-plugin; do
+for plugin in docker-ce-rootless-extras docker-compose-plugin; do
   if rpm -q "$plugin" >/dev/null 2>&1; then
     echo "$plugin is not part of the supported Docker CE profile" >&2
     exit 1
   fi
 done
+[[ "$(rpm -q --queryformat '%{NAME} %{EPOCHNUM} %{VERSION}' docker-buildx-plugin)" \
+  == "docker-buildx-plugin 0 ${expected_buildx_version}" ]]
+[[ "$(rpm -qf --queryformat '%{NAME}' \
+  /usr/libexec/docker/cli-plugins/docker-buildx)" == "docker-buildx-plugin" ]]
+buildx_version="$(docker buildx version)"
+[[ "$buildx_version" == *"v${expected_buildx_version}"* ]]
 for unit in containerd.service docker.socket docker.service; do
   systemctl is-enabled --quiet "$unit"
   systemctl is-active --quiet "$unit"
@@ -163,16 +173,12 @@ docker rm "$container_id" >/dev/null
 container_id=""
 build_image="docker-ce-build-smoke:latest"
 build_log="$(mktemp)"
-if ! printf 'FROM scratch\nLABEL org.example.devbox-smoke=passed\n' \
-  | env -u DOCKER_BUILDKIT docker build --tag "$build_image" - \
+if ! printf '%s\n' \
+  'FROM --platform=$BUILDPLATFORM scratch' \
+  'LABEL org.example.devbox-smoke=passed' \
+  | DOCKER_BUILDKIT=1 docker build --tag "$build_image" - \
     >"$build_log" 2>&1; then
   cat "$build_log" >&2
-  exit 1
-fi
-if ! grep -qi 'deprecated' "$build_log" \
-  || ! grep -qi 'legacy builder' "$build_log"; then
-  cat "$build_log" >&2
-  echo "docker build did not use the expected legacy-builder fallback" >&2
   exit 1
 fi
 docker image rm "$build_image" >/dev/null
@@ -332,6 +338,26 @@ def test_minikube_agent_guidance_is_staged(devbox_vm: LimaVM):
 
     assert result.returncode == 0, (
         "The VM-owned devbox-tools skill does not expose Minikube guidance.\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+
+
+@pytest.mark.vm
+def test_docker_buildx_agent_guidance_is_staged(devbox_vm: LimaVM):
+    if devbox_vm.name is None and os.environ.get("MY_SANDBOX_VM_TEST_FRESH") != "1":
+        source = Path(devbox_vm.repo_path) / "lima/agent-skills/devbox-tools/SKILL.md"
+        active = Path(devbox_vm.guest_home) / ".agents/skills/devbox-tools/SKILL.md"
+        if not active.is_file() or active.read_bytes() != source.read_bytes():
+            pytest.skip("the existing guest has stale staged skills")
+
+    skill_path = f"{devbox_vm.guest_home}/.agents/skills/devbox-tools/SKILL.md"
+    result = devbox_vm.run(
+        ["grep", "-F", "-q", "docker --context default build", skill_path],
+        timeout=60,
+    )
+
+    assert result.returncode == 0, (
+        "The staged devbox-tools skill does not expose safe Docker Buildx usage.\n"
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
 

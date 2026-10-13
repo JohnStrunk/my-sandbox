@@ -180,17 +180,35 @@ shared repository `AGENTS.md` or README.
   With no CLI endpoint or context override, `docker` connects to
   `/var/run/docker.sock`; there is no rootless `DOCKER_HOST` default. Use
   `docker version` to inspect its client and server and
-  `devbox-toolchain-check` to check the pinned CLI version. Readiness also
-  checks the server version against the manifest.
-- The optional Buildx and Compose plugin RPMs are not installed; `docker buildx`
-  and `docker compose` are unavailable. With `DOCKER_BUILDKIT` unset, `docker
-  build` currently uses the deprecated legacy-builder fallback; setting
-  `DOCKER_BUILDKIT=1` fails without Buildx. Do not assume modern BuildKit image
-  builds are supported by this profile.
+  `devbox-toolchain-check` to check the pinned CLI and Buildx versions.
+  Readiness also checks the server version against the manifest.
+- The Docker Buildx CLI plugin is installed at the version pinned in
+  `lima/tool-versions.json`; verify it with `docker buildx version`.
+  `docker compose` remains unavailable because the
+  Compose plugin is not installed. For BuildKit builds, use the default local
+  context and clear inherited endpoint overrides:
+
+  ```shell
+  env -u DOCKER_HOST -u DOCKER_CONTEXT DOCKER_BUILDKIT=1 \
+    docker --context default build --tag my-image .
+  ```
+
+  This supports BuildKit-only Dockerfiles such as those using
+  `FROM --platform=$BUILDPLATFORM`. Do not use the deprecated legacy builder
+  for Dockerfiles that require BuildKit. `podman build` is an alternative if
+  Buildx is unavailable or rootless builds are preferred, but Podman has a
+  separate image store from Docker, so images must be rebuilt or explicitly
+  transferred when switching runtimes. It is not a drop-in replacement for
+  BuildKit-only features. Only the default `docker` driver is covered by this
+  profile; custom `docker-container`, `remote`, or `kubernetes` builders and
+  `--allow` entitlements are outside the supported profile and require separate
+  review. Custom drivers may introduce unpinned BuildKit images or external
+  endpoints; `--allow` entitlements expand build privileges.
 - Docker group/socket access is guest-root-equivalent: the daemon can expose
   or modify data available through VM mounts. This does not grant host-root
-  access; Docker remains inside the Lima guest. Do not point Docker at Podman's
-  API socket or install `podman-docker`.
+  access; Docker remains inside the Lima guest. Build only trusted Dockerfiles
+  and contexts. Do not point Docker at Podman's API socket or install
+  `podman-docker`.
 - Podman remains independently available through the `podman` command and its
   rootless `$XDG_RUNTIME_DIR/podman/podman.sock` API socket and separate store.
   Select a kind backend explicitly with `lima/validate-kind.sh docker [runs]`
@@ -210,8 +228,10 @@ shared repository `AGENTS.md` or README.
   Check `DOCKER_HOST` and `DOCKER_CONTEXT` if the CLI does not use
   `/var/run/docker.sock`; keep the Docker and Podman socket paths distinct.
 - Changes to embedded provisioning require `devbox --recreate` for an existing
-  VM. Recreation loses guest-local state; rootless Docker data is not migrated
-  into the separate rootful Docker store.
+  VM. If the live checkout requires Buildx before recreation, boot-time
+  toolchain validation can fail because the embedded installer is stale.
+  Recreation loses guest-local state; rootless Docker data is not migrated into
+  the separate rootful Docker store.
 
 ### Kubernetes operator profile (Lima)
 

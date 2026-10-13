@@ -642,11 +642,11 @@ if ! cmp -s "$docker_gpg_key_tmp" "$docker_gpg_key_file"; then
 fi
 rpm --import "$docker_gpg_key_file"
 
-# Docker CE comes from Docker's official Fedora repository. Keep Engine, CLI,
-# and containerd.io on canonical version pins. Engine and CLI use distinct RPM
-# epochs; request exact name/epoch/version but let the repo select the current
-# Fedora release build. Skip RPM scriptlets; the system Docker units are enabled
-# explicitly below.
+# Docker CE and Buildx come from Docker's official Fedora repository. Keep
+# Engine, CLI, containerd.io, and Buildx on canonical version pins. Request the
+# exact name/epoch/version but let the repo select the current Fedora release
+# build. Skip RPM scriptlets; the system Docker units are enabled explicitly
+# below.
 docker_repo_file=/etc/yum.repos.d/docker-ce.repo
 docker_repo_tmp="$(new_temp_dir)/docker-ce.repo"
 cat >"$docker_repo_tmp" <<'EOF'
@@ -664,9 +664,11 @@ fi
 
 docker_version="$(manifest_version docker_ce)"
 containerd_version="$(manifest_version containerd_io)"
+docker_buildx_version="$(manifest_version docker_buildx_plugin)"
 docker_ce_expected="docker-ce 3 ${docker_version}"
 docker_cli_expected="docker-ce-cli 1 ${docker_version}"
 containerd_expected="containerd.io 0 ${containerd_version}"
+docker_buildx_expected="docker-buildx-plugin 0 ${docker_buildx_version}"
 docker_rpms_changed=false
 docker_rpm_identity() {
   rpm -q --queryformat '%{NAME} %{EPOCHNUM} %{VERSION}' "$1" \
@@ -675,7 +677,9 @@ docker_rpm_identity() {
 docker_rpms_match_pins() {
   [[ "$(docker_rpm_identity docker-ce)" == "$docker_ce_expected" ]] \
     && [[ "$(docker_rpm_identity docker-ce-cli)" == "$docker_cli_expected" ]] \
-    && [[ "$(docker_rpm_identity containerd.io)" == "$containerd_expected" ]]
+    && [[ "$(docker_rpm_identity containerd.io)" == "$containerd_expected" ]] \
+    && [[ "$(docker_rpm_identity docker-buildx-plugin)" \
+      == "$docker_buildx_expected" ]]
 }
 if ! docker_rpms_match_pins; then
   docker_rpms_changed=true
@@ -683,12 +687,13 @@ if ! docker_rpms_match_pins; then
     --setopt=install_weak_deps=False --setopt=tsflags=noscripts \
     "docker-ce-3:${docker_version}" \
     "docker-ce-cli-1:${docker_version}" \
-    "containerd.io-${containerd_version}"
+    "containerd.io-${containerd_version}" \
+    "docker-buildx-plugin-0:${docker_buildx_version}"
   dnf clean all
   rm -rf /var/cache/dnf
 fi
 if ! docker_rpms_match_pins; then
-  echo "devbox: Docker CE/containerd RPMs do not match the manifest pins" >&2
+  echo "devbox: Docker CE/containerd/Buildx RPMs do not match the manifest pins" >&2
   exit 1
 fi
 
@@ -706,6 +711,7 @@ assert_rpm_owner() {
 assert_rpm_owner /usr/bin/docker docker-ce-cli
 assert_rpm_owner /usr/bin/dockerd docker-ce
 assert_rpm_owner /usr/bin/containerd containerd.io
+assert_rpm_owner /usr/libexec/docker/cli-plugins/docker-buildx docker-buildx-plugin
 if rpm -q podman-docker >/dev/null 2>&1; then
   echo "devbox: refusing podman-docker; Docker must use Docker CE" >&2
   exit 1

@@ -33,6 +33,8 @@ def _version_output(name: str, version: str) -> str:
         return f"Docker version {version}, build 0000000"
     if name == "containerd_io":
         return f"containerd containerd v{version} deadbeef"
+    if name == "docker_buildx_plugin":
+        return f"github.com/docker/buildx v{version} deadbeef"
     if name == "pre_commit":
         return f"pre-commit {version}"
     if name in {"markdownlint_cli2", "opencode"}:
@@ -41,9 +43,7 @@ def _version_output(name: str, version: str) -> str:
 
 
 def _successful_runner(manifest: dict, overrides: dict[str, str] | None = None):
-    command_names = {
-        command[0]: name for name, (command, _) in _VERSION_COMMANDS.items()
-    }
+    command_names = {command: name for name, (command, _) in _VERSION_COMMANDS.items()}
     versions = {
         name: spec["version"].removeprefix("v")
         for name, spec in manifest["tools"].items()
@@ -53,8 +53,9 @@ def _successful_runner(manifest: dict, overrides: dict[str, str] | None = None):
     overrides = overrides or {}
 
     def run(command):
+        command = tuple(command)
         executable = command[0]
-        name = command_names.get(executable)
+        name = command_names.get(command)
         if name:
             output = _version_output(name, overrides.get(name, versions[name]))
         else:
@@ -99,53 +100,23 @@ def test_lima_toolchain_check_reports_a_pinned_version_mismatch(
     )
 
 
+@pytest.mark.parametrize(
+    "tool_name",
+    ["minikube", "docker_ce", "containerd_io", "docker_buildx_plugin"],
+)
 @pytest.mark.unit
-def test_lima_toolchain_check_verifies_the_minikube_version(
-    repo_root: Path, tmp_path: Path
+def test_lima_toolchain_check_reports_manifest_version_mismatch(
+    repo_root: Path, tmp_path: Path, tool_name: str
 ):
     manifest = _manifest(repo_root)
     manifest_path = _write_manifest(tmp_path / "manifest.json", manifest)
-    expected_version = manifest["tools"]["minikube"]["version"]
-    runner = _successful_runner(manifest, {"minikube": "0.0.0"})
+    expected_version = manifest["tools"][tool_name]["version"]
+    runner = _successful_runner(manifest, {tool_name: "0.0.0"})
 
     _, errors = check_toolchain(manifest_path, runner)
 
     assert any(
-        f"minikube: installed version 0.0.0, expected {expected_version}" in error
-        for error in errors
-    )
-
-
-@pytest.mark.unit
-def test_lima_toolchain_check_verifies_the_docker_ce_client_version(
-    repo_root: Path, tmp_path: Path
-):
-    manifest = _manifest(repo_root)
-    manifest_path = _write_manifest(tmp_path / "manifest.json", manifest)
-    expected_version = manifest["tools"]["docker_ce"]["version"]
-    runner = _successful_runner(manifest, {"docker_ce": "0.0.0"})
-
-    _, errors = check_toolchain(manifest_path, runner)
-
-    assert any(
-        f"docker_ce: installed version 0.0.0, expected {expected_version}" in error
-        for error in errors
-    )
-
-
-@pytest.mark.unit
-def test_lima_toolchain_check_verifies_containerd_version(
-    repo_root: Path, tmp_path: Path
-):
-    manifest = _manifest(repo_root)
-    manifest_path = _write_manifest(tmp_path / "manifest.json", manifest)
-    expected_version = manifest["tools"]["containerd_io"]["version"]
-    runner = _successful_runner(manifest, {"containerd_io": "0.0.0"})
-
-    _, errors = check_toolchain(manifest_path, runner)
-
-    assert any(
-        f"containerd_io: installed version 0.0.0, expected {expected_version}" in error
+        f"{tool_name}: installed version 0.0.0, expected {expected_version}" in error
         for error in errors
     )
 
