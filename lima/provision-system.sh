@@ -485,9 +485,10 @@ if ! cmp -s "$profile_tmp" "$profile_file"; then
 fi
 
 # --- Fedora packages -------------------------------------------------------
-# Provides the VM toolchain, Playwright's headless Chromium libraries, and the
-# nested-VM/operator runtime. Lima itself provides the
-# subuid/subgid ranges, cgroup-v2 delegation, and linger for rootless Podman.
+# Provides the VM toolchain, Ruby/OpenSSL build dependencies, Playwright's
+# headless Chromium libraries, and the nested-VM/operator runtime. Lima itself
+# provides the subuid/subgid ranges, cgroup-v2 delegation, and linger for
+# rootless Podman.
 packages=(
   aardvark-dns
   alsa-lib
@@ -515,6 +516,7 @@ packages=(
   hyperfine
   jq
   just
+  libffi-devel
   libselinux-utils
   libvirt-client
   libvirt-daemon-config-network
@@ -527,6 +529,7 @@ packages=(
   libXrandr
   libdrm
   libxkbcommon
+  libyaml-devel
   make
   mesa-libgbm
   netavark
@@ -534,6 +537,10 @@ packages=(
   openssl
   patch
   passt
+  perl-File-Compare
+  perl-File-Copy
+  perl-FindBin
+  perl-IPC-Cmd
   policycoreutils
   podman
   procps-ng
@@ -548,6 +555,7 @@ packages=(
   slirp4netns
   tokei
   unzip
+  zlib-ng-compat-devel # Provides zlib-devel; rpm -q requires this concrete RPM name.
 )
 missing=()
 for package in "${packages[@]}"; do
