@@ -542,6 +542,32 @@ def test_system_script_installs_qemu_img_for_nested_lima(repo_root: Path):
 
 
 @pytest.mark.unit
+def test_system_script_installs_ruby_openssl_build_dependencies(repo_root: Path):
+    system_script = _script(repo_root, "provision-system.sh")
+    match = re.search(
+        r"^packages=\(\n(.*?)^\)",
+        system_script,
+        re.DOTALL | re.MULTILINE,
+    )
+
+    assert match
+    for package in (
+        "libffi-devel",
+        "libyaml-devel",
+        "perl-File-Compare",
+        "perl-File-Copy",
+        "perl-FindBin",
+        "perl-IPC-Cmd",
+        "zlib-ng-compat-devel",
+    ):
+        assert re.search(
+            rf"^\s*{re.escape(package)}(?:\s+#.*)?\s*$",
+            match.group(1),
+            re.MULTILINE,
+        )
+
+
+@pytest.mark.unit
 def test_system_script_provisions_libvirt_for_minikube_kvm2(repo_root: Path):
     system_script = _script(repo_root, "provision-system.sh")
     match = re.search(
