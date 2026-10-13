@@ -248,6 +248,15 @@
         "lima": true
       }
     },
+    "docker_buildx_plugin": {
+      "version": "0.38.0",
+      "datasource": "github-releases",
+      "depName": "docker/buildx",
+      "integrity": "version-only",
+      "consumers": {
+        "lima": true
+      }
+    },
     "kubectl": {
       "version": "1.37.1",
       "datasource": "github-releases",

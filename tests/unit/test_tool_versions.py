@@ -146,6 +146,7 @@ def test_checksum_managed_tool_set_is_an_explicit_v1_policy(repo_root: Path):
         "kubectl",
         "docker_ce",
         "containerd_io",
+        "docker_buildx_plugin",
     ):
         assert manifest["tools"][tool]["integrity"] == "version-only"
         assert "artifacts" not in manifest["tools"][tool]

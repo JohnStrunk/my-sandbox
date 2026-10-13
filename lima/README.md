@@ -425,11 +425,12 @@ its exact version, plus `make`, Python/pip, and ShellCheck.
 
 ### Docker CE and Podman runtimes
 
-The VM provisions **Docker CE Engine, its official CLI, and `containerd.io`**
-from Docker's Fedora stable RPM repository. The
-manifest pins Docker CE 29.8.2 and containerd 2.3.6 for both supported
-architectures. The RPM release suffix is resolved from the official repo for
-Fedora 44; package versions and epochs are checked after installation. DNF
+The VM provisions **Docker CE Engine, its official CLI, `containerd.io`, and
+the Docker Buildx CLI plugin** from Docker's Fedora stable RPM repository. The
+manifest pins Docker CE 29.8.2, containerd 2.3.6, and Buildx 0.38.0 for both
+supported architectures. The RPM release suffix is resolved from the official
+repo for Fedora 44; package versions and Docker RPM epochs are checked after
+installation. DNF
 verifies repository metadata and package signatures with a committed,
 SHA-256-pinned Docker key
 (`060A 61C5 1B55 8A7F 742B 77AA C52F EB6B 621E 9F35`, `gpgcheck=1`,
@@ -438,22 +439,43 @@ The Docker repo is disabled for ordinary guest `dnf` operations and enabled only
 for the pinned install transaction. Provisioning skips third-party RPM
 scriptlets as root. Docker CE is not a Podman alias, wrapper, or `podman-docker`
 package.
-The `containerd_io` pin follows the containerd version packaged by Docker; its
-Renovate updates are disabled until Docker publishes a matching Fedora RPM for
-both supported architectures. A unit-test allowlist also blocks a Docker-only
-pin bump; when updating either version, verify the Engine, CLI, and containerd
-RPMs for Fedora 44 x86_64 and aarch64, then update both pins and the reviewed
-pair together.
+The `containerd_io` pin follows the containerd version packaged by Docker.
+Renovate updates for that pin and Buildx are disabled until Docker publishes
+the matching Fedora RPMs for both supported architectures. A unit-test allowlist
+blocks unreviewed pin changes; when updating any of these versions, verify the
+Engine, CLI, containerd, and Buildx RPMs for Fedora 44 x86_64 and aarch64, then
+update all three pins and the reviewed version set together.
 
-Docker runs as the rootful system daemon inside the Lima guest. The optional
-`docker-buildx-plugin` and `docker-compose-plugin` RPMs are not installed, so
-`docker buildx` and `docker compose` are unavailable by default.
-With `DOCKER_BUILDKIT` unset, `docker build` currently falls back to Docker's
-deprecated legacy builder and prints a warning; `DOCKER_BUILDKIT=1 docker build`
-fails without Buildx. This profile supports container execution and kind, not
-BuildKit image builds. Use Podman's separate `podman build` store or add a
-pinned Buildx plugin before relying on Docker image builds; the legacy fallback
-may be removed in a future CLI release.
+Docker runs as the rootful system daemon inside the Lima guest. Buildx is
+available through `docker buildx`; the optional `docker-compose-plugin` RPM is
+not installed, so `docker compose` remains unavailable. For BuildKit image
+builds, explicitly select the default local Docker context and unset inherited
+endpoint overrides:
+
+```shell
+env -u DOCKER_HOST -u DOCKER_CONTEXT DOCKER_BUILDKIT=1 \
+  docker --context default build --tag my-image .
+```
+
+This invokes BuildKit and supports BuildKit-only Dockerfile features such as
+`FROM --platform=$BUILDPLATFORM`. Do not use Docker's deprecated legacy
+builder for Dockerfiles that require BuildKit. Only the default `docker` driver
+is covered by this profile. Custom `docker-container`, `remote`, or
+`kubernetes` builders and `--allow` entitlements are outside the supported
+profile and require separate review. Custom drivers may introduce unpinned
+BuildKit images or external endpoints; `--allow` entitlements expand build
+privileges. If Docker Buildx is unavailable or a rootless build is preferred,
+`podman build` is an alternative for workflows it supports, but it is not a
+drop-in replacement for BuildKit-only features. Podman and Docker have separate
+image stores; images must be rebuilt or explicitly transferred when switching
+runtimes.
+
+Buildx installation is part of the embedded Lima system provisioner. Existing
+VMs must be recreated with `devbox --recreate` before being used with this
+checkout. Until recreation, the live toolchain checker expects Buildx while the
+embedded installer remains stale, so boot-time toolchain/readiness validation
+can fail. Stopping and starting an existing VM does not update the embedded
+install logic.
 
 Provisioning enables the system `docker.service`, `docker.socket`, and
 `containerd.service` at boot, and adds the guest user to the `docker` group.
@@ -469,7 +491,8 @@ the supported runtime.
 
 Access to the Docker group or socket is guest-root-equivalent: Docker can expose
 or modify data available through the VM's mounts. This grants no host-root
-access; the daemon and its privileges remain inside the Lima guest.
+access; the daemon and its privileges remain inside the Lima guest. Build only
+trusted Dockerfiles and contexts.
 
 Podman remains a separately supported rootless runtime. Its API socket is
 `$XDG_RUNTIME_DIR/podman/podman.sock`; invoking `podman` talks to Podman
@@ -493,8 +516,9 @@ explicitly save/load images when moving between runtimes.
 Verify both runtimes and their separation with:
 
 ```shell
-devbox-toolchain-check            # checks the pinned Docker CLI version
+devbox-toolchain-check            # checks pinned Docker CLI and Buildx versions
 docker version                    # reports both client and Docker CE server
+docker buildx version             # reports the pinned Buildx plugin version
 rpm -qf /usr/bin/docker /usr/bin/dockerd
 systemctl --no-pager status docker.service docker.socket containerd.service
 docker info
