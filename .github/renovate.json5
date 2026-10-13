@@ -113,6 +113,7 @@
         "helm/helm",
         "kubernetes/kubernetes",
         "node",
+        "ruby",
         "rust",
         "rust-lang/rustup",
         "pipenv",
@@ -150,6 +151,13 @@
       "description": "Wait for Docker's Fedora repo before bumping Buildx",
       "matchPackageNames": [
         "docker/buildx",
+      ],
+      "enabled": false,
+    },
+    {
+      "description": "Wait for Fedora 44's Ruby RPM before bumping the manifest pin",
+      "matchPackageNames": [
+        "ruby",
       ],
       "enabled": false,
     },

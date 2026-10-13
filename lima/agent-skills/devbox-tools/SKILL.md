@@ -168,6 +168,24 @@ shared repository `AGENTS.md` or README.
 - Unit coverage is in `tests/unit/test_devbox_go.py`; provisioned availability
   is covered by `tests/vm/test_provisioned_vm.py`.
 
+### Ruby
+
+- Runtime command: Ruby 4.0.7 from Fedora 44's version-qualified RPM in
+  `updates`, not the GA `fedora` repository; available as `ruby`. Since
+  `updates` can drop superseded versions, fresh provisioning can fail after it
+  advances. Before creating or recreating a VM, keep the manual manifest pin on
+  a version currently available in Fedora 44, not an upstream ruby-lang
+  release. Renovate updates are disabled; update manually after Fedora
+  publishes a matching RPM. Use it for Ruby projects; check with
+  `ruby --version` and run only reviewed code, for example
+  `ruby path/to/script.rb`.
+- If `ruby` is unavailable, use the project's documented alternative or skip
+  Ruby-dependent steps rather than installing an unpinned runtime. Verify the
+  pinned version with `devbox-toolchain-check`.
+- Ruby adds embedded system provisioning and readiness checks. Existing VMs
+  must use `devbox --recreate`; an old embedded installer can fail against the
+  live manifest. Future manifest-only version changes need a VM restart.
+
 ### Docker CE and Podman runtimes (Lima)
 
 - Docker CE Engine, its official `docker` CLI, and pinned `containerd.io` are

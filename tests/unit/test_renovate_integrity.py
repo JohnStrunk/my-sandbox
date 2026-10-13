@@ -376,6 +376,30 @@ def test_go_version_only_policy_keeps_timestamped_source(repo_root: Path):
 
 
 @pytest.mark.unit
+def test_ruby_renovate_pin_waits_for_fedora_44_rpm(repo_root: Path):
+    manifest = json.loads((repo_root / "lima" / "tool-versions.json").read_text())
+    ruby = manifest["tools"]["ruby"]
+    config = (repo_root / ".github" / "renovate.json5").read_text()
+    version_group = _config_object(config, '"groupName": "devbox tool versions"')
+    ruby_rule = _config_object(
+        config,
+        '"description": "Wait for Fedora 44\'s Ruby RPM before '
+        'bumping the manifest pin"',
+    )
+    match_package_names = re.search(
+        r'"matchPackageNames"\s*:\s*\[(?P<packages>.*?)\]',
+        ruby_rule,
+        re.DOTALL,
+    )
+
+    assert ruby["depName"] == "ruby"
+    assert match_package_names
+    assert '"ruby"' in match_package_names.group("packages")
+    assert '"enabled": false' in ruby_rule
+    assert '"ruby"' in version_group
+
+
+@pytest.mark.unit
 def test_docker_ce_renovate_pin_normalizes_moby_release_tags(repo_root: Path):
     manifest = json.loads((repo_root / "lima" / "tool-versions.json").read_text())
     docker_ce = manifest["tools"]["docker_ce"]

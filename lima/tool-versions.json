@@ -49,6 +49,15 @@
         "lima": true
       }
     },
+    "ruby": {
+      "version": "4.0.7",
+      "datasource": "ruby-version",
+      "depName": "ruby",
+      "integrity": "version-only",
+      "consumers": {
+        "lima": true
+      }
+    },
     "rust": {
       "version": "1.99.0",
       "datasource": "rust-version",

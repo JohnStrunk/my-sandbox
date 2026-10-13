@@ -429,6 +429,7 @@ def test_manifest_declares_lima_consumers(repo_root: Path):
         "playwright_cli",
         "pre_commit",
         "repomix",
+        "ruby",
         "rust",
         "rustup",
         "semble",
@@ -438,6 +439,18 @@ def test_manifest_declares_lima_consumers(repo_root: Path):
         consumers = manifest["tools"][tool]["consumers"]
         assert consumers.get("lima") is True, tool
     assert "github_mcp_server" not in manifest["tools"]
+
+
+@pytest.mark.unit
+def test_ruby_manifest_pins_fedora_44_ruby(repo_root: Path):
+    manifest = json.loads((repo_root / "lima" / "tool-versions.json").read_text())
+    ruby = manifest["tools"]["ruby"]
+
+    assert ruby["version"] == "4.0.7"
+    assert ruby["datasource"] == "ruby-version"
+    assert ruby["depName"] == "ruby"
+    assert ruby["integrity"] == "version-only"
+    assert ruby["consumers"]["lima"] is True
 
 
 @pytest.mark.unit
@@ -503,6 +516,25 @@ def test_tool_version_validator_reports_missing_lima_manifest_read(
     errors = validate_tool_versions(copy_root)
 
     assert any("does not read 'opencode' version" in error for error in errors)
+
+
+@pytest.mark.unit
+def test_tool_version_validator_reports_missing_ruby_manifest_read(
+    repo_root: Path, tmp_path: Path
+):
+    copy_root = tmp_path / "repo"
+    _copy_validator_inputs(repo_root, copy_root)
+
+    script = copy_root / "lima" / "provision-system.sh"
+    source = script.read_text()
+    assert "manifest_version ruby" in source
+    script.write_text(
+        source.replace("manifest_version ruby", "manifest_version node", 1)
+    )
+
+    errors = validate_tool_versions(copy_root)
+
+    assert any("does not read 'ruby' version" in error for error in errors)
 
 
 @pytest.mark.unit

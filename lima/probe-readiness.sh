@@ -126,7 +126,8 @@ for tool in \
   markdownlint-cli2 newgidmap newuidmap \
   node npm npx opencode patch pipenv pip3 \
   playwright-cli podman pre-commit python3 qemu-img repomix rg \
-  rustc rustup semble shellcheck tokei uv uvx virsh virt-host-validate
+  ruby rustc rustup semble shellcheck tokei uv uvx \
+  virsh virt-host-validate
 do
   command -v "$tool" >/dev/null 2>&1 || fail "$tool is not installed"
 done
