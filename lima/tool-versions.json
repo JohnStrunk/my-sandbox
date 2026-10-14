@@ -40,6 +40,46 @@
         "lima": true
       }
     },
+    "gocyclo": {
+      "version": "0.6.0",
+      "datasource": "github-tags",
+      "depName": "fzipp/gocyclo",
+      "integrity": "version-only",
+      "consumers": {
+        "lima": true
+      }
+    },
+    "golangci_lint": {
+      "version": "2.14.0",
+      "datasource": "github-releases",
+      "depName": "golangci/golangci-lint",
+      "integrity": "sha256",
+      "artifacts": {
+        "amd64": {
+          "version": "v2.14.0",
+          "sha256": "ab90aeb7b066f92a33415b638a50fe5344bbb75a0d32ad30cc248d88f81032ab",
+          "depName": "golangci/golangci-lint-amd64",
+          "packageName": "golangci/golangci-lint",
+          "datasource": "github-release-attachments"
+        },
+        "arm64": {
+          "version": "v2.14.0",
+          "sha256": "ee7ec5f3453d15ddf106fae5a4d6c71737712348a979d1fe9cd52ec7ea299bae",
+          "depName": "golangci/golangci-lint-arm64",
+          "packageName": "golangci/golangci-lint",
+          "datasource": "github-release-attachments"
+        }
+      },
+      "provenance": {
+        "url_templates": {
+          "artifacts.amd64.sha256": "https://github.com/golangci/golangci-lint/releases/download/{artifacts.amd64.version}/golangci-lint-{version}-linux-amd64.tar.gz",
+          "artifacts.arm64.sha256": "https://github.com/golangci/golangci-lint/releases/download/{artifacts.arm64.version}/golangci-lint-{version}-linux-arm64.tar.gz"
+        }
+      },
+      "consumers": {
+        "lima": true
+      }
+    },
     "node": {
       "version": "24.21.0",
       "datasource": "node-version",

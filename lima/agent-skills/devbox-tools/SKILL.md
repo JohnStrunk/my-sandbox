@@ -168,6 +168,37 @@ shared repository `AGENTS.md` or README.
 - Unit coverage is in `tests/unit/test_devbox_go.py`; provisioned availability
   is covered by `tests/vm/test_provisioned_vm.py`.
 
+### Go source linters
+
+- Runtime commands: the manifest-pinned `golangci-lint` and `gocyclo`. Use
+  `golangci-lint run ./...` to run the Go linters enabled by the project's
+  configuration; use `gocyclo -top 10 .` to inspect the ten most complex
+  functions or `gocyclo -over N .` to find functions above a complexity
+  threshold. `-over` exits 1 when it finds matches, so treat that status as
+  threshold results, not a provisioning failure.
+- `devbox-toolchain-check` verifies the pinned versions. `golangci-lint
+  --version` reports its embedded Go compiler version. `gocyclo` has no version
+  flag; the checker verifies its module version with
+  `go version -m "$(command -v gocyclo)"`.
+- `golangci-lint` is a prebuilt binary, so its embedded Go compiler—not the
+  project toolchain selected by `devbox-go`—sets the maximum Go language
+  version it supports. Check the compiler version reported by
+  `golangci-lint --version` when linting a project that requires a newer Go
+  version, and choose a release built with a compatible compiler. `devbox-go`
+  cannot change the linter's embedded compiler. If no compatible official
+  release is available, use the project's approved CI/lint command or
+  `go vet ./...`; those checks do not replace complexity scores. `gocyclo` is
+  built from its pinned module tag with the VM's manifest-pinned Go compiler.
+- If `gocyclo` is unavailable, use `golangci-lint run ./...` only when the
+  project config enables its `gocyclo` linter; otherwise skip complexity
+  analysis instead of installing an unpinned binary. Unit coverage is in
+  `tests/unit/test_lima_toolchain.py` and
+  `tests/unit/test_lima_template.py`; provisioned-tool and staged-guidance
+  coverage is in `tests/vm/test_provisioned_vm.py`.
+- Manifest and installer changes apply on VM restart. This change also updates
+  the embedded readiness probe, so existing VMs must use `devbox --recreate`
+  to get its explicit command checks; recreation loses VM-local state.
+
 ### Ruby
 
 - Runtime command: Ruby 4.0.7 from Fedora 44's version-qualified RPM in

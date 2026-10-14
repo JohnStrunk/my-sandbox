@@ -243,7 +243,7 @@ fi
 for executable in \
   opencode coderabbit cr markdownlint-cli2 playwright-cli repomix \
   gws pre-commit pipenv \
-  semble-bin rustup rustc cargo
+  semble-bin rustup rustc cargo golangci-lint gocyclo
 do
   [[ -x "$TOOL_BUILDER_HOME/.local/bin/$executable" \
     || -x "$TOOL_BUILDER_HOME/.cargo/bin/$executable" ]] \

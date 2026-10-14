@@ -235,6 +235,46 @@ if ! rustup toolchain list | grep -q "^${rust_version}-"; then
 fi
 rustup default "$rust_version"
 
+GOLANGCI_VERSION="$(manifest_version golangci_lint)"
+GOLANGCI_ARTIFACT_VERSION="$(manifest_artifact_version golangci_lint "$checksum_arch")"
+GOLANGCI_FINGERPRINT="$(manifest_integrity_fingerprint golangci_lint "$checksum_arch")"
+golangci_installed="$("$HOME/.local/bin/golangci-lint" --version 2>/dev/null \
+  | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)"
+golangci_stamp="$HOME/.cache/tool-integrity/golangci_lint"
+if [[ "$golangci_installed" != "$GOLANGCI_VERSION" ]] \
+  || [[ ! -f "$golangci_stamp" ]] \
+  || [[ "$(cat "$golangci_stamp")" != "$GOLANGCI_FINGERPRINT" ]]; then
+  archive="golangci-lint-${GOLANGCI_VERSION}-linux-${checksum_arch}.tar.gz"
+  tmp="$(mktemp -d "$HOME/.cache/golangci-lint.XXXXXX")"
+  curl --retry 3 --retry-connrefused -fsSL \
+    "https://github.com/golangci/golangci-lint/releases/download/${GOLANGCI_ARTIFACT_VERSION}/${archive}" \
+    -o "$tmp/$archive"
+  verify_download golangci_lint "$checksum_arch" "$tmp/$archive"
+  tar -xOzf "$tmp/$archive" \
+    "golangci-lint-${GOLANGCI_VERSION}-linux-${checksum_arch}/golangci-lint" \
+    >"$tmp/golangci-lint"
+  test -s "$tmp/golangci-lint"
+  install -m 0755 "$tmp/golangci-lint" "$HOME/.local/bin/golangci-lint"
+  rm -rf -- "$tmp"
+  install -d -m 0700 "${golangci_stamp%/*}"
+  printf '%s\n' "$GOLANGCI_FINGERPRINT" >"$golangci_stamp.new"
+  mv -f "$golangci_stamp.new" "$golangci_stamp"
+fi
+
+GOCYCLO_VERSION="$(manifest_version gocyclo)"
+gocyclo_installed=""
+if [[ -x "$HOME/.local/bin/gocyclo" ]]; then
+  # Keep this accepted version grammar in sync with lima/check_toolchain.py.
+  gocyclo_installed="$(go version -m "$HOME/.local/bin/gocyclo" 2>/dev/null \
+    | sed -nE 's/^[[:space:]]*mod[[:space:]]+github\.com\/fzipp\/gocyclo[[:space:]]+v?([0-9]+\.[0-9]+\.[0-9]+([+-][A-Za-z0-9.]+)?)([[:space:]]|$).*/\1/p' \
+    | head -n1 || true)"
+fi
+if [[ "$gocyclo_installed" != "$GOCYCLO_VERSION" ]]; then
+  # Do not let module directives trigger an implicit toolchain download.
+  GOTOOLCHAIN=local GOBIN="$HOME/.local/bin" go install \
+    "github.com/fzipp/gocyclo/cmd/gocyclo@v${GOCYCLO_VERSION}"
+fi
+
 # The browser and model caches live on the VM disk under the builder home.
 # ACLs grant the guest access only to these non-secret cache contents.
 playwright-cli install-browser chrome-for-testing

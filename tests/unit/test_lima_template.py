@@ -1,6 +1,7 @@
 """Unit tests for the lima/devbox.yaml VM template and its scripts."""
 
 import hashlib
+import json
 import os
 import re
 import stat
@@ -68,6 +69,17 @@ def _shared_rels_from_loop(text: str) -> list[str]:
         if entry:
             entries.append(entry)
     return entries
+
+
+def _probe_required_tools(repo_root: Path) -> set[str]:
+    probe = _script(repo_root, "probe-readiness.sh")
+    required_tools = re.search(
+        r"^for tool in \\\n(.*?)^do$",
+        probe,
+        re.DOTALL | re.MULTILINE,
+    )
+    assert required_tools, "no `for tool in` loop found in probe-readiness.sh"
+    return set(required_tools.group(1).replace("\\", " ").split())
 
 
 @pytest.mark.unit
@@ -214,6 +226,86 @@ def test_readiness_uses_builder_check_stamp_not_guest_tool_execution(
 
 
 @pytest.mark.unit
+def test_go_linters_install_from_the_pinned_manifest(repo_root: Path):
+    tool_script = _script(repo_root, "provision-tools.sh")
+
+    assert 'GOLANGCI_VERSION="$(manifest_version golangci_lint)"' in tool_script
+    assert (
+        'GOLANGCI_ARTIFACT_VERSION="$(manifest_artifact_version golangci_lint '
+        '"$checksum_arch")"' in tool_script
+    )
+    assert (
+        'GOLANGCI_FINGERPRINT="$(manifest_integrity_fingerprint golangci_lint '
+        '"$checksum_arch")"' in tool_script
+    )
+    assert 'verify_download golangci_lint "$checksum_arch" "$tmp/$archive"' in (
+        tool_script
+    )
+    assert (
+        "https://github.com/golangci/golangci-lint/releases/download/"
+        "${GOLANGCI_ARTIFACT_VERSION}/${archive}"
+    ) in tool_script
+    assert (
+        'install -m 0755 "$tmp/golangci-lint" '
+        '"$HOME/.local/bin/golangci-lint"' in tool_script
+    )
+
+    assert 'GOCYCLO_VERSION="$(manifest_version gocyclo)"' in tool_script
+    assert 'go version -m "$HOME/.local/bin/gocyclo"' in tool_script
+    assert (
+        'GOTOOLCHAIN=local GOBIN="$HOME/.local/bin" go install \\\n'
+        '    "github.com/fzipp/gocyclo/cmd/gocyclo@v${GOCYCLO_VERSION}"' in tool_script
+    )
+
+
+@pytest.mark.parametrize("suffix", ["-rc.1", "+build.5"])
+@pytest.mark.unit
+def test_gocyclo_provisioning_parser_preserves_version_suffix(
+    repo_root: Path, suffix: str
+):
+    tool_script = _script(repo_root, "provision-tools.sh")
+    parser = re.search(r"sed -nE '([^']*gocyclo[^']*)'", tool_script)
+    manifest = json.loads((repo_root / LIMA_DIR / "tool-versions.json").read_text())
+    base_version = (
+        manifest["tools"]["gocyclo"]["version"]
+        .removeprefix("v")
+        .split("-", 1)[0]
+        .split("+", 1)[0]
+    )
+    version = base_version + suffix
+
+    assert parser, "gocyclo module version parser is missing"
+    build_info = f"gocyclo:\n\tmod\tgithub.com/fzipp/gocyclo\tv{version}\th1:sum\n"
+    result = subprocess.run(
+        ["sed", "-nE", parser.group(1)],
+        input=build_info,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == version
+
+
+@pytest.mark.unit
+def test_user_script_checks_go_linters_in_isolated_tool_fail_fast_list(
+    repo_root: Path,
+):
+    user_script = _script(repo_root, "provision-user.sh")
+    isolated_tools = re.search(
+        r"^for executable in \\\n(.*?)^do$",
+        user_script,
+        re.DOTALL | re.MULTILINE,
+    )
+
+    assert isolated_tools, "isolated-tool fail-fast loop is missing"
+    assert {"golangci-lint", "gocyclo"} <= set(
+        isolated_tools.group(1).replace("\\", " ").split()
+    )
+
+
+@pytest.mark.unit
 def test_envtest_asset_store_is_not_provisioned_required_or_documented(
     repo_root: Path,
 ):
@@ -322,6 +414,33 @@ def test_vm_skill_documents_ruby_runtime_verification(repo_root: Path):
     assert "`ruby`" in ruby_guidance
     assert "`ruby --version`" in ruby_guidance
     assert "`devbox-toolchain-check`" in ruby_guidance
+
+
+@pytest.mark.unit
+def test_vm_skill_documents_go_linter_usage_and_compatibility(repo_root: Path):
+    skill = (repo_root / LIMA_DIR / "agent-skills/devbox-tools/SKILL.md").read_text()
+    go_linter_guidance = " ".join(
+        skill.split("### Go source linters", 1)[1].split("\n### ", 1)[0].split()
+    )
+    readme = " ".join((repo_root / LIMA_DIR / "README.md").read_text().split())
+
+    assert "`golangci-lint run ./...`" in go_linter_guidance
+    assert "`gocyclo -top 10 .`" in go_linter_guidance
+    assert "`gocyclo -over N .`" in go_linter_guidance
+    assert "no version flag" in go_linter_guidance
+    assert "go version -m" in go_linter_guidance
+    assert "`golangci-lint --version`" in go_linter_guidance
+    assert "`devbox-go` cannot change the linter's embedded compiler" in (
+        go_linter_guidance
+    )
+    assert "VM's manifest-pinned Go compiler" in go_linter_guidance
+    assert "`go vet ./...`" in go_linter_guidance
+    assert "If `gocyclo` is unavailable" in go_linter_guidance
+    assert "skip complexity analysis" in go_linter_guidance
+    assert "unpinned binary" in go_linter_guidance
+    assert "`devbox-toolchain-check`" in go_linter_guidance
+    assert "`devbox --recreate`" in go_linter_guidance
+    assert "existing VMs must use `devbox --recreate`" in readme
 
 
 @pytest.mark.unit
@@ -528,29 +647,18 @@ def test_probe_checks_exactly_the_mounted_paths(repo_root: Path):
 
 @pytest.mark.unit
 def test_probe_requires_ruby_on_the_guest_path(repo_root: Path):
-    probe = _script(repo_root, "probe-readiness.sh")
-    required_tools = re.search(
-        r"^for tool in \\\n(.*?)^do$",
-        probe,
-        re.DOTALL | re.MULTILINE,
-    )
-
-    assert required_tools
-    assert "ruby" in required_tools.group(1).replace("\\", " ").split()
+    assert "ruby" in _probe_required_tools(repo_root)
 
 
 @pytest.mark.unit
 def test_probe_requires_coderabbit_cli_on_the_guest_path(repo_root: Path):
-    probe = _script(repo_root, "probe-readiness.sh")
-    required_tools = re.search(
-        r"^for tool in \\\n(.*?)^do$",
-        probe,
-        re.DOTALL | re.MULTILINE,
-    )
+    assert {"coderabbit", "cr"} <= _probe_required_tools(repo_root)
 
-    assert required_tools
-    assert "coderabbit" in required_tools.group(1).replace("\\", " ").split()
-    assert "cr" in required_tools.group(1).replace("\\", " ").split()
+
+@pytest.mark.parametrize("tool", ["golangci-lint", "gocyclo"])
+@pytest.mark.unit
+def test_probe_requires_go_linters_on_the_guest_path(repo_root: Path, tool: str):
+    assert tool in _probe_required_tools(repo_root)
 
 
 @pytest.mark.unit
