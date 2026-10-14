@@ -104,9 +104,17 @@
       "minimumReleaseAgeBehaviour": "timestamp-optional",
     },
     {
+      "description": "Allow CodeRabbit's official version feed, which has no release timestamp",
+      "matchPackageNames": [
+        "coderabbit-cli",
+      ],
+      "minimumReleaseAgeBehaviour": "timestamp-optional",
+    },
+    {
       "description": "Keep canonical tool versions and their consumers together",
       "matchPackageNames": [
         "@opencode/cli",
+        "coderabbit-cli",
         "moby/moby",
         "docker/buildx",
         "golang",
@@ -195,6 +203,13 @@
   "semanticCommits": "disabled",
   "timezone": "America/New_York",
   "customDatasources": {
+    "coderabbit-cli": {
+      "defaultRegistryUrlTemplate": "https://cli.coderabbit.ai/releases/latest/VERSION",
+      "format": "plain",
+      "transformTemplates": [
+        "{\"releases\": [releases[$trim(version) ~> /^[0-9]+\\.[0-9]+\\.[0-9]+$/].{\"version\": $trim(version)}]}",
+      ],
+    },
     "acli": {
       "defaultRegistryUrlTemplate": "https://raw.githubusercontent.com/atlassian/homebrew-acli/main/Formula/acli.rb",
       "format": "plain",

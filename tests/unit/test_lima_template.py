@@ -15,6 +15,7 @@ LIMA_DIR = "lima"
 
 EXPECTED_MOUNT_LOCATIONS = {
     "~/.agents",
+    "~/.coderabbit",
     "~/.config/acli",
     "~/.config/gcloud",
     "~/.config/gh",
@@ -142,6 +143,19 @@ def test_template_mounts_are_the_expected_same_path_set(repo_root: Path):
         mounts_by_location["~/.local/state/devbox-opencode"]["mountPoint"]
         == "{{.Home}}/.host-config/local/state/devbox-opencode"
     )
+    assert mounts_by_location["~/.coderabbit"]["mountPoint"] == (
+        "{{.Home}}/.host-config/coderabbit"
+    )
+    assert mounts_by_location["~/.coderabbit"]["writable"] is True
+
+
+@pytest.mark.unit
+def test_coderabbit_config_mount_policy_is_l1_only(repo_root: Path):
+    policy = (repo_root / "lima" / "mount-policy.md").read_text()
+
+    assert "`~/.coderabbit`" in policy
+    assert "`~/.host-config/coderabbit`" in policy
+    assert "Nested L2s receive no CodeRabbit config or host credentials." in policy
 
 
 @pytest.mark.unit
@@ -173,6 +187,11 @@ def test_third_party_package_installs_run_as_credential_isolated_builder(
     assert 'npm install --global --prefix "$HOME/.local"' in tool_script
     assert "uv tool install --force" in tool_script
     assert 'as_toolbuilder /bin/bash "$tool_script_snapshot"' in system_script
+    assert "ensure_coderabbit_cli" in tool_script
+    assert 'CODERABBIT_VERSION="$expected"' in tool_script
+    assert 'CODERABBIT_INSTALL_DIR="$HOME/.local/bin"' in tool_script
+    assert "CR_CLI_SKIP_LOGIN=1" in tool_script
+    assert "https://cli.coderabbit.ai/install.sh" in tool_script
     assert "env -i" in system_script
     assert 'setfacl --modify "u:$(id -u "$DEVBOX_USER"):--x"' in system_script
     assert 'runuser -u "$TOOL_BUILDER_USER"' in system_script
@@ -488,6 +507,7 @@ def test_user_script_links_exactly_the_mounted_paths(repo_root: Path):
     assert _shared_rels_from_loop(user_script) == EXPECTED_SHARED_RELS
     assert 'DEVBOX_SRC_ROOT="${PARAM_SrcPath:-}"' in user_script
     assert 'src) target="$DEVBOX_SRC_ROOT" ;;' in user_script
+    assert '.coderabbit) target="$HOME/.host-config/coderabbit" ;;' in user_script
     assert ".local/state/opencode)" in user_script
     assert 'target="$HOME/.host-config/local/state/devbox-opencode"' in user_script
     assert "seed-opencode-state.py" in user_script
@@ -499,6 +519,7 @@ def test_probe_checks_exactly_the_mounted_paths(repo_root: Path):
 
     assert _shared_rels_from_loop(probe) == EXPECTED_SHARED_RELS
     assert 'src) target="${PARAM_SrcPath:-}" ;;' in probe
+    assert '.coderabbit) target="$HOME/.host-config/coderabbit" ;;' in probe
     assert (
         'state_seed_options="$(findmnt -rn -M "$state_seed_mount" -o OPTIONS)"' in probe
     )
@@ -516,6 +537,20 @@ def test_probe_requires_ruby_on_the_guest_path(repo_root: Path):
 
     assert required_tools
     assert "ruby" in required_tools.group(1).replace("\\", " ").split()
+
+
+@pytest.mark.unit
+def test_probe_requires_coderabbit_cli_on_the_guest_path(repo_root: Path):
+    probe = _script(repo_root, "probe-readiness.sh")
+    required_tools = re.search(
+        r"^for tool in \\\n(.*?)^do$",
+        probe,
+        re.DOTALL | re.MULTILINE,
+    )
+
+    assert required_tools
+    assert "coderabbit" in required_tools.group(1).replace("\\", " ").split()
+    assert "cr" in required_tools.group(1).replace("\\", " ").split()
 
 
 @pytest.mark.unit

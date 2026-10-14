@@ -866,6 +866,7 @@ def devbox_vm(
         ".config/gcloud",
         ".config/acli",
         ".config/gws",
+        ".coderabbit",
     ):
         (home / relative).mkdir(parents=True, exist_ok=True)
     instance = f"my-sandbox-vm-{uuid.uuid4().hex[:10]}"

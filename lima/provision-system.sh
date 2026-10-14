@@ -866,7 +866,8 @@ mv -f /var/lib/devbox-vm/tool-assets.sha256.new \
   /var/lib/devbox-vm/tool-assets.sha256
 
 # Give only the guest UID access through the parent of every host-config
-# mount. The package builder is a distinct account and cannot traverse it.
+# mount, including CodeRabbit user/auth config. The package builder is a
+# distinct account and cannot traverse it.
 TOOL_BUILDER_USER=devbox-toolbuilder
 TOOL_BUILDER_HOME=/var/lib/devbox-toolbuilder
 if [[ -L "$TOOL_BUILDER_HOME" ]]; then

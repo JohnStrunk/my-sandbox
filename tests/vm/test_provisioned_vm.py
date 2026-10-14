@@ -31,6 +31,54 @@ def test_provisioned_vm_toolchain_matches_manifest(repo_root: Path, devbox_vm: L
 
 
 @pytest.mark.vm
+def test_coderabbit_cli_and_config_mount_are_available_in_l1(
+    repo_root: Path, devbox_vm: LimaVM
+):
+    skip_if_guest_provisioning_is_stale(repo_root, devbox_vm)
+    expected_version = json.loads(
+        (repo_root / "lima" / "tool-versions.json").read_text()
+    )["tools"]["coderabbit_cli"]["version"]
+    command = r"""
+set -euo pipefail
+guest_home="$1"
+expected_version="$2"
+installed_version="$(coderabbit --version 2>&1 \
+  | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+([+-][[:alnum:].]+)?' | head -n1)"
+[[ "$installed_version" == "$expected_version" ]]
+cr_version="$(cr --version 2>&1 \
+  | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+([+-][[:alnum:].]+)?' | head -n1)"
+[[ "$cr_version" == "$expected_version" ]]
+
+config_mount="$guest_home/.host-config/coderabbit"
+[[ -L "$guest_home/.coderabbit" ]]
+[[ "$(readlink "$guest_home/.coderabbit")" == "$config_mount" ]]
+findmnt -rn -M "$config_mount" -t 9p,virtiofs >/dev/null
+mount_options="$(findmnt -rn -M "$config_mount" -o OPTIONS)"
+case ",$mount_options," in
+  *,rw,*) ;;
+  *) echo "CodeRabbit config mount is not writable: $mount_options" >&2; exit 1 ;;
+esac
+"""
+    result = devbox_vm.run(
+        [
+            "bash",
+            "-ceu",
+            command,
+            "coderabbit-l1",
+            devbox_vm.guest_home,
+            expected_version,
+        ],
+        timeout=60,
+    )
+
+    assert result.returncode == 0, (
+        "The pinned CodeRabbit CLI or writable host config mount is unavailable "
+        "in the L1 devbox VM.\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+
+
+@pytest.mark.vm
 def test_subsequent_guest_command_has_current_group_access(
     repo_root: Path, devbox_vm: LimaVM
 ):

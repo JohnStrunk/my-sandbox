@@ -121,7 +121,8 @@ test -r /etc/ssl/certs/ca-certificates.crt \
   || fail "the system CA bundle is missing"
 
 for tool in \
-  acli agy cargo diff difft fd file ffmpeg docker gh glab gcloud gws \
+  acli agy cargo coderabbit cr diff difft fd file ffmpeg \
+  docker gh glab gcloud gws \
   hadolint helm hyperfine jq just kind kubectl limactl make minikube \
   markdownlint-cli2 newgidmap newuidmap \
   node npm npx opencode patch pipenv pip3 \
@@ -314,6 +315,7 @@ verify_guest_only_parent "$HOME/.host-config" "host-config"
 src_parent="$(dirname "${PARAM_SrcPath:-/nonexistent}")"
 verify_guest_only_parent "$src_parent" "SrcPath"
 for rel in \
+  .coderabbit \
   .config/acli \
   .config/gcloud \
   .config/gh \
@@ -327,6 +329,7 @@ do
   target=""
   case "$rel" in
     src) target="${PARAM_SrcPath:-}" ;;
+    .coderabbit) target="$HOME/.host-config/coderabbit" ;;
     .config/*) target="$HOME/.host-config/config/${rel#.config/}" ;;
     .local/share/opencode)
       target="$HOME/.host-config/local/share/opencode"

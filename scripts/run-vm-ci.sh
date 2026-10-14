@@ -128,6 +128,7 @@ mkdir -p \
   "$host_home/.config/gcloud" \
   "$host_home/.config/acli" \
   "$host_home/.config/gws" \
+  "$host_home/.coderabbit" \
   "$host_home/.local/share/opencode" \
   "$host_home/.local/state/opencode" \
   "$host_home/.local/state/devbox-opencode"

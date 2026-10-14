@@ -442,6 +442,15 @@
         "lima": true
       }
     },
+    "coderabbit_cli": {
+      "version": "0.9.0",
+      "datasource": "custom.coderabbit-cli",
+      "depName": "coderabbit-cli",
+      "integrity": "version-only",
+      "consumers": {
+        "lima": true
+      }
+    },
     "pre_commit": {
       "version": "4.6.2",
       "datasource": "pypi",

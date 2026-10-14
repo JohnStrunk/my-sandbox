@@ -55,9 +55,16 @@ async function testAcliFormula() {
   }
 }
 
+async function testCodeRabbitVersion() {
+  const versionData = { releases: [{ version: "\n0.9.0\n" }] };
+  const result = await transform("coderabbit-cli", versionData);
+  assert.deepEqual(plainJson(result.releases), [{ version: "0.9.0" }]);
+}
+
 async function main() {
   await testAcliFormula();
-  console.log("Renovate acli JSONata datasource transforms match their fixture.");
+  await testCodeRabbitVersion();
+  console.log("Renovate acli and CodeRabbit JSONata transforms match their fixtures.");
 }
 
 main().catch((error) => {

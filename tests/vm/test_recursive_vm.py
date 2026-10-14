@@ -80,6 +80,13 @@ limactl shell "$name" -- bash -ceu '
   test -r /workspace/repo/lima/devbox.yaml
   bash -n /workspace/repo/devbox
   python3 /workspace/repo/scripts/validate_tool_versions.py
+  for target in "$HOME/.coderabbit" "$HOME/.host-config/coderabbit"; do
+    if findmnt -rn -M "$target" -t 9p,virtiofs >/dev/null 2>&1; then
+      echo "L2 unexpectedly mounts host CodeRabbit config at $target" >&2
+      exit 1
+    fi
+  done
+  [[ ! -L "$HOME/.coderabbit" ]]
   uname -s
   grep -Eq "(^| )(vmx|svm)( |$)" /proc/cpuinfo
 '

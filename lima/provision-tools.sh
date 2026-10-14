@@ -62,7 +62,7 @@ manifest_integrity_policy() {
 report_version_only() {
   local artifact="$1"
   if [[ -z "${VERSION_ONLY_DIAGNOSTICS[$artifact]:-}" ]]; then
-    echo "devbox: $artifact uses version-only integrity; SHA-256 verification is skipped" >&2
+    echo "devbox: $artifact uses version-only integrity; manifest-level SHA-256 verification is skipped" >&2
     VERSION_ONLY_DIAGNOSTICS["$artifact"]=1
   fi
 }
@@ -167,11 +167,33 @@ ensure_uv_tool() {
   fi
 }
 
+ensure_coderabbit_cli() {
+  local expected installed=""
+  expected="$(manifest_version coderabbit_cli)"
+  if [[ -x "$HOME/.local/bin/coderabbit" ]]; then
+    installed="$("$HOME/.local/bin/coderabbit" --version 2>&1 \
+      | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+([+-][[:alnum:].]+)?' \
+      | head -n1 || true)"
+  fi
+  if [[ "$installed" != "$expected" ]]; then
+    # The official Linux installer verifies CodeRabbit's signed release
+    # manifest. Pin the exact version and keep installer state in the isolated
+    # builder home; never expose the guest's ~/.coderabbit mount here.
+    curl --retry 3 --retry-connrefused -fsSL \
+      https://cli.coderabbit.ai/install.sh \
+      | env CODERABBIT_VERSION="$expected" \
+        CODERABBIT_INSTALL_DIR="$HOME/.local/bin" \
+        CR_CLI_SKIP_LOGIN=1 \
+        sh
+  fi
+}
+
 ensure_npm_package opencode @opencode/cli
 ensure_npm_package markdownlint_cli2 markdownlint-cli2
 ensure_npm_package playwright_cli @playwright/cli
 ensure_npm_package repomix repomix
 ensure_npm_package google_workspace_cli @googleworkspace/cli
+ensure_coderabbit_cli
 
 ensure_uv_tool pre_commit "pre-commit==$(manifest_version pre_commit)" pre-commit
 ensure_uv_tool pipenv "pipenv==$(manifest_version pipenv)" pipenv
