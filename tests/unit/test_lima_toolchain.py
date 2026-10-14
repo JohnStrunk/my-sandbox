@@ -1,4 +1,5 @@
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -16,19 +17,36 @@ def _write_manifest(path: Path, manifest: dict) -> Path:
     return path
 
 
-def _version_output(name: str, version: str) -> str:
+@pytest.fixture(autouse=True)
+def _gocyclo_is_on_path(monkeypatch: pytest.MonkeyPatch):
+    real_which = shutil.which
+    monkeypatch.setattr(
+        "lima.check_toolchain.shutil.which",
+        lambda name: (
+            "/var/lib/devbox-toolbuilder/.local/bin/gocyclo"
+            if name == "gocyclo"
+            else real_which(name)
+        ),
+    )
+
+
+def _version_output(name: str, version: str, go_version: str) -> str:
     if name == "kubectl":
         return json.dumps({"clientVersion": {"gitVersion": f"v{version}"}})
     if name == "krew":
         return f"OPTION            VALUE\nGitTag            v{version}\n"
     if name == "go":
         return f"go version go{version} linux/amd64"
+    if name == "gocyclo":
+        return f"gocyclo:\n\tmod\tgithub.com/fzipp/gocyclo\tv{version}\th1:sum"
+    if name == "golangci_lint":
+        return f"golangci-lint has version {version} built with go{go_version}"
     if name == "rust":
         return f"rustc {version} (commit 48a229cea 2026-09-01)"
     if name == "ruby":
         return f"ruby {version} (2026-01-01) [x86_64-linux]"
     if name == "kind":
-        return f"kind v{version} go1.27.1 linux/amd64"
+        return f"kind v{version} go{go_version} linux/amd64"
     if name == "minikube":
         return f"minikube version: v{version}\ncommit: abcdef0123456789"
     if name == "node":
@@ -56,14 +74,19 @@ def _successful_runner(manifest: dict, overrides: dict[str, str] | None = None):
         if isinstance(spec.get("consumers"), dict)
         and spec["consumers"].get("lima") is True
     }
+    go_version = versions["go"]
     overrides = overrides or {}
 
     def run(command):
         command = tuple(command)
         executable = command[0]
         name = command_names.get(command)
+        if name is None and command[:3] == _VERSION_COMMANDS["gocyclo"][0]:
+            name = "gocyclo"
         if name:
-            output = _version_output(name, overrides.get(name, versions[name]))
+            output = _version_output(
+                name, overrides.get(name, versions[name]), go_version
+            )
         else:
             output = f"{executable} version 1.0.0"
         return subprocess.CompletedProcess(command, 0, stdout=output, stderr="")
@@ -167,12 +190,14 @@ def test_lima_toolchain_check_reports_a_pinned_version_mismatch(
 ):
     manifest = _manifest(repo_root)
     manifest_path = _write_manifest(tmp_path / "manifest.json", manifest)
+    expected_version = manifest["tools"]["kind"]["version"]
     runner = _successful_runner(manifest, {"kind": "0.0.1"})
 
     _, errors = check_toolchain(manifest_path, runner)
 
     assert any(
-        "kind: installed version 0.0.1, expected 0.33.0" in error for error in errors
+        f"kind: installed version 0.0.1, expected {expected_version}" in error
+        for error in errors
     )
 
 
@@ -184,6 +209,8 @@ def test_lima_toolchain_check_reports_a_pinned_version_mismatch(
         "containerd_io",
         "docker_buildx_plugin",
         "coderabbit_cli",
+        "golangci_lint",
+        "gocyclo",
     ],
 )
 @pytest.mark.unit
@@ -201,6 +228,67 @@ def test_lima_toolchain_check_reports_manifest_version_mismatch(
         f"{tool_name}: installed version 0.0.0, expected {expected_version}" in error
         for error in errors
     )
+
+
+@pytest.mark.unit
+def test_lima_toolchain_check_reads_gocyclo_module_build_info(
+    repo_root: Path, tmp_path: Path
+):
+    manifest = _manifest(repo_root)
+    manifest_path = _write_manifest(tmp_path / "manifest.json", manifest)
+    successful = _successful_runner(manifest)
+    commands = []
+
+    def runner(command):
+        commands.append(tuple(command))
+        return successful(command)
+
+    successes, errors = check_toolchain(manifest_path, runner)
+
+    assert errors == []
+    assert (
+        "go",
+        "version",
+        "-m",
+        "/var/lib/devbox-toolbuilder/.local/bin/gocyclo",
+    ) in commands
+    assert ("golangci-lint", "--version") in commands
+    assert f"gocyclo: {manifest['tools']['gocyclo']['version']}" in successes
+
+
+@pytest.mark.parametrize("suffix", ["-rc.1", "+build.5"])
+@pytest.mark.unit
+def test_lima_toolchain_check_parses_gocyclo_version_suffix(
+    repo_root: Path, tmp_path: Path, suffix: str
+):
+    manifest = _manifest(repo_root)
+    expected_version = (
+        manifest["tools"]["gocyclo"]["version"]
+        .removeprefix("v")
+        .split("-", 1)[0]
+        .split("+", 1)[0]
+        + suffix
+    )
+    manifest["tools"]["gocyclo"]["version"] = expected_version
+    manifest_path = _write_manifest(tmp_path / "manifest.json", manifest)
+
+    successes, errors = check_toolchain(manifest_path, _successful_runner(manifest))
+
+    assert errors == []
+    assert f"gocyclo: {expected_version}" in successes
+
+
+@pytest.mark.unit
+def test_lima_toolchain_check_reports_missing_gocyclo(
+    repo_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    manifest = _manifest(repo_root)
+    manifest_path = _write_manifest(tmp_path / "manifest.json", manifest)
+    monkeypatch.setattr("lima.check_toolchain.shutil.which", lambda _name: None)
+
+    _, errors = check_toolchain(manifest_path, _successful_runner(manifest))
+
+    assert "gocyclo: executable is not available on PATH" in errors
 
 
 @pytest.mark.unit

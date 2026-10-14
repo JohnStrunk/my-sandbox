@@ -9,6 +9,7 @@ from scripts.verify_provenance import _render_url, verify_provenance
 
 _CHECKSUM_GROUPS = {
     "hadolint/hadolint": "hadolint release artifacts",
+    "golangci/golangci-lint": "golangci-lint release artifacts",
     "astral-sh/uv": "uv release artifacts",
     "google-antigravity/antigravity-cli": "antigravity cli release artifacts",
     "lima-vm/lima": "limactl release artifacts",
@@ -190,13 +191,13 @@ def test_artifact_regex_matches_manifest_and_noop_replacement_is_stable(
     manifest_text = (repo_root / "lima" / "tool-versions.json").read_text()
     matches = list(pattern.finditer(manifest_text))
 
-    assert len(matches) == 18
+    assert len(matches) == 20
     assert {match.group("packageName") for match in matches} == set(_CHECKSUM_GROUPS)
     assert {
         datasource: sum(match.group("datasource") == datasource for match in matches)
         for datasource in {match.group("datasource") for match in matches}
     } == {
-        "github-release-attachments": 16,
+        "github-release-attachments": 18,
         "custom.acli-amd64": 1,
         "custom.acli-arm64": 1,
     }

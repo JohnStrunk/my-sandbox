@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import shlex
 from pathlib import Path
 
@@ -24,10 +25,32 @@ def test_provisioned_vm_toolchain_matches_manifest(repo_root: Path, devbox_vm: L
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
     assert "ERROR:" not in result.stdout
-    expected_ruby_version = json.loads(
-        (repo_root / "lima" / "tool-versions.json").read_text()
-    )["tools"]["ruby"]["version"]
-    assert f"OK: ruby: {expected_ruby_version}" in result.stdout.splitlines()
+    manifest = json.loads((repo_root / "lima" / "tool-versions.json").read_text())
+    output_lines = result.stdout.splitlines()
+    for tool in ("ruby", "gocyclo", "golangci_lint"):
+        expected_version = manifest["tools"][tool]["version"]
+        assert f"OK: {tool}: {expected_version}" in output_lines
+
+    linter_version = devbox_vm.run(["golangci-lint", "--version"], timeout=60)
+    assert linter_version.returncode == 0, (
+        "Could not read golangci-lint's embedded Go compiler version.\n"
+        f"stdout: {linter_version.stdout}\nstderr: {linter_version.stderr}"
+    )
+    linter_output = f"{linter_version.stdout}\n{linter_version.stderr}"
+    embedded_go = re.search(r"\bbuilt with go(\d+)\.(\d+)(?:\.\d+)?\b", linter_output)
+    assert embedded_go, (
+        f"Could not parse embedded Go compiler version:\n{linter_output}"
+    )
+    manifest_go = tuple(
+        int(part)
+        for part in manifest["tools"]["go"]["version"].removeprefix("v").split(".")[:2]
+    )
+    embedded_go_major_minor = tuple(int(part) for part in embedded_go.groups())
+    # Keep the lint binary compatible with the VM Go language level.
+    assert embedded_go_major_minor >= manifest_go, (
+        f"golangci-lint embeds Go {'.'.join(map(str, embedded_go_major_minor))}, "
+        f"older than manifest Go {'.'.join(map(str, manifest_go))}"
+    )
 
 
 @pytest.mark.vm
@@ -371,7 +394,8 @@ def test_fresh_vm_fingerprint_matches_the_current_checkout(
 @pytest.mark.vm
 def test_project_utility_commands_are_discoverable(devbox_vm: LimaVM):
     command = (
-        "for tool in devbox-go diff file minikube patch podman virsh "
+        "for tool in devbox-go diff file gocyclo golangci-lint "
+        "minikube patch podman virsh "
         'virt-host-validate; do command -v "$tool"; done'
     )
     result = devbox_vm.run(["bash", "-ceu", command], timeout=60)
@@ -508,6 +532,25 @@ def test_docker_buildx_agent_guidance_is_staged(devbox_vm: LimaVM):
 
     assert result.returncode == 0, (
         "The staged devbox-tools skill does not expose safe Docker Buildx usage.\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+
+
+@pytest.mark.vm
+def test_go_linter_guidance_is_staged(devbox_vm: LimaVM):
+    if devbox_vm.name is None and os.environ.get("MY_SANDBOX_VM_TEST_FRESH") != "1":
+        source = Path(devbox_vm.repo_path) / "lima/agent-skills/devbox-tools/SKILL.md"
+        active = Path(devbox_vm.guest_home) / ".agents/skills/devbox-tools/SKILL.md"
+        if not active.is_file() or active.read_bytes() != source.read_bytes():
+            pytest.skip("the existing guest has stale staged skills")
+
+    skill_path = f"{devbox_vm.guest_home}/.agents/skills/devbox-tools/SKILL.md"
+    result = devbox_vm.run(
+        ["grep", "-F", "-q", "### Go source linters", skill_path], timeout=60
+    )
+
+    assert result.returncode == 0, (
+        "The staged devbox-tools skill does not expose Go linter guidance.\n"
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
 

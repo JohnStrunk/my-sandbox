@@ -116,6 +116,10 @@ stop/start without recreating the VM.
 Ruby support adds Ruby to embedded system provisioning and readiness checks.
 Existing VMs must use `devbox --recreate`; an old embedded installer can fail
 against the live manifest.
+The Go linter pins and installer are read from the live checkout and apply on
+VM restart. For Go source linters, existing VMs must use `devbox --recreate` to
+embed the updated readiness command checks; a normal restart leaves the old
+probe in place. Recreation loses VM-local state.
 
 ## Using the VM
 
@@ -884,8 +888,8 @@ integration work.
   Docker uses `/var/run/docker.sock` by default. Podman/netavark remains
   independently available with its own rootless API socket, store, and bridge
   configuration; neither runtime aliases or falls back to the other.
-- **Manifest-pinned tools**: OpenCode, CodeRabbit CLI, Go + `devbox-go`, uv,
-  Rust, Ruby,
+- **Manifest-pinned tools**: OpenCode, CodeRabbit CLI, Go + `devbox-go`,
+  `golangci-lint`, `gocyclo`, uv, Rust, Ruby,
   Node/npm, Playwright CLI + bundled Chromium, ast-grep + its skills, Semble +
   prefetched model, Repomix, Hadolint, markdownlint-cli2, pre-commit, acli,
   Google Workspace CLI, Antigravity CLI, kind, Minikube v1.39.0, kubectl,
@@ -925,10 +929,13 @@ automatic updates for Ruby are disabled; update the pin manually after Fedora
 publishes a matching RPM. The toolchain checker verifies the pinned runtime
 version, and DNF verifies the RPM's Fedora package signature. Checksum-managed
 releases are
-**Hadolint**, **uv**, **Antigravity CLI**, **limactl**, **kind**, **Minikube**,
-**Krew**, the **ast-grep release binaries**, and **acli**. Each has separate
-amd64 and arm64 records; their exact upstream versions and SHA-256 values are
-verified before installation. The top-level
+**Hadolint**, **golangci-lint**, **uv**, **Antigravity CLI**, **limactl**,
+**kind**, **Minikube**, **Krew**, the **ast-grep release binaries**,
+and **acli**.
+Each has separate amd64 and arm64 records; their exact upstream versions and
+SHA-256 values are verified before installation. `gocyclo` is built from its
+pinned Go module tag with `go install`; Go's module checksum database verifies
+the downloaded module. The top-level
 `version` remains the provisioning alias, and the validator requires both
 artifact versions to normalize to it. The ast-grep agent-skill archive is also
 verified against its pinned commit's SHA-256.

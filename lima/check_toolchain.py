@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shutil
 import subprocess
 import sys
 from collections.abc import Callable, Sequence
@@ -18,6 +19,18 @@ Runner = Callable[[Sequence[str]], subprocess.CompletedProcess[str]]
 _VERSION_COMMANDS: dict[str, tuple[Command, re.Pattern[str]]] = {
     "hadolint": (("hadolint", "--version"), re.compile(r"\bv?(\d+\.\d+\.\d+)\b")),
     "go": (("go", "version"), re.compile(r"\bgo(\d+\.\d+\.\d+)\b")),
+    "gocyclo": (
+        ("go", "version", "-m"),
+        # Keep this accepted version grammar in sync with lima/provision-tools.sh.
+        re.compile(
+            r"(?m)^[ \t]*mod[ \t]+github\.com/fzipp/gocyclo[ \t]+"
+            r"v?(\d+\.\d+\.\d+(?:[+-][A-Za-z0-9.]+)?)(?=[ \t]|$)"
+        ),
+    ),
+    "golangci_lint": (
+        ("golangci-lint", "--version"),
+        re.compile(r"\bgolangci-lint has version v?(\d+\.\d+\.\d+)\b"),
+    ),
     "node": (("node", "--version"), re.compile(r"\bv?(\d+\.\d+\.\d+)\b")),
     "ruby": (("ruby", "--version"), re.compile(r"\bruby\s+(\d+\.\d+\.\d+)\b")),
     "rust": (("rustc", "--version"), re.compile(r"\brustc\s+v?(\d+\.\d+\.\d+)\b")),
@@ -110,6 +123,14 @@ def _actual_version(name: str, output: str) -> str | None:
     return match.group(1) if match else None
 
 
+def _version_command(name: str) -> Command | None:
+    command = _VERSION_COMMANDS[name][0]
+    if name != "gocyclo":
+        return command
+    executable = shutil.which(name)
+    return (*command, executable) if executable else None
+
+
 def check_toolchain(
     manifest_path: Path,
     runner: Runner = _default_runner,
@@ -144,7 +165,10 @@ def check_toolchain(
         if not isinstance(expected, str) or command_spec is None:
             errors.append(f"no version check is defined for Lima tool '{name}'")
             continue
-        command = command_spec[0]
+        command = _version_command(name)
+        if command is None:
+            errors.append(f"{name}: executable is not available on PATH")
+            continue
         try:
             result = runner(command)
         except (OSError, subprocess.TimeoutExpired) as exc:

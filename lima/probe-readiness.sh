@@ -122,7 +122,7 @@ test -r /etc/ssl/certs/ca-certificates.crt \
 
 for tool in \
   acli agy cargo coderabbit cr diff difft fd file ffmpeg \
-  docker gh glab gcloud gws \
+  docker gh glab gcloud gocyclo golangci-lint gws \
   hadolint helm hyperfine jq just kind kubectl limactl make minikube \
   markdownlint-cli2 newgidmap newuidmap \
   node npm npx opencode patch pipenv pip3 \
