@@ -141,6 +141,7 @@ def test_checksum_managed_tool_set_is_an_explicit_v1_policy(repo_root: Path):
     assert checksum_managed == _CHECKSUM_MANAGED_TOOLS
     assert manifest["tools"]["ast_grep"]["agent_skill"]["integrity"] == "sha256"
     for tool in (
+        "coderabbit_cli",
         "node",
         "go",
         "rustup",
@@ -302,6 +303,18 @@ def test_opencode_manifest_pins_the_v2_npm_cli(repo_root: Path):
     assert opencode["depName"] == "@opencode/cli"
 
 
+@pytest.mark.unit
+def test_coderabbit_manifest_pins_the_official_cli_version_feed(repo_root: Path):
+    manifest = json.loads((repo_root / "lima" / "tool-versions.json").read_text())
+    coderabbit = manifest["tools"]["coderabbit_cli"]
+
+    assert re.fullmatch(r"\d+\.\d+\.\d+", coderabbit["version"])
+    assert coderabbit["datasource"] == "custom.coderabbit-cli"
+    assert coderabbit["depName"] == "coderabbit-cli"
+    assert coderabbit["integrity"] == "version-only"
+    assert coderabbit["consumers"]["lima"] is True
+
+
 def _edit_manifest(copy_root: Path, mutate) -> None:
     manifest_path = copy_root / "lima" / "tool-versions.json"
     data = json.loads(manifest_path.read_text())
@@ -413,6 +426,7 @@ def test_manifest_declares_lima_consumers(repo_root: Path):
         "acli",
         "antigravity_cli",
         "ast_grep",
+        "coderabbit_cli",
         "go",
         "google_workspace_cli",
         "hadolint",

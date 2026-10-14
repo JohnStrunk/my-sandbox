@@ -71,8 +71,8 @@ mount. Repository-specific agent instructions are in [`AGENTS.md`](AGENTS.md).
 ## VM toolchain and agent integrations
 
 The full toolchain is provisioned from
-[`lima/tool-versions.json`](lima/tool-versions.json) and includes OpenCode, Go,
-Rust, Ruby, Node.js, Python/uv, Playwright, ast-grep,
+[`lima/tool-versions.json`](lima/tool-versions.json) and includes OpenCode,
+CodeRabbit CLI, Go, Rust, Ruby, Node.js, Python/uv, Playwright, ast-grep,
 Semble, Repomix, cloud and productivity CLIs, linters, and release inspection
 utilities. The VM also includes GNU make, kind, Minikube v1.39.0, kubectl,
 Krew v0.5.0 in the guest-user `~/.krew` plugin store, Helm, and Pipenv. Use
@@ -90,6 +90,7 @@ into the runtime overlay.
 | Integration | Enablement |
 | --- | --- |
 | GitHub | Authenticated `gh` CLI; it is the canonical GitHub interface. |
+| CodeRabbit CLI | `coderabbit`/`cr` local reviews; host `~/.coderabbit` config is available only in the trusted L1. |
 | Semble | Local CLI/MCP and a VM-local model/index cache. |
 | Context7 | `CONTEXT7_API_KEY`. |
 | Tavily search | `TAVILY_API_KEY`, through OpenCode's built-in web search. |

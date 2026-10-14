@@ -77,7 +77,7 @@ toolchain and operator profile in that same environment.
    # Knowledge base at ~/kb (see the knowledge-base skill for bootstrap)
    ```
 
-   The host `~/.config/{gh,gcloud,acli,gws,opencode}`,
+   The host `~/.config/{gh,gcloud,acli,gws,opencode}`, `~/.coderabbit`,
    `~/.local/share/opencode`, and `~/.agents` are shared as-is if
    present.
 
@@ -699,6 +699,7 @@ checkout-relative `knowledge-base/` symlink.
 | `~/.config/gcloud` | 9p, RW (virtiofs after host validation) | gcloud ADC/config, protected from package builder |
 | `~/.config/acli` | 9p, RW (virtiofs after host validation) | Atlassian CLI config, protected from package builder |
 | `~/.config/gws` | 9p, RW (virtiofs after host validation) | Google Workspace CLI config, protected from package builder |
+| Host `~/.coderabbit` → guest `~/.coderabbit` | 9p, RW | Mounted at `~/.host-config/coderabbit`; CodeRabbit user config/auth is protected from the package builder and is not mounted in nested L2s |
 | `/var/lib/devbox-toolbuilder` | VM-local | npm/uv/Rust installs, Playwright browser, Semble model; guest can use installed binaries but cannot modify packages |
 | `~/.cache/{go,uv,semble/index}` | VM-local | Guest-writable Go, uv, and Semble index caches |
 | `/usr/local/node` | VM-local | Manifest-pinned Node.js and npm runtime |
@@ -883,7 +884,8 @@ integration work.
   Docker uses `/var/run/docker.sock` by default. Podman/netavark remains
   independently available with its own rootless API socket, store, and bridge
   configuration; neither runtime aliases or falls back to the other.
-- **Manifest-pinned tools**: OpenCode, Go + `devbox-go`, uv, Rust, Ruby,
+- **Manifest-pinned tools**: OpenCode, CodeRabbit CLI, Go + `devbox-go`, uv,
+  Rust, Ruby,
   Node/npm, Playwright CLI + bundled Chromium, ast-grep + its skills, Semble +
   prefetched model, Repomix, Hadolint, markdownlint-cli2, pre-commit, acli,
   Google Workspace CLI, Antigravity CLI, kind, Minikube v1.39.0, kubectl,
@@ -930,6 +932,12 @@ verified before installation. The top-level
 `version` remains the provisioning alias, and the validator requires both
 artifact versions to normalize to it. The ast-grep agent-skill archive is also
 verified against its pinned commit's SHA-256.
+
+The CodeRabbit CLI is installed into the isolated toolbuilder home with the
+exact `coderabbit_cli` manifest version. Its official Linux installer verifies
+the vendor-signed release checksum manifest before extracting the binary. The
+host's `~/.coderabbit` configuration is mounted separately for the trusted L1
+and remains inaccessible to the installer and nested L2s.
 
 The v1 direct-download exceptions are **Node**, **Go**, **rustup**, **Helm**,
 and **kubectl**. They retain exact HTTPS version or commit pins but are

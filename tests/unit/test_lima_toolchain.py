@@ -43,6 +43,8 @@ def _version_output(name: str, version: str) -> str:
         return f"pre-commit {version}"
     if name in {"markdownlint_cli2", "opencode"}:
         return f"{name} v{version}"
+    if name == "coderabbit_cli":
+        return f"CodeRabbit CLI v{version}"
     return f"{name} {version}"
 
 
@@ -87,6 +89,21 @@ def test_lima_toolchain_check_verifies_each_manifest_consumer(
     assert {line.split(":", 1)[0] for line in successes} >= declared
     assert any(line.startswith("make:") for line in successes)
     assert any(line.startswith("pip:") for line in successes)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("expected_version", ["0.10.0-rc.2", "0.10.0+build.5"])
+def test_lima_toolchain_check_parses_coderabbit_prerelease_version(
+    repo_root: Path, tmp_path: Path, expected_version: str
+):
+    manifest = _manifest(repo_root)
+    manifest["tools"]["coderabbit_cli"]["version"] = expected_version
+    manifest_path = _write_manifest(tmp_path / "manifest.json", manifest)
+
+    successes, errors = check_toolchain(manifest_path, _successful_runner(manifest))
+
+    assert errors == []
+    assert f"coderabbit_cli: {expected_version}" in successes
 
 
 @pytest.mark.unit
@@ -161,7 +178,13 @@ def test_lima_toolchain_check_reports_a_pinned_version_mismatch(
 
 @pytest.mark.parametrize(
     "tool_name",
-    ["minikube", "docker_ce", "containerd_io", "docker_buildx_plugin"],
+    [
+        "minikube",
+        "docker_ce",
+        "containerd_io",
+        "docker_buildx_plugin",
+        "coderabbit_cli",
+    ],
 )
 @pytest.mark.unit
 def test_lima_toolchain_check_reports_manifest_version_mismatch(

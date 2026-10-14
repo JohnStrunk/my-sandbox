@@ -117,6 +117,7 @@ link_shared() {
   target=""
   case "$rel" in
     src) target="$DEVBOX_SRC_ROOT" ;;
+    .coderabbit) target="$HOME/.host-config/coderabbit" ;;
     .config/*) target="$HOME/.host-config/config/${rel#.config/}" ;;
     .local/share/opencode) target="$HOME/.host-config/local/share/opencode" ;;
     .local/state/opencode)
@@ -146,6 +147,7 @@ link_shared() {
 }
 
 for rel in \
+  .coderabbit \
   .config/acli \
   .config/gcloud \
   .config/gh \
@@ -239,7 +241,8 @@ fi
 # Third-party packages, Rust, browser/model prefetch, and automatic version
 # checks ran as devbox-toolbuilder with an empty environment and no host mounts.
 for executable in \
-  opencode markdownlint-cli2 playwright-cli repomix gws pre-commit pipenv \
+  opencode coderabbit cr markdownlint-cli2 playwright-cli repomix \
+  gws pre-commit pipenv \
   semble-bin rustup rustc cargo
 do
   [[ -x "$TOOL_BUILDER_HOME/.local/bin/$executable" \

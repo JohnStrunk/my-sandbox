@@ -574,7 +574,44 @@ def test_acli_uses_scoped_timestamp_exception(repo_root: Path):
     assert '"matchPackageNames"' in acli_rule
     assert '"acli"' in acli_rule
     assert '"minimumReleaseAgeBehaviour": "timestamp-optional"' in acli_rule
-    assert "timestamp-optional" not in config.replace(acli_rule, "")
+    coderabbit_rule = _config_object(
+        config,
+        '"description": "Allow CodeRabbit\'s official version feed, which has no '
+        'release timestamp"',
+    )
+    assert "timestamp-optional" not in config.replace(acli_rule, "").replace(
+        coderabbit_rule, ""
+    )
     group_rule = _config_object(config, '"groupName": "acli release artifacts"')
     assert '"acli"' in group_rule
     assert '"versioning": "loose"' in group_rule
+
+
+@pytest.mark.unit
+def test_coderabbit_cli_uses_its_official_version_feed(repo_root: Path):
+    manifest = json.loads((repo_root / "lima" / "tool-versions.json").read_text())
+    coderabbit = manifest["tools"]["coderabbit_cli"]
+
+    assert coderabbit["datasource"] == "custom.coderabbit-cli"
+    assert coderabbit["depName"] == "coderabbit-cli"
+    assert coderabbit["integrity"] == "version-only"
+    assert re.fullmatch(r"\d+\.\d+\.\d+", coderabbit["version"])
+
+    config = (repo_root / ".github" / "renovate.json5").read_text()
+    custom_datasources = _object_value(config, "customDatasources")
+    source = _object_value(custom_datasources, "coderabbit-cli")
+    assert "https://cli.coderabbit.ai/releases/latest/VERSION" in source
+    assert '"format": "plain"' in source
+    transform = _double_quoted_array_value(source, "transformTemplates")
+    assert "$trim(version)" in transform
+    assert "releases" in transform
+
+    version_group = _config_object(config, '"groupName": "devbox tool versions"')
+    assert '"coderabbit-cli"' in version_group
+    timestamp_rule = _config_object(
+        config,
+        '"description": "Allow CodeRabbit\'s official version feed, which has no '
+        'release timestamp"',
+    )
+    assert '"coderabbit-cli"' in timestamp_rule
+    assert '"minimumReleaseAgeBehaviour": "timestamp-optional"' in timestamp_rule

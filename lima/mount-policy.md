@@ -4,8 +4,8 @@ This is the decision matrix for the default L1 devbox and nested L2 test/dev
 VMs. The L1 is a trusted, single-user workspace. Third-party package builds
 run as a separate account and cannot traverse its protected host mounts. L2s
 are disposable test environments: they receive only the inputs needed by a
-test, never the L1's credentials, OpenCode data, or state. **Neither policy
-mounts all of `$HOME`.**
+test, never the L1's credentials, CodeRabbit configuration, OpenCode data, or
+state. **Neither policy mounts all of `$HOME`.**
 
 ## Mount decision matrix
 
@@ -22,6 +22,7 @@ mounts all of `$HOME`.**
 | `~/.config/gcloud` | `~/.host-config/config/gcloud`, RW | Keep. Required by the installed Google Cloud tooling; includes ADC config. | Not mounted. |
 | `~/.config/acli` | `~/.host-config/config/acli`, RW | Keep. Required by the installed Atlassian CLI. | Not mounted. |
 | `~/.config/gws` | `~/.host-config/config/gws`, RW | Keep. Required by the installed Google Workspace CLI. | Not mounted. |
+| `~/.coderabbit` | `~/.host-config/coderabbit`, RW; linked at `~/.coderabbit` | Keep. Supplies the CodeRabbit CLI's user configuration and authentication to the trusted L1. The root-owned `.host-config` parent prevents access by the isolated package builder. | Not mounted. Nested L2s receive no CodeRabbit config or host credentials. |
 
 The paths below remain L1-local and are not host mounts: the toolbuilder and
 its package caches, `~/.cache/{go,uv,semble}`, `~/.cargo`,
@@ -65,6 +66,10 @@ when intentionally clearing the L1's persisted OpenCode preferences/history.
 - Template tests compare the configured mount set with provisioning links and
   readiness checks; the inline Lima readiness probe is kept byte-for-byte in
   sync with `probe-readiness.sh`.
+- The provisioned-VM check verifies that `coderabbit` matches its manifest pin
+  and that the writable host config is mounted only at the L1's protected
+  `.host-config/coderabbit` target. The recursive L2 test confirms that target
+  is not mounted in a nested VM.
 - The provisioned-VM test reads a KB sentinel through the canonical guest
   `~/kb` path, in addition to checking the live mount and absolute worktree
   alias. A missing or unreadable KB mount is a readiness failure.
