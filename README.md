@@ -95,8 +95,8 @@ into the runtime overlay.
 | Context7 | `CONTEXT7_API_KEY`. |
 | Tavily search | `TAVILY_API_KEY`, through OpenCode's built-in web search. |
 | The Source | `IGLOO_MCP_*` credentials; VM trusts the internal CA roots. |
-| EnMaaS | A complete `ENMAAS_URL`/`ENMAAS_API_KEY` pair is forwarded; full URL validation runs on the `devbox opencode` launch path. Provider and model settings are user-managed in OpenCode config. |
-| PriceTag utilities | `PRICETAG_HOSTED_URL` or `PRICETAG_OPENAI_URL` plus `PRICETAG_API_KEY`; used by `list-models.sh` and the opt-in gateway inference test. |
+| EnMaaS | A complete `ENMAAS_URL`/`ENMAAS_API_KEY` pair is forwarded; full URL validation runs on the `devbox opencode` launch path. Provider and model settings are user-managed in OpenCode config. The pair is also used by the opt-in OpenAI-compatible inference test. |
+| EnMaaS model listing | `list-models.sh` requires `ENMAAS_URL` and `ENMAAS_API_KEY`. It requests `/models` using both the Anthropic-compatible (`x-api-key` and `anthropic-version`) and OpenAI-compatible (`Authorization: Bearer`) formats, since the available model sets can differ. |
 
 Devbox forwards EnMaaS only as a non-empty pair. The host rejects non-HTTPS
 schemes, and the guest validates the full URL on the `devbox opencode` launch
