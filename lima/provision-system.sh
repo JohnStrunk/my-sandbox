@@ -549,6 +549,7 @@ packages=(
   qemu-img
   qemu-kvm
   ripgrep
+  rubypick
   shadow-utils
   shadow-utils-subid
   ShellCheck
@@ -567,12 +568,13 @@ if ((${#missing[@]})); then
   rm -rf /var/cache/dnf
 fi
 
-# Fedora's ruby RPM exposes /usr/bin/ruby on the guest's normal PATH. Keep its
-# runtime version in sync with the tool manifest.
+# Fedora's rubypick RPM provides the generic /usr/bin/ruby command and can pull
+# a newer Ruby as a dependency, so allow downgrading to the manifest pin below.
 RUBY_VERSION="$(manifest_version ruby)"
 ruby_output="$(/usr/bin/ruby --version 2>/dev/null)" || ruby_output=""
 if [[ "$ruby_output" != "ruby ${RUBY_VERSION} "* ]]; then
-  dnf install -y --setopt=install_weak_deps=False "ruby-${RUBY_VERSION}"
+  dnf install -y --allow-downgrade --setopt=install_weak_deps=False \
+    "ruby-${RUBY_VERSION}"
   dnf clean all
   rm -rf /var/cache/dnf
   ruby_output="$(/usr/bin/ruby --version 2>/dev/null)" || ruby_output=""

@@ -60,6 +60,55 @@
   and gives tests a private `HOME`, but same-UID processes can still read
   host-mounted files under `~/.host-config`; run only trusted source this way.
   CI uses a fresh guest with empty config and credential mounts.
+- Any change affecting the VM must be validated by fully provisioning a fresh
+  L2 from the active checkout, waiting for provisioning and readiness to
+  complete, then confirming it responds with `limactl shell "$name" -- echo
+  hello` (or an equivalent check). Changes to OpenCode, LLM providers, or MCP
+  servers also require their relevant functional/integration checks.
+  - Inspect L1 CPU, memory, and disk before provisioning. Set a unique `name`,
+    then run `limactl start --yes --name "$name" --timeout 60m`; the `devbox`
+    create path has no resource override flags. Pass explicit `--cpus`,
+    `--memory`, and `--disk` values that leave generous headroom. For this
+    8-vCPU/16-GiB/100-GiB L1, the smoke was validated with
+    `--cpus 4 --memory 4 --disk 32` (GiB); adjust to actual resources and
+    heavier test needs.
+  - Do not stack the live L1 `~/src` mount or pass L1 credentials into an L2.
+    Stage the active working tree with `copy_repository_for_vm()` from
+    `tests/conftest.py`; it copies tracked/non-ignored files and skips external
+    symlinks. Do not `cp -a` the checkout (it can copy ignored secrets and
+    `.git/config`). Put the copy at `$HOME/src/my-sandbox` under an isolated
+    temporary `HOME`; create every template host-side mount source under it (as
+    `scripts/run-vm-ci.sh` does). In that staged checkout's `lima/devbox.yaml`
+    (keeping its sibling provision scripts in place), make the source mount
+    read-only and leave other config/credential mount sources empty. Use
+    `$HOME/src/my-sandbox/lima/devbox.yaml` as the `limactl start` template, and
+    pass params as in `scripts/run-vm-ci.sh`:
+    `SrcPath=/workspace/src`, `RepoPath=/workspace/src/my-sandbox`, and
+    `KbPath=/workspace/kb`, plus a temporary Git identity. Create a minimal
+    `kbase.py` sentinel in the temporary KB source because readiness requires
+    it. See
+    `tests/vm/test_recursive_vm.py` for the repo-copy isolation pattern and
+    `lima/mount-policy.md` for the L2 source-mount boundary; only the task-local
+    snapshot is exposed as a read-only source input.
+    If an OpenCode/provider/MCP check needs credentials, use an independently
+    minted task-scoped credential or synthetic fixture; never copy L1
+    credential material or reuse the real config tree. Remove the source and
+    revoke the task-scoped credential after the check.
+  - Create a private mode-0700 task root with
+    `mktemp -d /var/tmp/my-sandbox-l2.XXXXXXXX` (or another disk-backed path).
+    Export `HOME="$task_root/home"` and `LIMA_HOME="$task_root/lima"`, and
+    verify both are beneath the task root before `limactl start`. Retain these
+    exports for `limactl shell`, stop, and delete. Lima expands `~/` mount
+    sources from `HOME` and stores the L2 disk under `LIMA_HOME`. Use an
+    idempotent cleanup function from EXIT and INT/TERM/HUP/QUIT traps; signal
+    handlers should exit after cleanup. Cleanup should stop the instance,
+    `limactl delete --force`, treat "no instance found" or "not running" as
+    already clean, and remove the task root only after deletion succeeds. If
+    deletion fails, preserve and report the root. After SIGKILL, if the instance
+    remains, stop/delete it with the same cleanup semantics and verify it is
+    gone. Revoke any task-scoped credential regardless of deletion outcome;
+    remove that exact root only after deletion succeeds.
+    After readiness, run `limactl shell "$name" -- echo hello`.
 
 ## How PRs land
 
