@@ -15,6 +15,8 @@ blocked.
 
 Issue #349 also verifies the worktree bootstrap and OpenCode v2 project-context
 guidance, plus the editor-only status of the optional Pyright configuration.
+The L2 validation policy is needle-tested to preserve readiness, resource, and
+credential-isolation requirements.
 """
 
 import os
@@ -31,6 +33,12 @@ def _agents_md_text(repo_root: Path) -> str:
     path = repo_root / AGENTS_MD_RELPATH
     assert path.is_file(), f"missing guidance file: {path}"
     return path.read_text(encoding="utf-8")
+
+
+def _normalized_agents_md(repo_root: Path) -> str:
+    """Normalize wrapping and Markdown code spans for stable needle tests."""
+    text = _agents_md_text(repo_root).lower().replace("`", "")
+    return " ".join(text.split())
 
 
 @pytest.mark.unit
@@ -65,8 +73,7 @@ def test_agents_md_exists(repo_root: Path):
     ],
 )
 def test_agents_md_encodes_pr_wait_recipe(repo_root: Path, needle: str):
-    # Collapse whitespace so the check is robust to how the prose is re-wrapped.
-    normalized = " ".join(_agents_md_text(repo_root).lower().split())
+    normalized = _normalized_agents_md(repo_root)
     assert needle.lower() in normalized, (
         f"AGENTS.md is missing a required constraint: {needle!r}"
     )
@@ -94,16 +101,74 @@ def test_agents_md_encodes_pr_wait_recipe(repo_root: Path, needle: str):
 def test_agents_md_documents_worktree_uv_and_opencode_context(
     repo_root: Path, needle: str
 ):
-    normalized = " ".join(_agents_md_text(repo_root).lower().split())
+    normalized = _normalized_agents_md(repo_root)
     assert needle.lower() in normalized, (
         f"AGENTS.md is missing worktree or OpenCode v2 guidance: {needle!r}"
     )
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize(
+    "needle",
+    (
+        "fully provisioning a fresh l2",
+        "limactl start",
+        "--yes",
+        '--name "$name"',
+        "--timeout",
+        "--cpus",
+        "--memory",
+        "--disk",
+        "generous headroom",
+        "copy_repository_for_vm()",
+        "staged checkout's lima/devbox.yaml",
+        "sibling provision scripts in place",
+        "pass params as in scripts/run-vm-ci.sh",
+        "read-only source input",
+        "temporary home",
+        "disk-backed path",
+        "lima_home",
+        "mktemp -d",
+        "mode-0700",
+        "verify both are beneath the task root",
+        'export home="$task_root/home"',
+        'lima_home="$task_root/lima"',
+        "retain these exports for limactl shell, stop, and delete",
+        "kbase.py sentinel",
+        "limactl shell",
+        "do not stack the live l1 ~/src mount",
+        "independently minted task-scoped credential or synthetic fixture",
+        "never copy l1 credential material",
+        "reuse the real config tree",
+        "revoke the task-scoped credential after the check",
+        "idempotent cleanup function",
+        "from exit and int/term/hup/quit traps",
+        "signal handlers should exit after cleanup",
+        "cleanup should stop the instance",
+        "limactl delete --force",
+        "no instance found",
+        "not running",
+        "remove the task root only after deletion succeeds",
+        "preserve and report the root",
+        "after sigkill, if the instance remains, stop/delete it",
+        "same cleanup semantics",
+        "verify it is gone",
+        "revoke any task-scoped credential regardless of deletion outcome",
+        "remove that exact root",
+        "remove that exact root only after deletion succeeds",
+    ),
+)
+def test_agents_md_documents_safe_l2_validation(repo_root: Path, needle: str):
+    normalized = _normalized_agents_md(repo_root)
+    assert needle.lower() in normalized, (
+        f"AGENTS.md is missing L2 validation guidance: {needle!r}"
+    )
+
+
+@pytest.mark.unit
 @pytest.mark.parametrize("stale_term", ("pyright", "lsp", "language server"))
 def test_agents_md_omits_obsolete_lsp_terminology(repo_root: Path, stale_term: str):
-    normalized = " ".join(_agents_md_text(repo_root).lower().split())
+    normalized = _normalized_agents_md(repo_root)
     assert stale_term not in normalized, (
         f"AGENTS.md contains obsolete OpenCode/LSP terminology: {stale_term!r}"
     )

@@ -82,6 +82,17 @@ def _probe_required_tools(repo_root: Path) -> set[str]:
     return set(required_tools.group(1).replace("\\", " ").split())
 
 
+def _base_packages(system_script: str) -> str:
+    """Return the Fedora package array from the system provisioner."""
+    packages = re.search(
+        r"^packages=\(\n(.*?)^\)",
+        system_script,
+        re.DOTALL | re.MULTILINE,
+    )
+    assert packages, "base Fedora package list is missing"
+    return packages.group(1)
+
+
 @pytest.mark.unit
 def test_template_uses_qemu_with_nested_virtualization(repo_root: Path):
     config = _template(repo_root)
@@ -674,26 +685,15 @@ def test_system_script_adds_user_to_kvm_and_libvirt_groups(repo_root: Path):
 @pytest.mark.unit
 def test_system_script_installs_qemu_img_for_nested_lima(repo_root: Path):
     system_script = _script(repo_root, "provision-system.sh")
-    match = re.search(
-        r"^packages=\(\n(.*?)^\)",
-        system_script,
-        re.DOTALL | re.MULTILINE,
-    )
+    packages = _base_packages(system_script)
 
-    assert match
-    assert re.search(r"^\s*qemu-img\s*$", match.group(1), re.MULTILINE)
+    assert re.search(r"^\s*qemu-img\s*$", packages, re.MULTILINE)
 
 
 @pytest.mark.unit
 def test_system_script_installs_ruby_openssl_build_dependencies(repo_root: Path):
     system_script = _script(repo_root, "provision-system.sh")
-    match = re.search(
-        r"^packages=\(\n(.*?)^\)",
-        system_script,
-        re.DOTALL | re.MULTILINE,
-    )
-
-    assert match
+    packages = _base_packages(system_script)
     for package in (
         "libffi-devel",
         "libyaml-devel",
@@ -705,7 +705,7 @@ def test_system_script_installs_ruby_openssl_build_dependencies(repo_root: Path)
     ):
         assert re.search(
             rf"^\s*{re.escape(package)}(?:\s+#.*)?\s*$",
-            match.group(1),
+            packages,
             re.MULTILINE,
         )
 
@@ -713,13 +713,7 @@ def test_system_script_installs_ruby_openssl_build_dependencies(repo_root: Path)
 @pytest.mark.unit
 def test_system_script_provisions_libvirt_for_minikube_kvm2(repo_root: Path):
     system_script = _script(repo_root, "provision-system.sh")
-    match = re.search(
-        r"^packages=\(\n(.*?)^\)",
-        system_script,
-        re.DOTALL | re.MULTILINE,
-    )
-
-    assert match
+    packages = _base_packages(system_script)
     for package in (
         "container-selinux",
         "libselinux-utils",
@@ -728,7 +722,7 @@ def test_system_script_provisions_libvirt_for_minikube_kvm2(repo_root: Path):
         "libvirt-daemon-kvm",
         "policycoreutils",
     ):
-        assert re.search(rf"^\s*{re.escape(package)}\s*$", match.group(1), re.MULTILINE)
+        assert re.search(rf"^\s*{re.escape(package)}\s*$", packages, re.MULTILINE)
     assert (
         "systemctl enable --now virtqemud.socket virtnetworkd.socket" in system_script
     )
@@ -781,17 +775,38 @@ def test_system_script_installs_checksum_pinned_minikube(repo_root: Path):
 @pytest.mark.unit
 def test_system_script_installs_and_verifies_manifest_pinned_ruby(repo_root: Path):
     system_script = _script(repo_root, "provision-system.sh")
+    assert re.search(
+        r"^\s*rubypick(?:\s+#.*)?\s*$",
+        _base_packages(system_script),
+        re.MULTILINE,
+    ), "Fedora's generic ruby launcher must be installed"
+
+    base_install = re.search(
+        r"\bdnf\s+install\s+-y\s+--setopt=install_weak_deps=False\s+"
+        r'"\$\{missing\[@\]\}"',
+        system_script,
+    )
+    assert base_install, "base Fedora package transaction is missing"
+
     version_read = re.search(
         r'(?m)^\s*(?P<version_var>[A-Z_][A-Z0-9_]*)="\$\(manifest_version ruby\)"',
         system_script,
     )
     assert version_read, "Ruby's version must come from the tool manifest"
+    assert base_install.start() < version_read.start(), (
+        "base Fedora packages must be installed before reading Ruby's manifest pin"
+    )
     version_var = re.escape(version_read.group("version_var"))
 
     install = re.search(
-        rf'\bdnf\s+install\b[^\n]*"ruby-\$\{{{version_var}\}}"', system_script
+        rf"\bdnf\s+install\b[^\n]*(?:\\\n\s*[^\n]*)*"
+        rf'"ruby-\$\{{{version_var}\}}"',
+        system_script,
     )
     assert install, "Ruby install must use a version-qualified Fedora package"
+    assert re.search(r"(?<![\w-])--allow-downgrade(?![\w-])", install.group(0)), (
+        "Ruby install must allow downgrading to the manifest pin"
+    )
     assert system_script.count("/usr/bin/ruby --version") == 2
 
     post_install = system_script[install.end() :]

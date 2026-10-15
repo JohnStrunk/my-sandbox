@@ -11,18 +11,37 @@ state. **Neither policy mounts all of `$HOME`.**
 
 | Host path | L1 destination / access | Consumers and decision | L2 policy |
 | --- | --- | --- | --- |
-| `~/src` | Same absolute path, RW | Keep. Projects and worktrees need same-path absolute `.git` pointers; the host launcher also resolves the caller's work directory here. Parent ACL limits access to the guest UID. | Do not stack this mount. Tests copy the checkout to L2-local disk (see #268); only an individual test input may be mounted read-only. |
-| `~/kb` | `~/.host-config/kb`, RW; `~/kb` and the `KbPath` absolute alias point to it | Keep. `kbase.py` and notes are updated from the VM, and KB worktree `.git` pointers use the host absolute path. The canonical shell/file-search path is `~/kb`; the repository does not provide a `knowledge-base/` symlink. Readiness checks the alias and a readable `kbase.py`. | Not mounted. KB notes and worktrees are not needed by nested tests. |
+| `~/src` | Same absolute path, RW | Keep. Projects and worktrees need same-path absolute `.git` pointers; the host launcher also resolves the caller's work directory here. Parent ACL limits access to the guest UID. | Never stack the live L1 source tree. Tests stage task-local checkout snapshots. The manual smoke mounts its copy read-only; `run-vm-ci.sh` may mount its disposable copy writable for tests that modify it. |
+| `~/kb` | `~/.host-config/kb`, RW; `~/kb` and the `KbPath` absolute alias point to it | Keep. `kbase.py` and notes are updated from the VM, and KB worktree `.git` pointers use the host absolute path. The canonical shell/file-search path is `~/kb`; the repository does not provide a `knowledge-base/` symlink. Readiness checks the alias and a readable `kbase.py`. | The real L1 KB is not mounted; full-provisioning smokes may mount only the task-local sentinel described below. |
 | `~/.agents` | `~/.host-config/agents`, RO | Keep. Host skills are inputs to the guest-local skill overlay. The package-builder account cannot traverse `.host-config`. | Not mounted; L2 tests use only explicitly staged test inputs. |
 | `~/.config/opencode` | `~/.host-config/config/opencode`, RW | Keep. Contains shared OpenCode configuration, provider authentication, agents, commands, plugins, and settings. | Not mounted. No host provider/config secrets in test VMs. |
-| `~/.local/share/opencode` | `~/.host-config/local/share/opencode`, RW | Keep. Contains the session database and snapshots used for host-visible session history and CodeBurn usage metrics. Host/VM SQLite coherency remains subject to the validation caveat below. | Not mounted. OpenCode data in L2 remains on its VM-local disk. |
-| `~/.local/state/opencode` | `~/.host-config/local/state/opencode-seed`, RO | Keep only as a one-time import source for existing host preferences/history. The trusted L1 user can read the source, including its service registration; only the explicit preference/history allowlist is copied, so registrations, locks, temp files, symlinks, and unrecognized future files are not imported. | Not mounted. |
-| `~/.local/state/devbox-opencode` | `~/.host-config/local/state/devbox-opencode`, RW, mode `0700` | Keep. This dedicated host-backed directory is the L1's persistent `~/.local/state/opencode` target. It preserves L1 model favorites, TUI settings, prompt history, and its own service registration across VM recreation without sharing the host's default registration. The one-time host seed does not continuously sync back to the host default state directory. | Not mounted. Every L2 keeps its own independent VM-local XDG state. The recursive test starts two actual OpenCode services concurrently and checks that both registrations remain stable. |
+| `~/.local/share/opencode` | `~/.host-config/local/share/opencode`, RW | Keep. Contains the session database and snapshots used for host-visible session history and CodeBurn usage metrics. Host/VM SQLite coherency remains subject to the validation caveat below. | Real L1 data is not mounted. Ordinary L2 tests keep data on the VM-local disk; full-provisioning smokes use a disposable temporary source. |
+| `~/.local/state/opencode` | `~/.host-config/local/state/opencode-seed`, RO | Keep only as a one-time import source for existing host preferences/history. The trusted L1 user can read the source, including its service registration; only the explicit preference/history allowlist is copied, so registrations, locks, temp files, symlinks, and unrecognized future files are not imported. | Real L1 state is not mounted; a full-provisioning smoke uses only a disposable temporary seed source. |
+| `~/.local/state/devbox-opencode` | `~/.host-config/local/state/devbox-opencode`, RW, mode `0700` | Keep. This dedicated host-backed directory is the L1's persistent `~/.local/state/opencode` target. It preserves L1 model favorites, TUI settings, prompt history, and its own service registration across VM recreation without sharing the host's default registration. The one-time host seed does not continuously sync back to the host default state directory. | Real L1 state is not mounted. Ordinary L2s keep independent VM-local state; a full-provisioning smoke uses disposable temporary state. The recursive test starts two actual OpenCode services concurrently and checks that both registrations remain stable. |
 | `~/.config/gh` | `~/.host-config/config/gh`, RW | Keep. Authenticated `gh` is the canonical GitHub interface inside the VM. | Not mounted. |
 | `~/.config/gcloud` | `~/.host-config/config/gcloud`, RW | Keep. Required by the installed Google Cloud tooling; includes ADC config. | Not mounted. |
 | `~/.config/acli` | `~/.host-config/config/acli`, RW | Keep. Required by the installed Atlassian CLI. | Not mounted. |
 | `~/.config/gws` | `~/.host-config/config/gws`, RW | Keep. Required by the installed Google Workspace CLI. | Not mounted. |
 | `~/.coderabbit` | `~/.host-config/coderabbit`, RW; linked at `~/.coderabbit` | Keep. Supplies the CodeRabbit CLI's user configuration and authentication to the trusted L1. The root-owned `.host-config` parent prevents access by the isolated package builder. | Not mounted. Nested L2s receive no CodeRabbit config or host credentials. |
+
+In the L2 column, “Not mounted” means the L1's real source is not mounted. A
+full-provisioning smoke is the exception: the standard readiness probe needs
+the template's mountpoints, which are backed by isolated task-local sources as
+described below, never by the L1's actual config or credential paths.
+
+For a full-provisioning L2 smoke, Lima requires the template's host-side mount
+sources (`~/...` locations) to exist under an isolated, disposable `HOME`; Lima
+creates the guest targets. Config sources stay empty. Credential sources stay
+empty unless an independently minted task-scoped credential or synthetic
+fixture is required; never copy L1 credential material. Remove the source and
+revoke the task-scoped credential after the check. OpenCode state must be
+disposable.
+The manual smoke's task-local checkout snapshot is mounted read-only.
+`run-vm-ci.sh` and the fresh-VM conftest fixture may use a writable disposable
+copy for tests that modify it. The KB source contains only a minimal
+`kbase.py` sentinel needed by readiness. Keep all other config/credential
+sources empty. Never point these mounts at the L1's real `~/src`, `~/kb`,
+`~/.host-config`, or OpenCode state.
 
 The paths below remain L1-local and are not host mounts: the toolbuilder and
 its package caches, `~/.cache/{go,uv,semble}`, `~/.cargo`,
@@ -33,7 +52,9 @@ Worktree Python environments should use a unique VM-local
 The persistent `~/.local/state/devbox-opencode` mount is for the repository's
 single L1 instance per host home. `DEVBOX_LIMA_INSTANCE` changes the Lima name,
 not the backing state directory; do not run multiple L1 instances concurrently
-with the same host home. Disposable L2 VMs do not receive this mount.
+with the same host home. Disposable L2 VMs do not receive the L1's persistent
+state mount; a full-provisioning smoke uses the disposable temporary state
+described above.
 
 ## OpenCode state lifecycle
 
