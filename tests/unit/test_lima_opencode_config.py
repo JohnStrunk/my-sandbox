@@ -108,9 +108,6 @@ def test_vm_config_gates_credentials_and_serializes_references_only(
         "IGLOO_MCP_PASSWORD": "mock-password",  # pragma: allowlist secret
         "ENMAAS_URL": "https://enmaas.example/v1",
         "ENMAAS_API_KEY": "mock-enmaas-secret",  # pragma: allowlist secret
-        "PRICETAG_HOSTED_URL": "https://price-hosted.example/v1",
-        "PRICETAG_OPENAI_URL": "https://price-openai.example/v1",
-        "PRICETAG_API_KEY": "mock-pricetag-secret",  # pragma: allowlist secret
     }
     env = isolated_env | secrets
 
@@ -130,7 +127,6 @@ def test_vm_config_gates_credentials_and_serializes_references_only(
     assert "providers" not in config
     assert "rits/zai-org/glm-5-3" not in serialized
     assert all(value not in serialized for value in secrets.values())
-    assert "pricetag-hosted" not in serialized
     assert "github" not in config["mcp"]["servers"]
 
 
@@ -375,9 +371,6 @@ def test_installed_vm_opencode_accepts_overlay_and_global_enmaas_config_schema(
         "IGLOO_MCP_PASSWORD": "schema-password",  # pragma: allowlist secret
         "ENMAAS_URL": "https://enmaas.example/v1",
         "ENMAAS_API_KEY": "schema-enmaas-key",  # pragma: allowlist secret
-        "PRICETAG_HOSTED_URL": "https://price-hosted.example/v1",
-        "PRICETAG_OPENAI_URL": "https://price-openai.example/v1",
-        "PRICETAG_API_KEY": "schema-pricetag-key",  # pragma: allowlist secret
     }
     config, _ = _generated_config(repo_root, schema_env)
     # debug config is a schema/parser probe, not an MCP behavior test. Disable

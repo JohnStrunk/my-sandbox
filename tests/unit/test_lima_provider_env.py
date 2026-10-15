@@ -33,9 +33,6 @@ _EXPECTED_GUEST_ENV_NAMES = {
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_BASE_URL",
-    "PRICETAG_HOSTED_URL",
-    "PRICETAG_OPENAI_URL",
-    "PRICETAG_API_KEY",
     "GOOGLE_CLOUD_PROJECT",
     "VERTEX_LOCATION",
 }
@@ -146,7 +143,6 @@ def test_lima_shell_forwards_provider_env_with_matching_aliases_and_gates(
             "ANTHROPIC_BASE_URL": "https://anthropic.example/v1",
             # Incomplete groups are not forwarded to the VM.
             "IGLOO_MCP_COMMUNITY": "partial-community",
-            "PRICETAG_API_KEY": "mock-pricetag-token",  # pragma: allowlist secret
             "GOOGLE_CLOUD_PROJECT": "project-without-location",
             # Listed by the test credential scrubber, but not passed by devbox.
             "OPENROUTER_API_KEY": "not-forwarded",  # pragma: allowlist secret
@@ -218,9 +214,6 @@ def test_lima_shell_forwards_complete_provider_credential_groups(
         "IGLOO_MCP_APP_ID": "mock-app-id",
         "IGLOO_MCP_USERNAME": "mock-username",
         "IGLOO_MCP_PASSWORD": "mock-password",  # pragma: allowlist secret
-        "PRICETAG_API_KEY": "mock-pricetag-key",  # pragma: allowlist secret
-        "PRICETAG_HOSTED_URL": "https://pricetag.example/hosted",
-        "PRICETAG_OPENAI_URL": "https://pricetag.example/openai",
         "ANTHROPIC_API_KEY": "mock-anthropic-key",  # pragma: allowlist secret
         "ANTHROPIC_BASE_URL": "https://anthropic.example/v1",
         "GOOGLE_CLOUD_PROJECT": "mock-project",

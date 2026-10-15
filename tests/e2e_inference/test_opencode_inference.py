@@ -5,6 +5,11 @@ import subprocess
 import pytest
 import requests
 
+INVALID_OPENAI_API_KEY = (
+    "sk-invalid-key-for-precedence-test"  # pragma: allowlist secret
+)
+ENMAAS_TEST_MODEL = "gpt-6-luna"
+
 
 @pytest.mark.e2e_inference
 def test_litemaas_inference_e2e():
@@ -81,27 +86,28 @@ def test_gemini_inference_e2e():
 
 
 @pytest.mark.e2e_inference
-def test_pricetag_openai_gateway_credential_precedence_e2e(tmp_path):
-    """OpenCode must send the PriceTag gateway key, not OPENAI_API_KEY.
+def test_enmaas_openai_credential_precedence_e2e(tmp_path):
+    """OpenCode must send the EnMaaS key, not OPENAI_API_KEY.
 
     OpenCode v2 resolves a built-in provider's credential from its
     environment connection (OPENAI_API_KEY) in preference to a provider
     override's settings.apiKey. This test supplies an explicit
     OPENCODE_CONFIG_CONTENT override with an empty provider environment list
-    ("env": []) for the PriceTag OpenAI gateway, plus a deliberately invalid
-    OPENAI_API_KEY, and asserts inference still succeeds. Without the cleared
-    list every request fails with HTTP 401 because the direct key is sent to
-    the gateway.
+    ("env": []) for EnMaaS, plus a deliberately invalid OPENAI_API_KEY, and
+    asserts inference still succeeds. Without the cleared list the direct key
+    would be sent instead of the EnMaaS key.
     """
-    api_key = os.getenv("PRICETAG_API_KEY")
-    base_url = os.getenv("PRICETAG_OPENAI_URL")
+    api_key = os.getenv("ENMAAS_API_KEY")
+    base_url = os.getenv("ENMAAS_URL")
     if not (api_key and base_url):
         pytest.skip(
-            "PRICETAG_OPENAI_URL and PRICETAG_API_KEY not set. Set both to "
-            "run the PriceTag OpenAI gateway E2E inference test."
+            "ENMAAS_URL and ENMAAS_API_KEY not set. Set both to run the EnMaaS "
+            "OpenAI-compatible E2E inference test."
         )
+    if not base_url.lower().startswith("https://"):
+        pytest.fail("ENMAAS_URL must use HTTPS; refusing to send credentials")
 
-    # Sanity-check the gateway itself so a gateway outage is not reported as
+    # Sanity-check the endpoint so a gateway outage is not reported as
     # a credential-precedence regression.
     res = requests.post(
         f"{base_url.rstrip('/')}/chat/completions",
@@ -110,14 +116,15 @@ def test_pricetag_openai_gateway_credential_precedence_e2e(tmp_path):
             "Content-Type": "application/json",
         },
         json={
-            "model": "gpt-5.6-luna",
+            "model": ENMAAS_TEST_MODEL,
             "messages": [{"role": "user", "content": "Respond with only: PONG"}],
             "max_completion_tokens": 16,
         },
         timeout=60,
+        allow_redirects=False,
     )
     assert res.status_code == 200, (
-        f"PriceTag OpenAI gateway rejected the gateway key with code "
+        f"EnMaaS OpenAI-compatible sanity-check request failed with code "
         f"{res.status_code}: {res.text}"
     )
 
@@ -128,8 +135,8 @@ def test_pricetag_openai_gateway_credential_precedence_e2e(tmp_path):
                 "openai": {
                     "env": [],
                     "settings": {
-                        "baseURL": "{env:PRICETAG_OPENAI_URL}",
-                        "apiKey": "{env:PRICETAG_API_KEY}",
+                        "baseURL": "{env:ENMAAS_URL}",
+                        "apiKey": "{env:ENMAAS_API_KEY}",
                     },
                 },
             },
@@ -137,9 +144,7 @@ def test_pricetag_openai_gateway_credential_precedence_e2e(tmp_path):
     )
 
     env = dict(os.environ)
-    env["OPENAI_API_KEY"] = (
-        "sk-invalid-key-for-precedence-test"  # pragma: allowlist secret
-    )
+    env["OPENAI_API_KEY"] = INVALID_OPENAI_API_KEY
     env["OPENCODE_CONFIG_CONTENT"] = override
     # Redirect OpenCode's state so the run does not touch real session data
     # or pick up the user's global configuration and plugins.
@@ -154,7 +159,7 @@ def test_pricetag_openai_gateway_credential_precedence_e2e(tmp_path):
             "run",
             "--standalone",
             "--model",
-            "openai/gpt-5.6-luna",
+            f"openai/{ENMAAS_TEST_MODEL}",
             "Reply with just: ok",
         ],
         env=env,
@@ -165,9 +170,9 @@ def test_pricetag_openai_gateway_credential_precedence_e2e(tmp_path):
     )
     output = f"{run.stdout}\n{run.stderr}"
     assert run.returncode == 0, (
-        "OpenCode inference through the PriceTag OpenAI gateway failed "
-        "while a conflicting OPENAI_API_KEY was set; the provider override "
-        f"may no longer suppress environment credentials.\n{output}"
+        "OpenCode inference through EnMaaS failed while a conflicting "
+        "OPENAI_API_KEY was set; the provider override may no longer suppress "
+        f"environment credentials.\n{output}"
     )
     assert "HTTP 401" not in output
     assert "ok" in run.stdout.lower()
