@@ -209,21 +209,21 @@
       }
     },
     "limactl": {
-      "version": "2.2.0",
+      "version": "2.2.1",
       "datasource": "github-releases",
       "depName": "lima-vm/lima",
       "integrity": "sha256",
       "artifacts": {
         "amd64": {
-          "version": "v2.2.0",
-          "sha256": "a0ea1ccf6b7335a900adb5f8d2b8384457965fecb1ba72f09b4e3e46d12f424a",
+          "version": "v2.2.1",
+          "sha256": "b391ac7fcac2b2a5a1628107756463188ded4d18d3104a40a66a8bb6fec01bcb",
           "depName": "lima-vm/lima-amd64",
           "packageName": "lima-vm/lima",
           "datasource": "github-release-attachments"
         },
         "arm64": {
-          "version": "v2.2.0",
-          "sha256": "7c6a09c6844f55f811e9b7b2b60a6070a512c696c8ec752dfdb3c8ed50ed0364",
+          "version": "v2.2.1",
+          "sha256": "fbcf4d127936666aa2cf6013b663c250431f2a59394757b404070f8d6a160e10",
           "depName": "lima-vm/lima-arm64",
           "packageName": "lima-vm/lima",
           "datasource": "github-release-attachments"
