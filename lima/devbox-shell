@@ -119,6 +119,8 @@ DEVBOX_ENV_VARS=(
   LITEMAAS_API_KEY
   ENMAAS_URL
   ENMAAS_API_KEY
+  MODELSCORP_URL
+  MODELSCORP_API_KEY
   OPENAI_API_KEY
   ANTHROPIC_API_KEY
   ANTHROPIC_BASE_URL
@@ -182,6 +184,19 @@ if [[ -n "${ENMAAS_URL:-}" && -n "${ENMAAS_API_KEY:-}" ]]; then
   unset OPENAI_API_KEY ANTHROPIC_API_KEY ANTHROPIC_BASE_URL
 else
   unset ENMAAS_URL ENMAAS_API_KEY
+fi
+
+# Additive by design: unlike a complete EnMaaS pair, Models.corp intentionally
+# preserves direct provider credentials.
+modelscorp_url_lower="${MODELSCORP_URL:-}"
+modelscorp_url_lower="${modelscorp_url_lower,,}"
+if [[ -n "${MODELSCORP_URL:-}" && -n "${MODELSCORP_API_KEY:-}" ]]; then
+  if [[ "$modelscorp_url_lower" != https://* ]]; then
+    printf 'devbox: MODELSCORP_URL must use HTTPS; refusing to start OpenCode\n' >&2
+    exit 1
+  fi
+else
+  unset MODELSCORP_URL MODELSCORP_API_KEY
 fi
 
 igloo_env_vars=(

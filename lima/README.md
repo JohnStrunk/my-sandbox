@@ -186,6 +186,16 @@ tested model entry is:
 }
 ```
 
+Models.corp forwarding is separate and additive. Devbox forwards
+`MODELSCORP_URL` and `MODELSCORP_API_KEY` only as a complete, non-empty pair and
+requires an HTTPS scheme. That check is scheme-only: devbox does not fully parse
+or validate `MODELSCORP_URL`; endpoint validation is user-managed in OpenCode
+configuration. Unlike a complete EnMaaS pair, a Models.corp pair does not itself
+unset `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `ANTHROPIC_BASE_URL`, so EnMaaS
+behavior remains unchanged. Project OpenCode config can override provider
+endpoints while `MODELSCORP_API_KEY` remains available in the environment; use
+forwarded Models.corp credentials only with trusted projects.
+
 After creating and validating the VM, enable optional host-login autostart to
 avoid starting it manually after reboot:
 
