@@ -207,7 +207,12 @@ def test_validator_requires_artifact_versions_to_match_top_level_alias(
     _copy_validator_inputs(repo_root, copy_root)
 
     def mutate(data):
-        data["tools"]["limactl"]["artifacts"]["arm64"]["version"] = "v2.2.1"
+        limactl = data["tools"]["limactl"]
+        alias = limactl["version"].removeprefix("v")
+        mismatch_version = "v0.0.0-mismatch"
+        if alias == mismatch_version.removeprefix("v"):
+            mismatch_version = "v0.0.1-mismatch"
+        limactl["artifacts"]["arm64"]["version"] = mismatch_version
 
     _edit_manifest(copy_root, mutate)
 
