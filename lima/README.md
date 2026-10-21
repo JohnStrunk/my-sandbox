@@ -441,7 +441,7 @@ its exact version, plus `make`, Python/pip, and ShellCheck.
 
 The VM provisions **Docker CE Engine, its official CLI, `containerd.io`, and
 the Docker Buildx CLI plugin** from Docker's Fedora stable RPM repository. The
-manifest pins Docker CE 29.8.2, containerd 2.3.6, and Buildx 0.38.0 for both
+manifest pins Docker CE 29.9.0, containerd 2.3.6, and Buildx 0.38.0 for both
 supported architectures. The RPM release suffix is resolved from the official
 repo for Fedora 44; package versions and Docker RPM epochs are checked after
 installation. DNF
@@ -575,7 +575,7 @@ VMX/SVM, `qemu-kvm`, and working system libvirt. Select the intended backend:
 ```shell
 # Run the complete five-path smoke matrix from inside the provisioned VM.
 # Pins: kind 0.33.0, Kubernetes 1.37.0, Minikube 1.39.0,
-# Docker CE 29.8.2, and kubectl 1.37.1.
+# Docker CE 29.9.0, and kubectl 1.37.1.
 lima/validate-kind.sh docker 1       # kind through the guest's rootful Docker CE
 lima/validate-kind.sh podman 1       # kind through rootless Podman
 lima/validate-minikube.sh docker     # Minikube Docker CE driver
