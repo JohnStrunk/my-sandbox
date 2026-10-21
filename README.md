@@ -172,7 +172,7 @@ credential mounts.
 The #319 backend matrix explicitly exercises kind+Docker CE, kind+Podman,
 Minikube+Docker CE, Minikube+Podman, and Minikube+KVM2. It pins kind 0.33.0's
 Kubernetes 1.37.0 node image by digest and starts Minikube with Kubernetes
-1.37.0; Minikube 1.39.0, Docker CE 29.8.2, and kubectl 1.37.1 are also pinned.
+1.37.0; Minikube 1.39.0, Docker CE 29.9.0, and kubectl 1.37.1 are also pinned.
 Every smoke uses a digest-pinned BusyBox workload. Validators require explicit
 driver selection and never fall back or skip. Tests verify the actual
 Docker/Podman node resource or KVM2 libvirt L2 domain, then delete the cluster

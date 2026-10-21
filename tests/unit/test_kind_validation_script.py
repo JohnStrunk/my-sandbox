@@ -94,7 +94,7 @@ case "$1" in
     if [[ "${PREFLIGHT_WARNING:-}" == 1 ]]; then
       echo 'simulated docker warning' >&2
     fi
-    printf '%s\\n' "${DOCKER_VERSION:-29.8.2|29.8.2}"
+    printf '%s\\n' "${DOCKER_VERSION:-29.9.0|29.9.0}"
     ;;
   ps)
     if [[ "${PREFLIGHT_WARNING:-}" == 1 ]]; then
@@ -233,8 +233,8 @@ case "$*" in
   *'/dockerd') printf 'docker-ce\\n' ;;
   *'/containerd') printf 'containerd.io\\n' ;;
   *' podman-docker') exit 1 ;;
-  *' docker-ce') printf '%s\\n' "${DOCKER_PACKAGE_VERSION:-29.8.2}" ;;
-  *' docker-ce-cli') printf '%s\\n' "${DOCKER_PACKAGE_VERSION:-29.8.2}" ;;
+  *' docker-ce') printf '%s\\n' "${DOCKER_PACKAGE_VERSION:-29.9.0}" ;;
+  *' docker-ce-cli') printf '%s\\n' "${DOCKER_PACKAGE_VERSION:-29.9.0}" ;;
   *' containerd.io') printf '%s\\n' "${CONTAINERD_PACKAGE_VERSION:-2.3.6}" ;;
   *) echo "unexpected rpm invocation: $*" >&2; exit 64 ;;
 esac
@@ -246,7 +246,7 @@ esac
         'if [ "${PREFLIGHT_WARNING:-}" = 1 ]; then '
         "echo 'simulated jq warning' >&2; fi\n"
         'case "$*" in *containerd_io*) printf "2.3.6\\n" ;; '
-        '*) printf "29.8.2\\n" ;; esac\n',
+        '*) printf "29.9.0\\n" ;; esac\n',
     )
     _write_executable(
         fake_bin / "stat",
@@ -574,10 +574,10 @@ def test_kind_docker_provider_rejects_non_ce_endpoint_before_cluster_creation(
     repo_root: Path, tmp_path: Path
 ):
     log, env = _fake_tools(tmp_path)
-    result = _run(repo_root, {**env, "DOCKER_VERSION": "29.8.2|5.7.0"}, "docker", "1")
+    result = _run(repo_root, {**env, "DOCKER_VERSION": "29.9.0|5.7.0"}, "docker", "1")
 
     assert result.returncode != 0
-    assert "reported client/server 29.8.2|5.7.0" in result.stderr
+    assert "reported client/server 29.9.0|5.7.0" in result.stderr
     assert "rootful Docker" in result.stderr
     assert not log.exists()
 
@@ -592,7 +592,7 @@ def test_kind_docker_provider_rejects_non_ce_endpoint_before_cluster_creation(
         ("SYSTEMD_DISABLED_UNIT", "docker.service", "docker.service"),
         ("SYSTEMD_DISABLED_UNIT", "docker.socket", "docker.socket"),
         ("SYSTEMD_DISABLED_UNIT", "containerd.service", "containerd.service"),
-        ("DOCKER_PACKAGE_VERSION", "9.9.9", "manifest pins 29.8.2"),
+        ("DOCKER_PACKAGE_VERSION", "9.9.9", "manifest pins 29.9.0"),
         ("CONTAINERD_PACKAGE_VERSION", "9.9.9", "manifest pins 2.3.6"),
         ("DOCKER_DAEMON_UID", "1000", "1000"),
     ],

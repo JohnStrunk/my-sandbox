@@ -441,7 +441,7 @@ shared repository `AGENTS.md` or README.
   `tmpfs` such as `/tmp`.
 
 - Docker CE, Podman, and KVM2 modes use pinned Minikube 1.39.0, Docker CE
-  29.8.2, kubectl 1.37.1, and a digest-pinned BusyBox 1.37.0 workload. All
+  29.9.0, kubectl 1.37.1, and a digest-pinned BusyBox 1.37.0 workload. All
   Minikube test profiles use 2 CPUs/4 GiB and run sequentially; leave L1
   headroom (Lima is configured for 8 CPUs/16 GiB). KVM2 additionally consumes
   L2 guest resources. There is no automatic backend fallback.
