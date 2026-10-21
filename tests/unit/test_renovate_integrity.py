@@ -475,7 +475,7 @@ def test_docker_engine_containerd_and_buildx_rpm_set_requires_review(
         tools["containerd_io"]["version"],
         tools["docker_buildx_plugin"]["version"],
     )
-    reviewed_sets = {("29.8.2", "2.3.6", "0.38.0")}
+    reviewed_sets = {("29.9.0", "2.3.6", "0.38.0")}
 
     assert pinned_set in reviewed_sets, (
         "Review Docker Fedora 44 stable RPM metadata for x86_64 and aarch64, "
