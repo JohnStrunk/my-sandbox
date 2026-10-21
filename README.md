@@ -83,7 +83,7 @@ The VM-owned agent capability catalog is staged at
 `~/.agents/skills/devbox-tools/SKILL.md` inside the guest. The VM generates an
 in-memory OpenCode overlay for baseline permissions and optional integrations
 immediately before launch; it does not generate provider or model settings.
-EnMaaS provider/model settings are user-managed in
+EnMaaS and Models.corp provider/model settings are user-managed in
 `~/.config/opencode/opencode.jsonc`. Credential values are never serialized
 into the runtime overlay.
 
@@ -96,6 +96,7 @@ into the runtime overlay.
 | Tavily search | `TAVILY_API_KEY`, through OpenCode's built-in web search. |
 | The Source | `IGLOO_MCP_*` credentials; VM trusts the internal CA roots. |
 | EnMaaS | A complete `ENMAAS_URL`/`ENMAAS_API_KEY` pair is forwarded; full URL validation runs on the `devbox opencode` launch path. Provider and model settings are user-managed in OpenCode config. The pair is also used by the opt-in OpenAI-compatible inference test. |
+| Models.corp | A complete, non-empty `MODELSCORP_URL`/`MODELSCORP_API_KEY` pair is forwarded only when both are non-empty; `MODELSCORP_URL` must use HTTPS. Provider/model settings and full URL validation remain user-managed in OpenCode config. |
 | EnMaaS model listing | `list-models.sh` requires `ENMAAS_URL` and `ENMAAS_API_KEY`. It requests `/models` using both the Anthropic-compatible (`x-api-key` and `anthropic-version`) and OpenAI-compatible (`Authorization: Bearer`) formats, since the available model sets can differ. |
 
 Devbox forwards EnMaaS only as a non-empty pair. The host rejects non-HTTPS
@@ -108,6 +109,13 @@ provider configured with `env: []` and EnMaaS references does not fall back to
 ordinary provider credentials when the pair is absent. OpenCode project-level
 settings can override the global provider endpoint, so only forward EnMaaS
 credentials to trusted projects.
+
+Devbox forwards a complete `MODELSCORP_URL`/`MODELSCORP_API_KEY` pair only when
+both are non-empty; it requires an HTTPS scheme. It does not fully parse or
+validate `MODELSCORP_URL`; full endpoint validation is left to the user-managed
+OpenCode configuration. Models.corp is additive and leaves EnMaaS behavior
+unchanged: unlike a complete EnMaaS pair, it does not itself unset
+`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `ANTHROPIC_BASE_URL`.
 
 The launcher passes a strict allowlist of supported provider credentials. The
 VM mounts only selected project, knowledge-base, and configuration paths; see
@@ -131,8 +139,10 @@ the [mount table](lima/README.md#shared-vs-vm-local-state) for details.
   access and modify data available through VM mounts. This does not grant
   host-root access; Docker remains inside the Lima guest.
 - When EnMaaS credentials are forwarded, project OpenCode config can override
-  `providers.*.settings.baseURL` while `{env:ENMAAS_API_KEY}` remains available.
-  Only run OpenCode with forwarded EnMaaS credentials in trusted projects.
+  `providers.*.settings.baseURL` while `{env:ENMAAS_API_KEY}` remains available;
+  Models.corp config can similarly override provider endpoints while
+  `MODELSCORP_API_KEY` remains available. Only use forwarded EnMaaS or
+  Models.corp credentials with trusted projects.
 
 ## Testing
 
