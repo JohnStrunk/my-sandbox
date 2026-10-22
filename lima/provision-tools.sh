@@ -230,8 +230,14 @@ if [[ "$rustup_installed" != "$rustup_version" ]] \
   printf '%s\n' "$rustup_fingerprint" >"$rustup_stamp.new"
   mv -f "$rustup_stamp.new" "$rustup_stamp"
 fi
+# rustup 1.29.2 self-updated during fresh provisioning; persist this setting
+# so it cannot drift from the manifest pin.
+if ! "$HOME/.cargo/bin/rustup" set auto-self-update disable; then
+  echo "devbox: failed to disable rustup auto-self-update" >&2
+  exit 1
+fi
 if ! rustup toolchain list | grep -q "^${rust_version}-"; then
-  rustup toolchain install "$rust_version" --profile minimal
+  rustup toolchain install "$rust_version" --profile minimal --no-self-update
 fi
 rustup default "$rust_version"
 
