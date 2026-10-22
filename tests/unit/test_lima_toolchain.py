@@ -332,6 +332,31 @@ def test_isolated_toolbuilder_defers_krew_until_user_provisioning(repo_root: Pat
 
 
 @pytest.mark.unit
+def test_toolbuilder_pins_rustup_auto_self_update(repo_root: Path):
+    tool_script = (repo_root / "lima/provision-tools.sh").read_text()
+    system_script = (repo_root / "lima/provision-system.sh").read_text()
+    persisted_setting_line = (
+        'if ! "$HOME/.cargo/bin/rustup" set auto-self-update disable; then'
+    )
+    stamp_block_end = '  mv -f "$rustup_stamp.new" "$rustup_stamp"\nfi'
+    toolchain_list = "if ! rustup toolchain list"
+    toolchain_install = (
+        'rustup toolchain install "$rust_version" --profile minimal --no-self-update'
+    )
+
+    assert persisted_setting_line in tool_script.splitlines()
+    assert stamp_block_end in tool_script
+    assert toolchain_list in tool_script
+    assert toolchain_install in tool_script
+    setting_position = tool_script.index(persisted_setting_line)
+    assert tool_script.index(stamp_block_end) < setting_position
+    assert setting_position < tool_script.index(toolchain_list)
+    assert setting_position < tool_script.index(toolchain_install)
+    assert "RUSTUP_AUTO_SELF_UPDATE" not in tool_script
+    assert "RUSTUP_AUTO_SELF_UPDATE" not in system_script
+
+
+@pytest.mark.unit
 def test_lima_toolchain_check_requires_a_version_command_for_each_consumer(
     repo_root: Path, tmp_path: Path
 ):
