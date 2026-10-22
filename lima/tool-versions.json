@@ -378,7 +378,7 @@
       }
     },
     "pipenv": {
-      "version": "2026.9.0",
+      "version": "2026.9.1",
       "datasource": "pypi",
       "depName": "pipenv",
       "integrity": "version-only",
@@ -549,7 +549,7 @@
       }
     },
     "renovatebot_hooks": {
-      "version": "44.150.1",
+      "version": "44.151.1",
       "datasource": "github-tags",
       "depName": "renovatebot/pre-commit-hooks",
       "integrity": "version-only",
