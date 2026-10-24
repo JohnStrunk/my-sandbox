@@ -81,7 +81,7 @@
       }
     },
     "node": {
-      "version": "24.21.0",
+      "version": "24.22.0",
       "datasource": "node-version",
       "depName": "node",
       "integrity": "version-only",
@@ -549,7 +549,7 @@
       }
     },
     "renovatebot_hooks": {
-      "version": "44.155.2",
+      "version": "44.155.8",
       "datasource": "github-tags",
       "depName": "renovatebot/pre-commit-hooks",
       "integrity": "version-only",
