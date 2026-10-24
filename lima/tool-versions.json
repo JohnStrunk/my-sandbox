@@ -200,7 +200,7 @@
       }
     },
     "opencode": {
-      "version": "2.0.28",
+      "version": "2.0.29",
       "datasource": "npm",
       "depName": "@opencode/cli",
       "integrity": "version-only",
@@ -549,7 +549,7 @@
       }
     },
     "renovatebot_hooks": {
-      "version": "44.155.8",
+      "version": "44.158.0",
       "datasource": "github-tags",
       "depName": "renovatebot/pre-commit-hooks",
       "integrity": "version-only",
