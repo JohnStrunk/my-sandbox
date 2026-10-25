@@ -492,7 +492,7 @@
       }
     },
     "pre_commit": {
-      "version": "4.6.2",
+      "version": "4.7.0",
       "datasource": "pypi",
       "depName": "pre-commit",
       "integrity": "version-only",
