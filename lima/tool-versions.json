@@ -396,21 +396,21 @@
       }
     },
     "ast_grep": {
-      "version": "0.50.0",
+      "version": "0.51.0",
       "datasource": "github-releases",
       "depName": "ast-grep/ast-grep",
       "integrity": "sha256",
       "artifacts": {
         "amd64": {
-          "version": "0.50.0",
-          "sha256": "0fd3f489639abb8465a914b74b8779171577582318d8a940d00399f59dba81c5",
+          "version": "0.51.0",
+          "sha256": "a7eead5552d3a8daad70f5d50d935da44bd0c138e946b5b0a96b1d38169fa639",
           "depName": "ast-grep/ast-grep-amd64",
           "packageName": "ast-grep/ast-grep",
           "datasource": "github-release-attachments"
         },
         "arm64": {
-          "version": "0.50.0",
-          "sha256": "3a4ad22dd1dca7a4900a173de65885578617af57fa13dd93b8d345d6b352770e",
+          "version": "0.51.0",
+          "sha256": "73af0ebe5958acee012754a5b2826a186580ef83333092408a7a01096fc30b8b",
           "depName": "ast-grep/ast-grep-arm64",
           "packageName": "ast-grep/ast-grep",
           "datasource": "github-release-attachments"
