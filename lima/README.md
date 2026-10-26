@@ -232,8 +232,8 @@ and an immutable source commit. Its wrapper installs that locked environment
 without credentials, forwarding the Rust toolchain locations (`RUSTUP_HOME` and
 `CARGO_HOME`) when they are set so a dependency without a prebuilt wheel can
 still be built from source. It then starts the child with only its own
-credentials, `HOME`, and a minimal `PATH`; OpenCode's unrelated provider tokens
-are not inherited by that process.
+credentials, `HOME`, a minimal `PATH`, and the pinned CA bundle; OpenCode's
+unrelated provider tokens are not inherited by that process.
 
 GitHub operations use the forwarded `gh` CLI and host `gh` authentication.
 This gh-only policy is recorded in

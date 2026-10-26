@@ -276,8 +276,8 @@ def _run_the_source_wrapper(
 def test_the_source_wrapper_restricts_child_environment(
     repo_root: Path, isolated_env: dict[str, str], tmp_path: Path
 ):
-    rustup_home = str(tmp_path / "rustup-home")
-    cargo_home = str(tmp_path / "cargo-home")
+    rustup_home = str(tmp_path / "rustup home")
+    cargo_home = str(tmp_path / "cargo home")
     captures = _run_the_source_wrapper(
         repo_root,
         isolated_env,
@@ -334,6 +334,29 @@ def test_the_source_wrapper_restricts_child_environment(
     assert "GH_TOKEN" not in mcp_env
     assert "RUSTUP_HOME" not in mcp_env
     assert "CARGO_HOME" not in mcp_env
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("forwarded", ["RUSTUP_HOME", "CARGO_HOME"])
+def test_the_source_wrapper_forwards_each_toolchain_variable_independently(
+    repo_root: Path,
+    isolated_env: dict[str, str],
+    tmp_path: Path,
+    forwarded: str,
+):
+    omitted = "CARGO_HOME" if forwarded == "RUSTUP_HOME" else "RUSTUP_HOME"
+    value = str(tmp_path / "toolchain home")
+    env = {
+        name: item
+        for name, item in isolated_env.items()
+        if name not in {"RUSTUP_HOME", "CARGO_HOME"}
+    }
+
+    captures = _run_the_source_wrapper(repo_root, env, tmp_path, {forwarded: value})
+
+    uv_env, _ = captures["uv"]
+    assert uv_env[forwarded] == value
+    assert omitted not in uv_env
 
 
 @pytest.mark.unit
