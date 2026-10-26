@@ -172,6 +172,12 @@ jobs:
           env UV_CACHE_DIR="${HOME}/.cache/uv"
           ./scripts/run-unit-tests.sh
 
+      - name: Verify The Source MCP environment installs
+        run: >-
+          ./scripts/sanitized-test.sh --
+          env UV_CACHE_DIR="${HOME}/.cache/uv"
+          ./scripts/verify-the-source-mcp-install.sh
+
   vm:
     name: "VM Tests"
     runs-on: ubuntu-latest
