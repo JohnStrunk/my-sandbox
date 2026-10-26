@@ -12,6 +12,16 @@ uv_bin="$(command -v uv)" || {
 venv="$HOME/.local/state/devbox-toolchain/the-source-mcp"
 ca_bundle=/etc/ssl/certs/ca-certificates.crt
 
+# The Rust toolchain lives in the toolbuilder home, so a dependency that has
+# no wheel for this interpreter needs these paths to build from source.
+toolchain_env=()
+if [[ -n "${RUSTUP_HOME:-}" ]]; then
+  toolchain_env+=("RUSTUP_HOME=$RUSTUP_HOME")
+fi
+if [[ -n "${CARGO_HOME:-}" ]]; then
+  toolchain_env+=("CARGO_HOME=$CARGO_HOME")
+fi
+
 /usr/bin/env -i \
   HOME="${HOME:?OpenCode did not provide HOME}" \
   PATH="${PATH:?OpenCode did not provide PATH}" \
@@ -19,6 +29,7 @@ ca_bundle=/etc/ssl/certs/ca-certificates.crt
   REQUESTS_CA_BUNDLE="$ca_bundle" \
   UV_CACHE_DIR="$HOME/.cache/uv" \
   UV_PROJECT_ENVIRONMENT="$venv" \
+  "${toolchain_env[@]}" \
   "$uv_bin" sync --project "$source_project" --locked
 
 for name in \

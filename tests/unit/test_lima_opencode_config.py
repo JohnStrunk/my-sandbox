@@ -201,14 +201,22 @@ def test_vm_config_rejects_non_https_or_invalid_enmaas_endpoint(
     assert api_key not in result.stderr
 
 
-@pytest.mark.unit
-def test_the_source_wrapper_restricts_child_environment(
-    repo_root: Path, isolated_env: dict[str, str], tmp_path: Path
-):
+Capture = tuple[dict[str, str], list[str]]
+
+
+def _run_the_source_wrapper(
+    repo_root: Path,
+    isolated_env: dict[str, str],
+    tmp_path: Path,
+    extra_env: dict[str, str],
+) -> dict[str, Capture]:
+    """Run the wrapper with capture scripts for the uv and igloo-mcp children."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    uv_capture = tmp_path / "uv-capture.txt"
-    mcp_capture = tmp_path / "mcp-capture.txt"
+    capture_paths = {
+        "uv": tmp_path / "uv-capture.txt",
+        "mcp": tmp_path / "mcp-capture.txt",
+    }
 
     def write_capture_script(path: Path, capture: Path) -> None:
         path.write_text(
@@ -219,29 +227,32 @@ def test_the_source_wrapper_restricts_child_environment(
         )
         path.chmod(path.stat().st_mode | 0o111)
 
-    uv = bin_dir / "uv"
-    write_capture_script(uv, uv_capture)
+    write_capture_script(bin_dir / "uv", capture_paths["uv"])
     mcp_venv = (
         Path(isolated_env["HOME"]) / ".local/state/devbox-toolchain/the-source-mcp"
     )
     mcp = mcp_venv / "bin/igloo-mcp"
     mcp.parent.mkdir(parents=True)
-    write_capture_script(mcp, mcp_capture)
+    write_capture_script(mcp, capture_paths["mcp"])
 
-    env = isolated_env | {
-        "PATH": f"{bin_dir}:{isolated_env['PATH']}",
-        "IGLOO_MCP_COMMUNITY": "mock-community",
-        "IGLOO_MCP_COMMUNITY_KEY": "mock-community-key",  # pragma: allowlist secret
-        "IGLOO_MCP_APP_PASS": "mock-app-pass",  # pragma: allowlist secret
-        "IGLOO_MCP_APP_ID": "mock-app-id",
-        "IGLOO_MCP_USERNAME": "mock-username",
-        "IGLOO_MCP_PASSWORD": "mock-password",  # pragma: allowlist secret
-        "IGLOO_MCP_SERVER_NAME": "The Source",
-        "IGLOO_MCP_SERVER_INSTRUCTIONS": "mock instructions",
-        "GH_TOKEN": "must-not-leak",  # pragma: allowlist secret
-        "ANTHROPIC_API_KEY": "must-not-leak",  # pragma: allowlist secret
-        "TAVILY_API_KEY": "must-not-leak",  # pragma: allowlist secret
-    }
+    env = (
+        isolated_env
+        | extra_env
+        | {
+            "PATH": f"{bin_dir}:{isolated_env['PATH']}",
+            "IGLOO_MCP_COMMUNITY": "mock-community",
+            "IGLOO_MCP_COMMUNITY_KEY": "mock-community-key",  # pragma: allowlist secret
+            "IGLOO_MCP_APP_PASS": "mock-app-pass",  # pragma: allowlist secret
+            "IGLOO_MCP_APP_ID": "mock-app-id",
+            "IGLOO_MCP_USERNAME": "mock-username",
+            "IGLOO_MCP_PASSWORD": "mock-password",  # pragma: allowlist secret
+            "IGLOO_MCP_SERVER_NAME": "The Source",
+            "IGLOO_MCP_SERVER_INSTRUCTIONS": "mock instructions",
+            "GH_TOKEN": "must-not-leak",  # pragma: allowlist secret
+            "ANTHROPIC_API_KEY": "must-not-leak",  # pragma: allowlist secret
+            "TAVILY_API_KEY": "must-not-leak",  # pragma: allowlist secret
+        }
+    )
 
     result = run_in_process_group(
         ["bash", str(repo_root / "lima/run-the-source-mcp.sh")],
@@ -252,13 +263,29 @@ def test_the_source_wrapper_restricts_child_environment(
 
     assert result.returncode == 0, result.stderr
 
-    def captured(path: Path) -> tuple[dict[str, str], list[str]]:
+    def captured(path: Path) -> Capture:
         env_text, args_text = path.read_text().split("--ARGS--\n", maxsplit=1)
         child_env = dict(line.split("=", maxsplit=1) for line in env_text.splitlines())
         child_args = [line[1:-1] for line in args_text.splitlines()]
         return child_env, child_args
 
-    uv_env, uv_args = captured(uv_capture)
+    return {name: captured(path) for name, path in capture_paths.items()}
+
+
+@pytest.mark.unit
+def test_the_source_wrapper_restricts_child_environment(
+    repo_root: Path, isolated_env: dict[str, str], tmp_path: Path
+):
+    rustup_home = str(tmp_path / "rustup-home")
+    cargo_home = str(tmp_path / "cargo-home")
+    captures = _run_the_source_wrapper(
+        repo_root,
+        isolated_env,
+        tmp_path,
+        {"RUSTUP_HOME": rustup_home, "CARGO_HOME": cargo_home},
+    )
+
+    uv_env, uv_args = captures["uv"]
     assert set(uv_env) == {
         "HOME",
         "PATH",
@@ -266,10 +293,14 @@ def test_the_source_wrapper_restricts_child_environment(
         "REQUESTS_CA_BUNDLE",
         "UV_CACHE_DIR",
         "UV_PROJECT_ENVIRONMENT",
+        "RUSTUP_HOME",
+        "CARGO_HOME",
         "PWD",
         "SHLVL",
         "_",
     }
+    assert uv_env["RUSTUP_HOME"] == rustup_home
+    assert uv_env["CARGO_HOME"] == cargo_home
     assert uv_args == [
         "sync",
         "--project",
@@ -277,7 +308,7 @@ def test_the_source_wrapper_restricts_child_environment(
         "--locked",
     ]
 
-    mcp_env, mcp_args = captured(mcp_capture)
+    mcp_env, mcp_args = captures["mcp"]
     assert set(mcp_env) == {
         "HOME",
         "PATH",
@@ -301,6 +332,35 @@ def test_the_source_wrapper_restricts_child_environment(
     assert mcp_args == []
     assert "ANTHROPIC_API_KEY" not in mcp_env
     assert "GH_TOKEN" not in mcp_env
+    assert "RUSTUP_HOME" not in mcp_env
+    assert "CARGO_HOME" not in mcp_env
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "toolchain_env",
+    [
+        pytest.param({}, id="unset"),
+        pytest.param({"RUSTUP_HOME": "", "CARGO_HOME": ""}, id="empty"),
+    ],
+)
+def test_the_source_wrapper_omits_unset_toolchain_environment(
+    repo_root: Path,
+    isolated_env: dict[str, str],
+    tmp_path: Path,
+    toolchain_env: dict[str, str],
+):
+    env = {
+        name: value
+        for name, value in isolated_env.items()
+        if name not in {"RUSTUP_HOME", "CARGO_HOME"}
+    }
+
+    captures = _run_the_source_wrapper(repo_root, env, tmp_path, toolchain_env)
+
+    uv_env, _ = captures["uv"]
+    assert "RUSTUP_HOME" not in uv_env
+    assert "CARGO_HOME" not in uv_env
 
 
 @pytest.mark.unit
