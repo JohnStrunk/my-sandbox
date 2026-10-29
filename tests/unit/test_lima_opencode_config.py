@@ -438,9 +438,21 @@ def test_installed_vm_opencode_accepts_overlay_and_global_enmaas_config_schema(
         pytest.skip("requires the provisioned Lima VM OpenCode installation")
 
     expected_version = json.loads(manifest.read_text())["tools"]["opencode"]["version"]
-    version = subprocess.run(
-        [opencode, "--version"], check=True, capture_output=True, text=True
-    ).stdout.strip()
+    # `isolated_env` is required here: the `host_credentials` fixture deliberately
+    # poisons os.environ (including OPENCODE_CONFIG*), and inheriting it would
+    # make the version probe fail for reasons unrelated to the pinned install.
+    version_result = subprocess.run(
+        [opencode, "--version"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=isolated_env,
+    )
+    assert version_result.returncode == 0, (
+        f"`opencode --version` exited {version_result.returncode}:\n"
+        f"stdout:\n{version_result.stdout}\nstderr:\n{version_result.stderr}"
+    )
+    version = version_result.stdout.strip()
     assert expected_version in version
 
     schema_env = isolated_env | {
@@ -550,16 +562,18 @@ def test_installed_vm_opencode_accepts_overlay_and_global_enmaas_config_schema(
                 server.wait(timeout=5)
     assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
     sources = json.loads(result.stdout)
+    # OpenCode 2.x treats experimental.policies as deprecated and merges it into
+    # top-level policies, so debug config reports the effective top-level form.
     generated = next(
         (
             source["info"]
             for source in sources
-            if source.get("info", {}).get("experimental", {}).get("policies")
+            if source.get("info", {}).get("policies")
         ),
         None,
     )
     assert generated is not None, "OpenCode omitted the generated runtime overlay"
-    assert generated["experimental"]["policies"] == config["experimental"]["policies"]
+    assert generated["policies"] == config["experimental"]["policies"]
     assert generated["mcp"]["servers"]["semble"]["command"] == ["semble"]
     assert set(generated["mcp"]["servers"]) == {
         "semble",
