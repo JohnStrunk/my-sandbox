@@ -549,7 +549,7 @@
       }
     },
     "renovatebot_hooks": {
-      "version": "44.167.7",
+      "version": "44.168.2",
       "datasource": "github-tags",
       "depName": "renovatebot/pre-commit-hooks",
       "integrity": "version-only",
