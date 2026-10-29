@@ -1,6 +1,7 @@
 import hashlib
 import json
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -171,6 +172,136 @@ def _simulate_renovate_artifact_update(
         )
         updates.append((dep_name, candidate_tag, new_digest))
     return manifest_text, list(reversed(updates))
+
+
+_ARBITRARY_DOCKER_VERSIONS = {
+    "docker_ce": "98.7.6",
+    "containerd_io": "97.6.5",
+    "docker_buildx_plugin": "96.5.4",
+}
+
+
+def _shell_function(script: str, name: str) -> str:
+    match = re.search(rf"(?ms)^{re.escape(name)}\(\) \{{\n.*?^\}}$", script)
+    assert match, f"missing shell function {name!r} in provision-system.sh"
+    return match.group(0)
+
+
+def _docker_rpm_pin_block(script: str) -> str:
+    match = re.search(
+        r'(?ms)^docker_version="\$\(manifest_version docker_ce\)"\n'
+        r".*?^  exit 1\n^fi$",
+        script,
+    )
+    assert match, "missing Docker RPM pin block in provision-system.sh"
+    return match.group(0)
+
+
+def _write_executable(path: Path, contents: str) -> None:
+    path.write_text(contents)
+    path.chmod(0o755)
+
+
+def _fake_docker_rpm_tools(tmp_path: Path) -> tuple[Path, Path, Path]:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    state = tmp_path / "installed-rpms"
+    log = tmp_path / "dnf.log"
+    _write_executable(
+        fake_bin / "rpm",
+        """#!/usr/bin/env bash
+set -euo pipefail
+package="${!#}"
+[[ -f "$RPM_STATE" ]] || exit 1
+grep -m1 -- "^${package} " "$RPM_STATE"
+""",
+    )
+    # The extracted production block clears the dnf cache; intercept that
+    # exact command so the harness never touches the host filesystem.
+    _write_executable(
+        fake_bin / "rm",
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$*" != "-rf /var/cache/dnf" ]]; then
+  echo "unexpected rm invocation: $*" >&2
+  exit 64
+fi
+printf 'rm %s\\n' "$*" >>"$DNF_LOG"
+""",
+    )
+    _write_executable(
+        fake_bin / "dnf",
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >>"$DNF_LOG"
+if [[ "$1 $2" == "clean all" ]]; then exit 0; fi
+[[ "$1" == install ]] || { echo "unexpected dnf invocation: $*" >&2; exit 64; }
+: >"$RPM_STATE"
+for argument in "$@"; do
+  case "$argument" in
+    docker-ce-3:*)
+      printf 'docker-ce 3 %s\\n' "${argument#docker-ce-3:}" >>"$RPM_STATE"
+      ;;
+    docker-ce-cli-1:*)
+      printf 'docker-ce-cli 1 %s\\n' "${argument#docker-ce-cli-1:}" >>"$RPM_STATE"
+      ;;
+    containerd.io-*)
+      printf 'containerd.io 0 %s\\n' "${argument#containerd.io-}" >>"$RPM_STATE"
+      ;;
+    docker-buildx-plugin-0:*)
+      printf 'docker-buildx-plugin 0 %s\\n' \
+        "${argument#docker-buildx-plugin-0:}" >>"$RPM_STATE"
+      ;;
+  esac
+done
+if [[ "${DNF_INSTALL_DRIFT:-}" == 1 ]]; then
+  awk '{ $3 = $3 "-drift"; print }' "$RPM_STATE" >"$RPM_STATE.drift"
+  mv "$RPM_STATE.drift" "$RPM_STATE"
+fi
+""",
+    )
+    return fake_bin, state, log
+
+
+def _run_docker_rpm_pin_block(
+    repo_root: Path,
+    fake_bin: Path,
+    manifest: Path,
+    state: Path,
+    log: Path,
+    *,
+    drift: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    script = (repo_root / "lima" / "provision-system.sh").read_text()
+    harness = (
+        "\n\n".join(
+            (
+                "set -euo pipefail",
+                "declare -A VERSION_ONLY_DIAGNOSTICS=()",
+                _shell_function(script, "manifest_integrity_policy"),
+                _shell_function(script, "report_version_only"),
+                _shell_function(script, "manifest_version"),
+                _docker_rpm_pin_block(script),
+            )
+        )
+        + "\n"
+    )
+    env = {
+        "PATH": f"{fake_bin}:/usr/bin:/bin",
+        "MANIFEST": str(manifest),
+        "RPM_STATE": str(state),
+        "DNF_LOG": str(log),
+    }
+    if drift:
+        env["DNF_INSTALL_DRIFT"] = "1"
+    return subprocess.run(
+        ["bash", "-c", harness],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=15,
+    )
 
 
 @pytest.mark.unit
@@ -465,22 +596,58 @@ def test_rust_renovate_pin_uses_full_semver(repo_root: Path):
 
 
 @pytest.mark.unit
-def test_docker_engine_containerd_and_buildx_rpm_set_requires_review(
-    repo_root: Path,
+def test_docker_rpm_pins_follow_the_manifest_through_install_and_verify(
+    repo_root: Path, tmp_path: Path
 ):
-    manifest = json.loads((repo_root / "lima" / "tool-versions.json").read_text())
-    tools = manifest["tools"]
-    pinned_set = (
-        tools["docker_ce"]["version"],
-        tools["containerd_io"]["version"],
-        tools["docker_buildx_plugin"]["version"],
-    )
-    reviewed_sets = {("29.9.0", "2.3.6", "0.38.0")}
+    """Arbitrary manifest pins drive the Docker RPM install and re-check.
 
-    assert pinned_set in reviewed_sets, (
-        "Review Docker Fedora 44 stable RPM metadata for x86_64 and aarch64, "
-        "then update docker_ce, containerd_io, docker_buildx_plugin, and this "
-        f"approved version set together; got {pinned_set!r}"
+    Provisioning installs the exact manifest versions and then re-reads the
+    installed RPM identities, so a test-maintained "approved" version tuple
+    would only block Renovate bumps. Exercise the real pin block with fake
+    RPMs so the version pass-through and the mismatch rejection are covered
+    without live network or package installation.
+    """
+    manifest = json.loads((repo_root / "lima" / "tool-versions.json").read_text())
+    for tool, version in _ARBITRARY_DOCKER_VERSIONS.items():
+        manifest["tools"][tool]["version"] = version
+    manifest_path = tmp_path / "tool-versions.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+
+    fake_bin, state, log = _fake_docker_rpm_tools(tmp_path)
+    docker = _ARBITRARY_DOCKER_VERSIONS["docker_ce"]
+    containerd = _ARBITRARY_DOCKER_VERSIONS["containerd_io"]
+    buildx = _ARBITRARY_DOCKER_VERSIONS["docker_buildx_plugin"]
+
+    installed = _run_docker_rpm_pin_block(
+        repo_root, fake_bin, manifest_path, state, log
+    )
+
+    assert installed.returncode == 0, installed.stderr
+    install_command = log.read_text()
+    assert "rm -rf /var/cache/dnf" in install_command
+    for pin in (
+        f"docker-ce-3:{docker}",
+        f"docker-ce-cli-1:{docker}",
+        f"containerd.io-{containerd}",
+        f"docker-buildx-plugin-0:{buildx}",
+    ):
+        assert pin in install_command
+    assert state.read_text().splitlines() == [
+        f"docker-ce 3 {docker}",
+        f"docker-ce-cli 1 {docker}",
+        f"containerd.io 0 {containerd}",
+        f"docker-buildx-plugin 0 {buildx}",
+    ]
+
+    state.unlink()
+    drifted = _run_docker_rpm_pin_block(
+        repo_root, fake_bin, manifest_path, state, log, drift=True
+    )
+
+    assert drifted.returncode != 0
+    assert (
+        "Docker CE/containerd/Buildx RPMs do not match the manifest pins"
+        in drifted.stderr
     )
 
 

@@ -443,11 +443,10 @@ its exact version, plus `make`, Python/pip, and ShellCheck.
 
 The VM provisions **Docker CE Engine, its official CLI, `containerd.io`, and
 the Docker Buildx CLI plugin** from Docker's Fedora stable RPM repository. The
-manifest pins Docker CE 29.9.0, containerd 2.3.6, and Buildx 0.38.0 for both
-supported architectures. The RPM release suffix is resolved from the official
-repo for Fedora 44; package versions and Docker RPM epochs are checked after
-installation. DNF
-verifies repository metadata and package signatures with a committed,
+manifest pins their versions for both supported architectures. The RPM release
+suffix is resolved from the official repo for Fedora 44; package versions and
+Docker RPM epochs are checked after installation. DNF verifies repository
+metadata and package signatures with a committed,
 SHA-256-pinned Docker key
 (`060A 61C5 1B55 8A7F 742B 77AA C52F EB6B 621E 9F35`, `gpgcheck=1`,
 `repo_gpgcheck=1`).
@@ -455,12 +454,19 @@ The Docker repo is disabled for ordinary guest `dnf` operations and enabled only
 for the pinned install transaction. Provisioning skips third-party RPM
 scriptlets as root. Docker CE is not a Podman alias, wrapper, or `podman-docker`
 package.
-The `containerd_io` pin follows the containerd version packaged by Docker.
-Renovate updates for that pin and Buildx are disabled until Docker publishes
-the matching Fedora RPMs for both supported architectures. A unit-test allowlist
-blocks unreviewed pin changes; when updating any of these versions, verify the
-Engine, CLI, containerd, and Buildx RPMs for Fedora 44 x86_64 and aarch64, then
-update all three pins and the reviewed version set together.
+The `containerd_io` RPM is pinned separately from Docker Engine.
+Renovate updates for that pin and Buildx are disabled pending manual review of
+matching Fedora RPM availability for both supported architectures and
+compatibility. When updating any of these versions, run
+`uv run --isolated --no-sync python scripts/check_docker_rpm_availability.py`.
+It checks Docker's Fedora stable repodata for the Fedora release configured by
+the matching x86_64 and aarch64 cloud-image URLs in `lima/devbox.yaml`, and for
+the exact manifest versions and RPM epochs of Engine, CLI, containerd.io, and
+Buildx on both architectures (any package release), then HEADs each matched
+artifact. This proves metadata and artifact availability only. DNF still
+verifies repository metadata and RPM signatures with the pinned Docker key, the
+provisioned x86_64 VM tier exercises runtime compatibility, and aarch64 runtime
+behavior remains unverified. The gate does not resolve dependencies.
 
 Docker runs as the rootful system daemon inside the Lima guest. Buildx is
 available through `docker buildx`; the optional `docker-compose-plugin` RPM is
@@ -576,8 +582,7 @@ VMX/SVM, `qemu-kvm`, and working system libvirt. Select the intended backend:
 
 ```shell
 # Run the complete five-path smoke matrix from inside the provisioned VM.
-# Pins: kind 0.33.0, Kubernetes 1.37.0, Minikube 1.39.0,
-# Docker CE 29.9.0, and kubectl 1.37.1.
+# Tool versions are pinned in lima/tool-versions.json.
 lima/validate-kind.sh docker 1       # kind through the guest's rootful Docker CE
 lima/validate-kind.sh podman 1       # kind through rootless Podman
 lima/validate-minikube.sh docker     # Minikube Docker CE driver

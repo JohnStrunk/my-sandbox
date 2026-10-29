@@ -182,7 +182,8 @@ credential mounts.
 The #319 backend matrix explicitly exercises kind+Docker CE, kind+Podman,
 Minikube+Docker CE, Minikube+Podman, and Minikube+KVM2. It pins kind 0.33.0's
 Kubernetes 1.37.0 node image by digest and starts Minikube with Kubernetes
-1.37.0; Minikube 1.39.0, Docker CE 29.9.0, and kubectl 1.37.1 are also pinned.
+1.37.0; Minikube, Docker CE, and kubectl versions are pinned in
+`lima/tool-versions.json`.
 Every smoke uses a digest-pinned BusyBox workload. Validators require explicit
 driver selection and never fall back or skip. Tests verify the actual
 Docker/Podman node resource or KVM2 libvirt L2 domain, then delete the cluster
@@ -219,6 +220,16 @@ pin, run:
 python3 scripts/validate_tool_versions.py
 python3 scripts/verify_provenance.py
 ```
+
+When changing a Docker CE, containerd.io, or Buildx pin, also run
+`uv run --isolated --no-sync python scripts/check_docker_rpm_availability.py`.
+It checks Docker's Fedora stable repodata for the Fedora release configured by
+`lima/devbox.yaml` on both supported architectures for the exact manifest
+versions and RPM epochs, and HEADs each matched package. The two cloud-image
+URLs must agree on the release or the check fails closed. This is an
+availability gate only: DNF signature verification and the x86_64 VM tier
+remain authoritative for integrity and runtime compatibility, and the check
+does not resolve dependencies.
 
 Every tool and downloaded agent skill in the manifest declares an explicit
 `integrity` policy: `sha256` or `version-only`. The checksum-managed release

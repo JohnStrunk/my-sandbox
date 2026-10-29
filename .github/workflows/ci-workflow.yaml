@@ -178,6 +178,15 @@ jobs:
           env UV_CACHE_DIR="${HOME}/.cache/uv"
           ./scripts/verify-the-source-mcp-install.sh
 
+      - name: Check Docker RPM availability
+        # Deliberate network gate: read Docker's Fedora stable repodata for
+        # both supported architectures. `--isolated --no-sync` selects the
+        # pyproject Python (3.15), whose stdlib provides compression.zstd.
+        run: >-
+          ./scripts/sanitized-test.sh --
+          uv run --isolated --no-sync python
+          scripts/check_docker_rpm_availability.py
+
   vm:
     name: "VM Tests"
     runs-on: ubuntu-latest
