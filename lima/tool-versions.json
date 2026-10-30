@@ -280,7 +280,7 @@
       }
     },
     "docker_ce": {
-      "version": "29.9.1",
+      "version": "29.9.2",
       "datasource": "github-releases",
       "depName": "moby/moby",
       "integrity": "version-only",
@@ -549,7 +549,7 @@
       }
     },
     "renovatebot_hooks": {
-      "version": "44.172.0",
+      "version": "44.172.1",
       "datasource": "github-tags",
       "depName": "renovatebot/pre-commit-hooks",
       "integrity": "version-only",
