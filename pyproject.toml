@@ -3,7 +3,7 @@ name = "my-sandbox"
 version = "0.1.0"
 description = "Tests and tooling for my-sandbox"
 readme = "README.md"
-requires-python = "==3.15.0"
+requires-python = "==3.15.1"
 dependencies = []
 
 [project.optional-dependencies]
