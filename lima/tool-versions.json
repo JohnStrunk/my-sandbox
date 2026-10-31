@@ -149,7 +149,7 @@
       }
     },
     "markdownlint_cli2": {
-      "version": "0.23.3",
+      "version": "0.24.0",
       "datasource": "npm",
       "depName": "markdownlint-cli2",
       "integrity": "version-only",
@@ -378,7 +378,7 @@
       }
     },
     "pipenv": {
-      "version": "2026.10.1",
+      "version": "2026.10.2",
       "datasource": "pypi",
       "depName": "pipenv",
       "integrity": "version-only",
@@ -483,7 +483,7 @@
       }
     },
     "coderabbit_cli": {
-      "version": "0.9.1",
+      "version": "0.9.2",
       "datasource": "custom.coderabbit-cli",
       "depName": "coderabbit-cli",
       "integrity": "version-only",
@@ -549,7 +549,7 @@
       }
     },
     "renovatebot_hooks": {
-      "version": "44.173.0",
+      "version": "44.174.0",
       "datasource": "github-tags",
       "depName": "renovatebot/pre-commit-hooks",
       "integrity": "version-only",
