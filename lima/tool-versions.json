@@ -169,21 +169,21 @@
       }
     },
     "antigravity_cli": {
-      "version": "1.4.3",
+      "version": "1.4.4",
       "datasource": "github-releases",
       "depName": "google-antigravity/antigravity-cli",
       "integrity": "sha256",
       "artifacts": {
         "amd64": {
-          "version": "1.4.3",
-          "sha256": "319b2cb3240d244930bd077033b466941fd7ba6f0881d783eee801dbd2fb9371",
+          "version": "1.4.4",
+          "sha256": "9ae4f7f0667a2868e15bb9ad93819ff7527c7187f12d12e3b5191137c726287b",
           "depName": "google-antigravity/antigravity-cli-amd64",
           "packageName": "google-antigravity/antigravity-cli",
           "datasource": "github-release-attachments"
         },
         "arm64": {
-          "version": "1.4.3",
-          "sha256": "045aa7112f574ef97f8320a65d30a555c4ce9bdd5e3d56d40fce7e262ca98cda",
+          "version": "1.4.4",
+          "sha256": "57a96abbc94745a5faf4f24e878766a1882b9aa4c4b83ba567717d8206745f5a",
           "depName": "google-antigravity/antigravity-cli-arm64",
           "packageName": "google-antigravity/antigravity-cli",
           "datasource": "github-release-attachments"
