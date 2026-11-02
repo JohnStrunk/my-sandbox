@@ -488,149 +488,24 @@ fi
 # Provides the VM toolchain, Ruby/OpenSSL build dependencies, Playwright's
 # headless Chromium libraries, and the nested-VM/operator runtime. Lima itself
 # provides the subuid/subgid ranges, cgroup-v2 delegation, and linger for
-# rootless Podman.
-packages=(
-  aardvark-dns
-  alsa-lib
-  at-spi2-atk
-  atk
-  ca-certificates
-  container-selinux
-  cups-libs
-  curl
-  diffutils
-  difftastic
-  edk2-ovmf
-  acl
-  ffmpeg-free
-  fd-find
-  # Fedora's stable archive repository keeps older Ruby builds resolvable
-  # after updates repodata drops them; normal repos still take precedence.
-  fedora-repos-archive
-  file
-  fontconfig
-  fuse-overlayfs
-  gcc
-  gh
-  git
-  glab
-  glibc-devel
-  gtk3
-  hyperfine
-  jq
-  just
-  libffi-devel
-  libselinux-utils
-  libvirt-client
-  libvirt-daemon-config-network
-  libvirt-daemon-kvm
-  libXcomposite
-  libXdamage
-  libXext
-  libXfixes
-  libXi
-  libXrandr
-  libdrm
-  libxkbcommon
-  libyaml-devel
-  make
-  mesa-libgbm
-  netavark
-  nss
-  openssl
-  patch
-  passt
-  perl-File-Compare
-  perl-File-Copy
-  perl-FindBin
-  perl-IPC-Cmd
-  policycoreutils
-  podman
-  procps-ng
-  python3
-  python3-pip
-  qemu-img
-  qemu-kvm
-  ripgrep
-  rubypick
-  shadow-utils
-  shadow-utils-subid
-  ShellCheck
-  slirp4netns
-  tokei
-  unzip
-  zlib-ng-compat-devel # Provides zlib-devel; rpm -q requires this concrete RPM name.
-)
-missing=()
-for package in "${packages[@]}"; do
-  rpm -q "$package" >/dev/null 2>&1 || missing+=("$package")
-done
-if ((${#missing[@]})); then
-  dnf install -y --setopt=install_weak_deps=False "${missing[@]}"
-  dnf clean all
-  rm -rf /var/cache/dnf
-fi
-
-# Fail before a version-qualified DNF install when the manifest's Ruby pin is
-# not published as a Fedora stable package. Fedora's archive repository keeps
-# published builds resolvable, but a pin that no repository provides must stop
-# provisioning with actionable guidance instead of a bare DNF "No match for
-# argument" that leaves cloud-init and the user provisioner degraded.
-require_ruby_package_available() {
-  local version="$1" output status=0
-
-  # The runtime check compares `ruby --version`, which reports a plain
-  # major.minor.patch version. Reject RPM release suffixes and other
-  # qualifiers here instead of reporting them as an unavailable Fedora package.
-  if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo "devbox: invalid Ruby pin '$version' in lima/tool-versions.json" >&2
-    echo "devbox: expected a plain X.Y.Z (major.minor.patch) upstream version without" >&2
-    echo "devbox: an RPM release suffix or pre-release qualifier" >&2
-    return 1
-  fi
-
-  # DNF5 exits successfully with empty output when the spec matches nothing,
-  # so a missing exact line, not the exit status alone, means unavailable.
-  output="$(dnf repoquery --available \
-    --queryformat='%{name}-%{version}' "ruby-${version}" 2>&1)" || status=$?
-  if ((status != 0)); then
-    echo "devbox: cannot query Fedora repositories for ruby-${version} (dnf exit ${status})" >&2
-    if [[ -n "$output" ]]; then
-      printf '%s\n' "$output" >&2
-    fi
-    echo "devbox: check repository configuration/connectivity before provisioning Ruby" >&2
-    return 1
-  fi
-  if ! grep -Fxq -- "ruby-${version}" <<<"$output"; then
-    echo "devbox: ruby-${version} is not available from the configured Fedora repositories" >&2
-    echo "devbox: the manifest Ruby pin must be a version Fedora publishes as a stable package;" >&2
-    echo "devbox: check Fedora repository metadata (including the fedora-repos-archive" >&2
-    echo "devbox: archive repository) or update lima/tool-versions.json to a published version" >&2
-    return 1
-  fi
-}
-
-# Fedora's rubypick RPM provides the generic /usr/bin/ruby command and can pull
-# a newer Ruby as a dependency, so allow downgrading to the manifest pin below.
-RUBY_VERSION="$(manifest_version ruby)"
-ruby_output="$(/usr/bin/ruby --version 2>/dev/null)" || ruby_output=""
-if [[ "$ruby_output" != "ruby ${RUBY_VERSION} "* ]]; then
-  # A pin can disappear from current Fedora repodata; fedora-repos-archive is
-  # installed above for that case, but fail fast when no repository has it.
-  # Enforce signature checking for the archive repo explicitly so a pinned
-  # archived RPM is still verified if its shipped repo config drifts.
-  require_ruby_package_available "${RUBY_VERSION}"
-  dnf install -y --allow-downgrade --setopt=install_weak_deps=False \
-    --setopt=updates-archive.gpgcheck=1 \
-    "ruby-${RUBY_VERSION}"
-  dnf clean all
-  rm -rf /var/cache/dnf
-  ruby_output="$(/usr/bin/ruby --version 2>/dev/null)" || ruby_output=""
-fi
-if [[ "$ruby_output" != "ruby ${RUBY_VERSION} "* ]]; then
-  echo "devbox: Ruby runtime does not match manifest pin ${RUBY_VERSION}: ${ruby_output:-unavailable}" >&2
+# rootless Podman. Package sets and the Ruby pin live in the shared
+# fedora-packages.sh so the container preflight checks the same definitions.
+# This digest is embedded at VM create time; changing the shared helper
+# requires recreating the VM rather than sourcing an untrusted live-mount file.
+FEDORA_PACKAGES_SHA256=827aace3e748d4dd1ef1a4a8895858882ccc184ea5ff7d979364ac40ef4bcfae
+fedora_packages_snapshot="$PROVISION_TMP/fedora-packages.sh"
+copy_repo_file lima/fedora-packages.sh "$fedora_packages_snapshot"
+fedora_packages_actual_sha256="$(
+  sha256sum "$fedora_packages_snapshot" | awk '{print $1}'
+)"
+if [[ "$fedora_packages_actual_sha256" != "$FEDORA_PACKAGES_SHA256" ]]; then
+  echo "devbox: lima/fedora-packages.sh does not match the embedded digest; recreate the VM with devbox --recreate" >&2
   exit 1
 fi
+# shellcheck source=/dev/null
+source "$fedora_packages_snapshot"
+devbox_install_fedora_packages vm
+devbox_install_manifest_pinned_ruby "$MANIFEST"
 
 # Rootless Podman stores image layers below the guest user's home. Relabel its
 # graphroot with container-selinux's expected contexts before the user socket

@@ -187,6 +187,37 @@ jobs:
           uv run --isolated --no-sync python
           scripts/check_docker_rpm_availability.py
 
+  container-preflight:
+    name: "Fedora Container Preflight"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        # https://github.com/actions/checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        # https://github.com/docker/setup-buildx-action
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build Fedora 44 preflight image
+        # https://github.com/docker/build-push-action
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: lima/fedora-preflight.Containerfile
+          tags: my-sandbox-fedora-preflight:ci
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run Fedora 44 container preflight
+        run: >-
+          ./scripts/fedora-preflight.sh --no-build
+          --image my-sandbox-fedora-preflight:ci
+
   vm:
     name: "VM Tests"
     runs-on: ubuntu-latest
@@ -212,7 +243,13 @@ jobs:
           preflight_status=$?
           set -e
           if [[ "$preflight_status" -eq 125 ]]; then
-            echo "### VM tier skipped: host KVM is unavailable" >> "$GITHUB_STEP_SUMMARY"
+            {
+              echo "### VM tier skipped (KVM unavailable)"
+              echo
+              echo "No Lima VM was created, provisioned, or readiness-checked."
+              echo "The separate Fedora container preflight checks packages and"
+              echo "manifest pins only; it does not replace this VM tier."
+            } >> "$GITHUB_STEP_SUMMARY"
             exit 0
           elif [[ "$preflight_status" -ne 0 ]]; then
             exit "$preflight_status"
@@ -254,7 +291,13 @@ jobs:
           preflight_status=$?
           set -e
           if [[ "$preflight_status" -eq 125 ]]; then
-            echo "### Recursive VM tier skipped: host nested KVM is unavailable" >> "$GITHUB_STEP_SUMMARY"
+            {
+              echo "### Recursive VM tier skipped (host nested KVM unavailable)"
+              echo
+              echo "No Lima-in-Lima VM was created, provisioned, or readiness-checked."
+              echo "The separate Fedora container preflight checks packages and"
+              echo "manifest pins only; it does not replace this recursive tier."
+            } >> "$GITHUB_STEP_SUMMARY"
             exit 0
           elif [[ "$preflight_status" -ne 0 ]]; then
             exit "$preflight_status"
@@ -269,6 +312,7 @@ jobs:
       - changes
       - pre-commit
       - test
+      - container-preflight
       - vm
       - recursive-vm
     runs-on: ubuntu-latest

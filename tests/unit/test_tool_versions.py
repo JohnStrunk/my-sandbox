@@ -17,6 +17,7 @@ _VALIDATOR_INPUTS = [
     "lima/provision-user.sh",
     "lima/provision-tools.sh",
     "lima/probe-readiness.sh",
+    "lima/fedora-packages.sh",
     "lima/certs/redhat-ipa-ca.crt",
     "lima/certs/redhat-rhcsv2-ca.crt",
     "lima/certs/redhat-root-ca.crt",
@@ -548,12 +549,10 @@ def test_tool_version_validator_reports_missing_ruby_manifest_read(
     copy_root = tmp_path / "repo"
     _copy_validator_inputs(repo_root, copy_root)
 
-    script = copy_root / "lima" / "provision-system.sh"
+    script = copy_root / "lima" / "fedora-packages.sh"
     source = script.read_text()
-    assert "manifest_version ruby" in source
-    script.write_text(
-        source.replace("manifest_version ruby", "manifest_version node", 1)
-    )
+    assert source.count("manifest_version ruby") >= 1
+    script.write_text(source.replace("manifest_version ruby", "manifest_version node"))
 
     errors = validate_tool_versions(copy_root)
 

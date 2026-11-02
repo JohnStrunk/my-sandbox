@@ -138,6 +138,9 @@ param:
 # The system script snapshots provision-tools.sh and the live manifest at boot.
 provision:
   # Root: packages, protected host mounts, isolated pinned toolchain builder.
+  # The embedded system script copies lima/fedora-packages.sh to root-owned
+  # storage and verifies its SHA-256 against the digest embedded at create time
+  # before sourcing it. Changing that helper requires recreating the VM.
   - mode: system
     file: provision-system.sh
   # User: shared-path links, Git identity, gh setup, and skill staging.
