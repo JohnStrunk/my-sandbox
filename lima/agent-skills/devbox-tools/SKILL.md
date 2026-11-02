@@ -201,21 +201,32 @@ shared repository `AGENTS.md` or README.
 
 ### Ruby
 
-- Runtime command: Ruby 4.0.7 from Fedora 44's version-qualified RPM in
-  `updates`, not the GA `fedora` repository; available as `ruby`. Since
-  `updates` can drop superseded versions, fresh provisioning can fail after it
-  advances. Before creating or recreating a VM, keep the manual manifest pin on
-  a version currently available in Fedora 44, not an upstream ruby-lang
-  release. Renovate updates are disabled; update manually after Fedora
-  publishes a matching RPM. Use it for Ruby projects; check with
-  `ruby --version` and run only reviewed code, for example
-  `ruby path/to/script.rb`.
+- Runtime command: `ruby`, provided by Fedora's version-qualified RPM for the
+  manifest pin (currently Ruby 4.0.7 on Fedora 44). This is a Fedora package,
+  not an upstream Ruby build. Fedora's `fedora-repos-archive` package provides
+  the official `updates-archive` repository for previously stable packages.
+- After installation, `updates-archive` remains enabled VM-wide with repo cost
+  `10000` and `skip_if_unavailable=True`, so active `fedora` and `updates` repos
+  are preferred. The archive repo config sets `gpgcheck=1`; DNF RPM GPG
+  signature verification remains enabled.
+- During embedded system provisioning, a DNF preflight checks whether the exact
+  manifest pin can be resolved. If it is no longer in active `fedora`/`updates`
+  metadata, the exact version can be resolved from the previously-stable
+  archive. If no matching RPM is available in enabled Fedora metadata,
+  provisioning fails early with guidance to use a Fedora-published stable
+  version. A post-install check confirms `ruby --version` matches the manifest.
+- Renovate updates are disabled because its Ruby datasource follows upstream
+  releases, not Fedora package availability. Update the manifest pin manually
+  only to a version Fedora has published as stable. Use Ruby for Ruby projects;
+  run only reviewed code, for example `ruby path/to/script.rb`.
 - If `ruby` is unavailable, use the project's documented alternative or skip
   Ruby-dependent steps rather than installing an unpinned runtime. Verify the
   pinned version with `devbox-toolchain-check`.
-- Ruby adds embedded system provisioning and readiness checks. Existing VMs
-  must use `devbox --recreate`; an old embedded installer can fail against the
-  live manifest. Future manifest-only version changes need a VM restart.
+- The archive setup and package preflight are embedded in system provisioning;
+  readiness checks require the installed `ruby` command, while
+  `devbox-toolchain-check` verifies its manifest version. Existing VMs must use
+  `devbox --recreate` to pick up provisioner changes; manifest-only pin changes
+  need a VM restart.
 
 ### Docker CE and Podman runtimes (Lima)
 

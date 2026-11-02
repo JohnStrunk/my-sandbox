@@ -419,12 +419,27 @@ def test_vm_skill_documents_ruby_runtime_verification(repo_root: Path):
         skill.split("### Ruby", 1)[1].split("\n### ", 1)[0].split()
     )
 
-    assert "Ruby 4.0.7 from Fedora 44's version-qualified RPM" in ruby_guidance
-    assert "manifest pin on a version currently available in Fedora 44" in ruby_guidance
-    assert "update manually after Fedora publishes a matching RPM" in ruby_guidance
-    assert "`ruby`" in ruby_guidance
-    assert "`ruby --version`" in ruby_guidance
-    assert "`devbox-toolchain-check`" in ruby_guidance
+    assert "Fedora's version-qualified RPM for the manifest pin" in ruby_guidance
+    assert "currently Ruby 4.0.7 on Fedora 44" in ruby_guidance
+    assert "`fedora-repos-archive`" in ruby_guidance
+    assert (
+        "`updates-archive` remains enabled VM-wide with repo cost `10000` "
+        "and `skip_if_unavailable=True`" in ruby_guidance
+    )
+    assert "previously stable packages" in ruby_guidance
+    assert (
+        "DNF preflight checks whether the exact manifest pin can be resolved"
+        in ruby_guidance
+    )
+    assert (
+        "repo config sets `gpgcheck=1`; DNF RPM GPG signature verification "
+        "remains enabled" in ruby_guidance
+    )
+    assert (
+        "post-install check confirms `ruby --version` matches the manifest"
+        in ruby_guidance
+    )
+    assert "Verify the pinned version with `devbox-toolchain-check`" in ruby_guidance
 
 
 @pytest.mark.unit
@@ -775,9 +790,15 @@ def test_system_script_installs_checksum_pinned_minikube(repo_root: Path):
 @pytest.mark.unit
 def test_system_script_installs_and_verifies_manifest_pinned_ruby(repo_root: Path):
     system_script = _script(repo_root, "provision-system.sh")
+    base_packages = _base_packages(system_script)
+    assert re.search(
+        r"^\s*fedora-repos-archive(?:\s+#.*)?\s*$",
+        base_packages,
+        re.MULTILINE,
+    ), "the Fedora archive repository must be available for pinned RPMs"
     assert re.search(
         r"^\s*rubypick(?:\s+#.*)?\s*$",
-        _base_packages(system_script),
+        base_packages,
         re.MULTILINE,
     ), "Fedora's generic ruby launcher must be installed"
 
@@ -787,6 +808,19 @@ def test_system_script_installs_and_verifies_manifest_pinned_ruby(repo_root: Pat
         system_script,
     )
     assert base_install, "base Fedora package transaction is missing"
+
+    function_definition = re.search(
+        r"(?m)^\s*(?:function\s+)?require_ruby_package_available\s*\(\)\s*\{",
+        system_script,
+    )
+    assert function_definition, "the Ruby package preflight must be defined inline"
+    assert "provision-ruby.sh" not in system_script, (
+        "the Ruby preflight must not be sourced from the writable checkout"
+    )
+    assert not re.search(
+        r"(?m)^\s*(?:source|\.)\s+[\"']?\$\{?DEVBOX_REPO\}?/",
+        system_script,
+    ), "provisioning must not source helper code from the writable checkout"
 
     version_read = re.search(
         r'(?m)^\s*(?P<version_var>[A-Z_][A-Z0-9_]*)="\$\(manifest_version ruby\)"',
@@ -798,14 +832,46 @@ def test_system_script_installs_and_verifies_manifest_pinned_ruby(repo_root: Pat
     )
     version_var = re.escape(version_read.group("version_var"))
 
+    preflight = re.search(
+        r"(?m)^[ \t]*require_ruby_package_available[ \t]+[\"']?\$\{?"
+        + version_var
+        + r"\}?[\"']?[ \t]*$",
+        system_script,
+    )
+    assert preflight, "the Ruby preflight must be a bare statement"
+    assert len(re.findall(preflight.re.pattern, system_script)) == 1, (
+        "the Ruby preflight must run once, only on a runtime mismatch"
+    )
+    assert function_definition.start() < preflight.start(), (
+        "the Ruby preflight must be defined before it is called"
+    )
+
+    runtime_branch = re.search(
+        r'(?m)^if \[\[ "\$ruby_output" != "ruby \$\{?'
+        + version_var
+        + r'\}? "\* \]\]; then\n(?P<body>.*?)^fi$',
+        system_script,
+        re.DOTALL,
+    )
+    assert runtime_branch, "the Ruby runtime mismatch branch is missing"
+    assert runtime_branch.start() <= preflight.start() < runtime_branch.end(), (
+        "the preflight must run only when the runtime version mismatches"
+    )
+
     install = re.search(
         rf"\bdnf\s+install\b[^\n]*(?:\\\n\s*[^\n]*)*"
         rf'"ruby-\$\{{{version_var}\}}"',
         system_script,
     )
     assert install, "Ruby install must use a version-qualified Fedora package"
+    assert preflight.start() < install.start(), (
+        "Ruby package availability must be checked before the install transaction"
+    )
     assert re.search(r"(?<![\w-])--allow-downgrade(?![\w-])", install.group(0)), (
         "Ruby install must allow downgrading to the manifest pin"
+    )
+    assert "--setopt=updates-archive.gpgcheck=1" in install.group(0), (
+        "Ruby install must enable GPG checking for the updates-archive repository"
     )
     assert system_script.count("/usr/bin/ruby --version") == 2
 

@@ -113,9 +113,11 @@ existing instance; recreate it to pick them up (see
 manifest, and the root-owned tool assets are read from the checkout at every
 start. Version-only changes in the live tool manifest are applied on
 stop/start without recreating the VM.
-Ruby support adds Ruby to embedded system provisioning and readiness checks.
-Existing VMs must use `devbox --recreate`; an old embedded installer can fail
-against the live manifest.
+Ruby's Fedora archive setup and package-availability preflight run during
+embedded system provisioning. Readiness checks require the installed `ruby`
+command; `devbox-toolchain-check` verifies its manifest version. Existing VMs
+must use `devbox --recreate` to pick up embedded provisioner changes;
+manifest-only Ruby pin changes apply after a VM restart.
 The Go linter pins and installer are read from the live checkout and apply on
 VM restart. For Go source linters, existing VMs must use `devbox --recreate` to
 embed the updated readiness command checks; a normal restart leaves the old
@@ -934,15 +936,22 @@ the installed versions.
 The manifest explicitly marks each downloaded tool or skill `sha256` or
 `version-only`. Docker CE and containerd use version-only manifest pins, with
 their official RPM packages signature-checked by DNF against the pinned Docker
-key. Ruby 4.0.7 is installed from Fedora 44's version-qualified RPM in the
-`updates` repository, not the GA `fedora` repository. Since `updates` can drop
-superseded versions, fresh provisioning can fail after it advances. Before
-creating or recreating a VM, keep the manual manifest pin on a version
-currently available in Fedora 44, not an upstream ruby-lang release. Renovate
-automatic updates for Ruby are disabled; update the pin manually after Fedora
-publishes a matching RPM. The toolchain checker verifies the pinned runtime
-version, and DNF verifies the RPM's Fedora package signature. Checksum-managed
-releases are
+key. Ruby 4.0.7 is installed from Fedora 44's version-qualified RPM, not an
+upstream Ruby build. Fedora's `fedora-repos-archive` package provides the
+official `updates-archive` repository for previously stable Fedora packages.
+After installation, this repo remains enabled VM-wide with cost `10000` and
+`skip_if_unavailable=True`, so the active `fedora` and `updates` repos are
+preferred. The archive repo config sets `gpgcheck=1`, and DNF's RPM GPG
+signature verification remains enabled. During system provisioning, a DNF
+preflight checks whether the manifest pin can be resolved. If the exact version
+is no longer in active `fedora`/`updates` metadata, it can be resolved from the
+previously-stable archive; if no matching RPM is available in enabled Fedora
+metadata, provisioning fails early with guidance to choose a Fedora-published
+stable version. The post-install check requires Ruby's version to match the
+manifest. Renovate updates remain disabled because its Ruby datasource follows
+upstream releases, not Fedora package availability; update the pin manually
+only to a version Fedora has published as stable. The toolchain checker also
+verifies the pinned runtime version. Checksum-managed releases are
 **Hadolint**, **golangci-lint**, **uv**, **Antigravity CLI**, **limactl**,
 **kind**, **Minikube**, **Krew**, the **ast-grep release binaries**,
 and **acli**.

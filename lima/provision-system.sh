@@ -504,6 +504,9 @@ packages=(
   acl
   ffmpeg-free
   fd-find
+  # Fedora's stable archive repository keeps older Ruby builds resolvable
+  # after updates repodata drops them; normal repos still take precedence.
+  fedora-repos-archive
   file
   fontconfig
   fuse-overlayfs
@@ -568,12 +571,57 @@ if ((${#missing[@]})); then
   rm -rf /var/cache/dnf
 fi
 
+# Fail before a version-qualified DNF install when the manifest's Ruby pin is
+# not published as a Fedora stable package. Fedora's archive repository keeps
+# published builds resolvable, but a pin that no repository provides must stop
+# provisioning with actionable guidance instead of a bare DNF "No match for
+# argument" that leaves cloud-init and the user provisioner degraded.
+require_ruby_package_available() {
+  local version="$1" output status=0
+
+  # The runtime check compares `ruby --version`, which reports a plain
+  # major.minor.patch version. Reject RPM release suffixes and other
+  # qualifiers here instead of reporting them as an unavailable Fedora package.
+  if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "devbox: invalid Ruby pin '$version' in lima/tool-versions.json" >&2
+    echo "devbox: expected a plain X.Y.Z (major.minor.patch) upstream version without" >&2
+    echo "devbox: an RPM release suffix or pre-release qualifier" >&2
+    return 1
+  fi
+
+  # DNF5 exits successfully with empty output when the spec matches nothing,
+  # so a missing exact line, not the exit status alone, means unavailable.
+  output="$(dnf repoquery --available \
+    --queryformat='%{name}-%{version}' "ruby-${version}" 2>&1)" || status=$?
+  if ((status != 0)); then
+    echo "devbox: cannot query Fedora repositories for ruby-${version} (dnf exit ${status})" >&2
+    if [[ -n "$output" ]]; then
+      printf '%s\n' "$output" >&2
+    fi
+    echo "devbox: check repository configuration/connectivity before provisioning Ruby" >&2
+    return 1
+  fi
+  if ! grep -Fxq -- "ruby-${version}" <<<"$output"; then
+    echo "devbox: ruby-${version} is not available from the configured Fedora repositories" >&2
+    echo "devbox: the manifest Ruby pin must be a version Fedora publishes as a stable package;" >&2
+    echo "devbox: check Fedora repository metadata (including the fedora-repos-archive" >&2
+    echo "devbox: archive repository) or update lima/tool-versions.json to a published version" >&2
+    return 1
+  fi
+}
+
 # Fedora's rubypick RPM provides the generic /usr/bin/ruby command and can pull
 # a newer Ruby as a dependency, so allow downgrading to the manifest pin below.
 RUBY_VERSION="$(manifest_version ruby)"
 ruby_output="$(/usr/bin/ruby --version 2>/dev/null)" || ruby_output=""
 if [[ "$ruby_output" != "ruby ${RUBY_VERSION} "* ]]; then
+  # A pin can disappear from current Fedora repodata; fedora-repos-archive is
+  # installed above for that case, but fail fast when no repository has it.
+  # Enforce signature checking for the archive repo explicitly so a pinned
+  # archived RPM is still verified if its shipped repo config drifts.
+  require_ruby_package_available "${RUBY_VERSION}"
   dnf install -y --allow-downgrade --setopt=install_weak_deps=False \
+    --setopt=updates-archive.gpgcheck=1 \
     "ruby-${RUBY_VERSION}"
   dnf clean all
   rm -rf /var/cache/dnf
