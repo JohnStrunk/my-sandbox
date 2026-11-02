@@ -190,6 +190,7 @@ def test_vm_runner_encodes_mount_type_in_first_start_argv(
     assert len(start_calls) == 1
     start_argv = start_calls[0]
     assert start_argv[:2] == ("start", "--yes")
+    assert "VmLevel=L1" in start_argv
     mount_type_positions = [
         index for index, argument in enumerate(start_argv) if argument == "--mount-type"
     ]
@@ -339,6 +340,7 @@ def test_recursive_tier_without_mount_override_starts_with_template_default(
     start_calls = [call for call in _logged_calls(limactl_log) if call[0] == "start"]
     assert len(start_calls) == 1
     assert "--mount-type" not in start_calls[0]
+    assert "VmLevel=L1" in start_calls[0]
     assert not environment_log.exists()
 
 

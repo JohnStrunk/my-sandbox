@@ -85,10 +85,11 @@
     read-only and leave other config/credential mount sources empty. Use
     `$HOME/src/my-sandbox/lima/devbox.yaml` as the `limactl start` template, and
     pass params as in `scripts/run-vm-ci.sh`:
-    `SrcPath=/workspace/src`, `RepoPath=/workspace/src/my-sandbox`, and
-    `KbPath=/workspace/kb`, plus a temporary Git identity. Create a minimal
-    `kbase.py` sentinel in the temporary KB source because readiness requires
-    it. See
+    `SrcPath=/workspace/src`, `RepoPath=/workspace/src/my-sandbox`,
+    `KbPath=/workspace/kb`, and an explicit `--param VmLevel=L2`, plus a
+    temporary Git identity.
+    Create a minimal `kbase.py` sentinel in the temporary KB source because
+    readiness requires it. See
     `tests/vm/test_recursive_vm.py` for the repo-copy isolation pattern and
     `lima/mount-policy.md` for the L2 source-mount boundary; only the task-local
     snapshot is exposed as a read-only source input.
@@ -111,6 +112,27 @@
     gone. Revoke any task-scoped credential regardless of deletion outcome;
     remove that exact root only after deletion succeeds.
     After readiness, run `limactl shell "$name" -- echo hello`.
+
+## Identifying the current VM
+
+- The guest-visible identity marker at `/etc/devbox/vm-level` is described in
+  [#455](https://github.com/JohnStrunk/my-sandbox/issues/455). When present, it
+  must contain one value matching `L[1-9][0-9]*` (for example, `L1` or `L2`);
+  check it with `cat /etc/devbox/vm-level`. The marker identifies a VM managed
+  by this repository's devbox workflow and its level, but is descriptive
+  only—not an authorization or isolation boundary. The bare recursive L2 test
+  guests are not fully provisioned devboxes, but the current templates still
+  write the L2 marker.
+- `/etc/devbox/tool-versions.json` and `/var/lib/devbox-vm` indicate only that
+  full devbox provisioning ran. They never establish or imply a level; fully
+  provisioned L2s have the same artifacts. Without a valid marker, report the
+  level as unknown even when these artifacts exist.
+- If neither the marker nor both legacy artifacts are present, even
+  provisioning identity is not established; report identity and level as
+  unknown. Do not infer devbox identity or VM level from the hostname, Lima
+  instance name, `systemd-detect-virt`, KVM availability, or test-only VM
+  environment variables. Never relax credential or untrusted-source
+  precautions based on the marker.
 
 ## How PRs land
 

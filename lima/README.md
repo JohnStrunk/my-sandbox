@@ -87,8 +87,9 @@ The first invocation of `devbox` automatically creates the `devbox` instance
 from this checkout's `devbox.yaml`, then starts it. Keep the `my-sandbox`
 checkout under the shared `~/src` mount so the VM can read its template,
 provisioning scripts, and tool manifest. The launcher passes the resolved
-`~/src` and checkout paths, the `~/kb` path, and the host's global Git identity
-to Lima; no separate `limactl start` command is needed. Host directories under
+`~/src` and checkout paths, the `~/kb` path, the host's global Git identity,
+and the explicit `VmLevel=L1` marker value to Lima; no separate `limactl start`
+command is needed. Host directories under
 `~/src` and `~/kb` are created by Lima when they do not already exist.
 
 The first boot downloads the Fedora 44 cloud image, installs the full toolchain,
@@ -106,17 +107,21 @@ instance at create time. Readiness probes must be inline
 `probes[].script` entries with a `#!` line; unlike provisioning, a local
 `probes[].file` path is treated as a URL locator. The inline script is
 kept in sync with `probe-readiness.sh`, and a unit test checks the copy.
-Later changes to the embedded `lima/provision-system.sh`,
-`lima/provision-user.sh`, or `lima/devbox.yaml` do **not** propagate to an
-existing instance; recreate it to pick them up (see
+Later changes to the embedded `lima/provision-vm-level.sh`,
+`lima/provision-system.sh`, `lima/provision-user.sh`, or `lima/devbox.yaml` do
+**not** propagate to an existing instance; recreate it to pick them up (see
 [Recreating the VM](#recreating-the-vm)). `lima/provision-system.sh` also
 embeds the SHA-256 of `lima/fedora-packages.sh`; the live helper is copied to
 root-owned storage and verified against that digest before it is sourced as
 root. Changing the shared package helper therefore also requires
-`devbox --recreate`. `lima/provision-tools.sh`, the tool manifest, and the
+`devbox --recreate`. The embedded marker provisioner records its own digest
+for the provisioning fingerprint; restarts never read it from the
+creation-time checkout. `lima/provision-tools.sh`, the tool manifest, and the
 root-owned tool assets are read from the checkout at every start. Version-only
-changes in the live tool manifest are applied on stop/start without recreating
-the VM.
+changes in the live tool manifest are applied on stop/start without
+recreating the VM. VMs created before issue #455 lack the `VmLevel` marker and
+must be recreated; the template now requires an explicit `VmLevel` parameter.
+
 Ruby's Fedora archive setup and package-availability preflight run during
 embedded system provisioning. Readiness checks require the installed `ruby`
 command; `devbox-toolchain-check` verifies its manifest version. Existing VMs
@@ -419,9 +424,9 @@ create a fresh instance from the current checkout's template.
 ### Tool-version updates and drift
 
 Provisioning reads `lima/tool-versions.json` from the shared checkout on
-every start. It stores the root-owned system-script digest in
-`/var/lib/devbox-vm/system-provision.sha256` and the combined manifest,
-script, and tool-asset fingerprint in the VM-local
+every start. It stores the root-owned embedded system-script and marker-helper
+digests in `/var/lib/devbox-vm/` and the combined manifest, embedded-script,
+and tool-asset fingerprint in the VM-local
 `~/.local/share/devbox-toolchain/provisioning.fingerprint`.
 When the manifest changes, provisioning reports the drift, installs any new
 pins, runs `devbox-toolchain-check` as the isolated builder, then records the
@@ -438,9 +443,9 @@ limactl stop devbox
 limactl start devbox
 ```
 
-Changes to `lima/provision-system.sh`, `lima/provision-user.sh`, or
-`lima/devbox.yaml` are embedded at VM creation and still require the
-[recreate procedure](#recreating-the-vm). The non-embedded
+Changes to `lima/provision-vm-level.sh`, `lima/provision-system.sh`,
+`lima/provision-user.sh`, or `lima/devbox.yaml` are embedded at VM creation and
+still require the [recreate procedure](#recreating-the-vm). The non-embedded
 `lima/provision-tools.sh` helper is refreshed on each start. The
 `devbox-toolchain-check` command reports every manifest-declared Lima tool at
 its exact version, plus `make`, Python/pip, and ShellCheck.

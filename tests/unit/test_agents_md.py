@@ -1,4 +1,4 @@
-"""Regression tests for repository guidance (issues #177 and #349).
+"""Regression tests for repository guidance (issues #177, #349, and #455).
 
 Needle tests prove the repository guidance documents the canonical one-shot
 wait-for-CI/merge recipe -- a single blocking ``gh pr checks --watch`` call
@@ -16,7 +16,8 @@ blocked.
 Issue #349 also verifies the worktree bootstrap and OpenCode v2 project-context
 guidance, plus the editor-only status of the optional Pyright configuration.
 The L2 validation policy is needle-tested to preserve readiness, resource, and
-credential-isolation requirements.
+credential-isolation requirements. Issue #455 also pins the explicit VM
+identity marker guidance and the unknown-level behavior for pre-marker guests.
 """
 
 import os
@@ -44,6 +45,38 @@ def _normalized_agents_md(repo_root: Path) -> str:
 @pytest.mark.unit
 def test_agents_md_exists(repo_root: Path):
     assert (repo_root / AGENTS_MD_RELPATH).is_file()
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "needle",
+    (
+        "identifying the current vm",
+        "cat /etc/devbox/vm-level",
+        "one value matching l[1-9][0-9]*",
+        "managed by this repository's devbox workflow and its level",
+        "bare recursive l2 test",
+        "descriptive only—not an authorization or isolation boundary",
+        "/etc/devbox/tool-versions.json",
+        "/var/lib/devbox-vm",
+        "indicate only that full devbox provisioning ran",
+        "never establish or imply a level",
+        "fully provisioned l2s have the same artifacts",
+        "report the level as unknown even when these artifacts exist",
+        "even provisioning identity is not established",
+        "do not infer devbox identity or vm level from the hostname",
+        "lima instance name",
+        "systemd-detect-virt",
+        "kvm availability",
+        "test-only vm environment variables",
+        "never relax credential or untrusted-source precautions",
+    ),
+)
+def test_agents_md_documents_devbox_vm_identity(repo_root: Path, needle: str):
+    normalized = _normalized_agents_md(repo_root)
+    assert needle.lower() in normalized, (
+        f"AGENTS.md is missing a required VM identity instruction: {needle!r}"
+    )
 
 
 @pytest.mark.unit
@@ -124,6 +157,7 @@ def test_agents_md_documents_worktree_uv_and_opencode_context(
         "staged checkout's lima/devbox.yaml",
         "sibling provision scripts in place",
         "pass params as in scripts/run-vm-ci.sh",
+        "--param VmLevel=L2",
         "read-only source input",
         "temporary home",
         "disk-backed path",

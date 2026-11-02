@@ -193,6 +193,7 @@ limactl start \
   --param SrcPath=/workspace/src \
   --param RepoPath=/workspace/src/my-sandbox \
   --param KbPath=/workspace/kb \
+  --param VmLevel=L1 \
   --param GitUserName=CI \
   --param GitUserEmail=ci-test@example.invalid \
   "${mount_type_args[@]}" \

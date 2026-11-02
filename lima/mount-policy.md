@@ -142,11 +142,14 @@ when intentionally clearing the L1's persisted OpenCode preferences/history.
   fails the run. This does not change the template, normal `devbox` launcher,
   or CI workflow default. Issue #287 remains open/blocked until a successful
   virtiofs run or a policy decision resolves this question.
-- The recursive test mounts only a read-only OpenCode executable into each
-  disposable L2. It starts two L2 VMs concurrently, starts a managed OpenCode
-  service in each, checks distinct and stable registrations over a 15-second
-  soak, and verifies their state files are on each L2's local block filesystem
-  rather than a shared host/L1 mount.
+- The recursive tests mount only explicitly staged test inputs: a read-only
+  staged checkout snapshot for the repository checks and a read-only OpenCode
+  executable for the concurrent-service soak. The marker provisioner is staged
+  locally and embedded with Lima's `provision.file`; it is not mounted. The
+  concurrent test starts two L2 VMs, starts a managed OpenCode service in each,
+  checks distinct and stable registrations over a 15-second soak, and verifies
+  their state files are on each L2's local block filesystem rather than a
+  shared host/L1 mount.
 - The shared session-data mount is retained for host visibility and CodeBurn.
   Guest-to-guest SQLite and session visibility have prior coverage (#269).
   John's manual CodeBurn observation was that a completed L1 session appeared

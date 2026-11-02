@@ -140,6 +140,7 @@ def expected_lima_provisioning_fingerprint(
         sha(repo_root / "lima" / "seed-opencode-state.py"),
         sha(repo_root / "lima" / "provision-tools.sh"),
         hashlib.sha256(asset_manifest.encode()).hexdigest(),
+        sha(repo_root / "lima" / "provision-vm-level.sh"),
     )
     return hashlib.sha256(("\n".join(components) + "\n").encode()).hexdigest()
 
@@ -441,6 +442,8 @@ def lima_vm_start_command(repo_root: Path, instance: str, timeout: float) -> lis
         f"RepoPath=/workspace/src/{repo_root.name}",
         "--param",
         "KbPath=/workspace/kb",
+        "--param",
+        "VmLevel=L1",
         str(repo_root / "lima" / "devbox.yaml"),
     ]
 

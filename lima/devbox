@@ -216,6 +216,7 @@ create_instance() {
     --param "SrcPath=$src_root" \
     --param "RepoPath=$repo_path" \
     --param "KbPath=$kb_path" \
+    --param "VmLevel=L1" \
     --param "GitUserName=$git_user_name" \
     --param "GitUserEmail=$git_user_email"; then
     echo "devbox: could not create Lima instance '$instance'; inspect the Lima logs and '$HERE/README.md'" >&2
@@ -267,7 +268,7 @@ require_no_command() {
 
 provisioning_fingerprint() {
   local manifest_sha system_sha user_sha state_seed_sha tool_sha assets_sha guest_user
-  local asset_hashes
+  local asset_hashes vm_level_sha
   local -a sources=(
     "$HERE/devbox-go"
     "$HERE/check_toolchain.py"
@@ -293,15 +294,16 @@ provisioning_fingerprint() {
   user_sha="$(sha256_file "$HERE/provision-user.sh")"
   state_seed_sha="$(sha256_file "$HERE/seed-opencode-state.py")"
   tool_sha="$(sha256_file "$HERE/provision-tools.sh")"
+  vm_level_sha="$(sha256_file "$HERE/provision-vm-level.sh")"
   asset_hashes=""
   local index
   for index in "${!sources[@]}"; do
     asset_hashes+="$(sha256_file "${sources[$index]}")  ${guest_assets[$index]}"$'\n'
   done
   assets_sha="$(printf '%s' "$asset_hashes" | sha256sum | awk '{print $1}')"
-  printf '%s\n%s\n%s\n%s\n%s\n%s\n' \
+  printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
     "$manifest_sha" "$system_sha" "$user_sha" "$state_seed_sha" \
-    "$tool_sha" "$assets_sha" \
+    "$tool_sha" "$assets_sha" "$vm_level_sha" \
     | sha256sum | awk '{print $1}'
 }
 

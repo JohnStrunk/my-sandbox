@@ -16,6 +16,28 @@ from tests.conftest import (
 
 
 @pytest.mark.vm
+def test_provisioned_l1_exposes_the_vm_level_marker(repo_root: Path, devbox_vm: LimaVM):
+    skip_if_guest_provisioning_is_stale(repo_root, devbox_vm)
+    command = r"""
+set -euo pipefail
+marker=/etc/devbox/vm-level
+[[ -f "$marker" && ! -L "$marker" ]]
+[[ "$(stat -c '%u:%g:%a' "$marker")" == 0:0:644 ]]
+if findmnt -rn -M "$marker" >/dev/null 2>&1; then
+  echo "$marker is unexpectedly a mountpoint" >&2
+  exit 1
+fi
+[[ "$(cat "$marker")" == L1 ]]
+"""
+    result = devbox_vm.run(["bash", "-ceu", command], timeout=30)
+
+    assert result.returncode == 0, (
+        "The provisioned L1 does not expose a valid devbox VM level marker.\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+
+
+@pytest.mark.vm
 def test_provisioned_vm_toolchain_matches_manifest(repo_root: Path, devbox_vm: LimaVM):
     skip_if_guest_provisioning_is_stale(repo_root, devbox_vm)
     result = devbox_vm.run(["devbox-toolchain-check"], timeout=300)
