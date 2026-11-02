@@ -285,7 +285,7 @@
       "depName": "moby/moby",
       "integrity": "version-only",
       "consumers": {
-        "lima": true
+        "lima": false
       }
     },
     "containerd_io": {
@@ -294,7 +294,7 @@
       "depName": "containerd/containerd",
       "integrity": "version-only",
       "consumers": {
-        "lima": true
+        "lima": false
       }
     },
     "docker_buildx_plugin": {
@@ -303,7 +303,7 @@
       "depName": "docker/buildx",
       "integrity": "version-only",
       "consumers": {
-        "lima": true
+        "lima": false
       }
     },
     "kubectl": {

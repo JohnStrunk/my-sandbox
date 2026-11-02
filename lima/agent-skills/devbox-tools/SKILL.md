@@ -230,20 +230,36 @@ shared repository `AGENTS.md` or README.
 
 ### Docker CE and Podman runtimes (Lima)
 
-- Docker CE Engine, its official `docker` CLI, and pinned `containerd.io` are
-  installed from Docker's signature-checked Fedora repository. The Docker CE
-  and containerd versions are manifest-pinned. Docker runs as the rootful
-  system daemon inside the Lima guest; rootless Docker extras and its per-user
-  service are not part of the supported runtime.
+- In the current manifest, `docker_ce`, `containerd_io`, and
+  `docker_buildx_plugin` have `consumers.lima: false`; their stored versions are
+  not current install pins. Under this current policy, fresh and recreated VMs
+  request the unversioned names `docker-ce`, `docker-ce-cli`, `containerd.io`,
+  and `docker-buildx-plugin`, letting DNF select the latest compatible set from
+  Docker's official Fedora stable repository. DNF verifies repository metadata
+  and RPM signatures with the pinned key (`gpgcheck=1`, `repo_gpgcheck=1`).
+  Docker runs as the rootful system daemon in the Lima guest; rootless Docker
+  extras and its per-user service are not part of the supported runtime.
+- `provision-system.sh` runs on each boot, but does not refresh a complete set;
+  this is an intentional stable/recreate-only cadence, so long-lived VMs may
+  lag Fedora stable until `devbox --recreate`. If the set is absent or partial,
+  boot provisioning retries all four unversioned names. DNF5 `install <name>`
+  does not upgrade already-installed named packages, so missing components can
+  be installed from current metadata while installed siblings stay as-is. A
+  partial repair can leave mixed versions and does not guarantee a coherent
+  newest set; recreate for a coherent newest compatible set. Fedora stable
+  metadata is mutable, so recreated VMs are not bit-for-bit
+  package-reproducible and EVRs may differ between x86_64 and aarch64.
 - Provisioning enables system `docker.service`, `docker.socket`, and
   `containerd.service` at boot and adds the guest user to the `docker` group.
   With no CLI endpoint or context override, `docker` connects to
   `/var/run/docker.sock`; there is no rootless `DOCKER_HOST` default. Use
-  `docker version` to inspect its client and server and
-  `devbox-toolchain-check` to check the pinned CLI and Buildx versions.
-  Readiness also checks the server version against the manifest.
-- The Docker Buildx CLI plugin is installed at the version pinned in
-  `lima/tool-versions.json`; verify it with `docker buildx version`.
+  `docker version` to inspect its client and server. Readiness and the Docker
+  preflight validate all four RPM names and guest architecture, key identity,
+  official repo configuration/signature policy, and rootful service/API
+  identity and health. `devbox-toolchain-check` does not report or verify exact
+  Docker RPM versions.
+- The Docker Buildx CLI plugin is part of the RPM set; inspect its installed
+  version with `docker buildx version`.
   `docker compose` remains unavailable because the
   Compose plugin is not installed. For BuildKit builds, use the default local
   context and clear inherited endpoint overrides:
@@ -287,22 +303,28 @@ shared repository `AGENTS.md` or README.
   and `sudo journalctl -u docker.service -u containerd.service`.
   Check `DOCKER_HOST` and `DOCKER_CONTEXT` if the CLI does not use
   `/var/run/docker.sock`; keep the Docker and Podman socket paths distinct.
-- Changes to embedded provisioning require `devbox --recreate` for an existing
-  VM. If the live checkout requires Buildx before recreation, boot-time
-  toolchain validation can fail because the embedded installer is stale.
-  Recreation loses guest-local state; rootless Docker data is not migrated into
-  the separate rootful Docker store.
+- For rollback only, when the embedded provisioner reads a pre-#412 live
+  manifest where `docker_ce`, `containerd_io`, and `docker_buildx_plugin` all
+  have `consumers.lima: true`, it uses their exact version values for install
+  and version checks. This lets a VM created with the new provisioner boot after
+  the live checkout is switched back to a pre-#412 checkout if Fedora stable
+  still offers those package versions; that availability is not guaranteed.
+  Current policy does not pin Docker versions, and Renovate updates for the
+  legacy records are disabled. Docker package selection lives in the embedded
+  provisioner, so use `devbox --recreate` to adopt the current policy.
+  Recreation loses guest-local state, and rootless Docker data is not migrated
+  into the separate rootful Docker store.
 
 ### Kubernetes operator profile (Lima)
 
 - Available in the Lima VM: GNU `make`, `kind`, `kubectl`, Helm, Python/pip,
   and Pipenv.
 - Select kind's experimental `docker` or `podman` provider explicitly. The
-  Docker provider verifies the manifest-pinned Docker CE packages, system
-  service/socket, explicitly selected `/var/run/docker.sock` endpoint, and
-  server version. The Podman provider checks
-  rootless mode, clears inherited endpoint selectors, and rejects a configured
-  default system connection; kind invokes Podman's CLI directly.
+  Docker provider runs the Docker preflight and checks the rootful service/API
+  on the explicitly selected `/var/run/docker.sock` endpoint. The Podman
+  provider checks rootless mode, clears inherited endpoint selectors, and
+  rejects a configured default system connection; kind invokes Podman's CLI
+  directly.
   `lima/validate-kind.sh {docker,podman} [runs]` exercises repeated cluster,
   Ready-node, and workload checks, proves the selected backend contains the
   kind-labeled node, and deletes/audits resources even after partial failure.
@@ -404,12 +426,11 @@ shared repository `AGENTS.md` or README.
   behavior; the validator takes one explicit backend argument and fails rather
   than falling back or skipping when its required capability is unavailable.
 - Docker CE (not Podman's socket): run
-  `lima/validate-minikube.sh docker`. It verifies the official, manifest-pinned
-  Docker CE CLI/Engine RPMs, active system service/socket, and server version
-  on the explicitly pinned `/var/run/docker.sock` endpoint after clearing
-  context overrides. It proves the profile's container through that endpoint
-  and audits containers, volumes, and networks after deletion. Manual starts
-  should include `--kubernetes-version=v1.37.0`.
+  `lima/validate-minikube.sh docker`. It runs the Docker preflight and checks
+  the rootful service/API on the explicitly pinned `/var/run/docker.sock`
+  endpoint after clearing context overrides. It proves the profile's container
+  through that endpoint and audits containers, volumes, and networks after
+  deletion. Manual starts should include `--kubernetes-version=v1.37.0`.
 - Rootless Podman (per Minikube's documented setup): run
   `lima/validate-minikube.sh podman`; the validator sets rootless mode in its
   private Minikube home, proves the profile's container through Podman, and

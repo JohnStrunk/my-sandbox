@@ -5,7 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from scripts.validate_tool_versions import validate_tool_versions
+from scripts.validate_tool_versions import (
+    _LIMA_MANIFEST_VERSION_PATTERN,
+    validate_tool_versions,
+)
 
 _VALIDATOR_INPUTS = [
     "lima/tool-versions.json",
@@ -463,6 +466,48 @@ def test_manifest_declares_lima_consumers(repo_root: Path):
         consumers = manifest["tools"][tool]["consumers"]
         assert consumers.get("lima") is True, tool
     assert "github_mcp_server" not in manifest["tools"]
+
+
+@pytest.mark.unit
+def test_docker_rpm_tools_are_not_lima_consumers(repo_root: Path):
+    """Docker RPM versions float in the signed DNF transaction, not a pin.
+
+    The manifest keeps the entries so Renovate and the version validator still
+    describe them, but Lima provisioning must not read them as exact versions.
+    """
+
+    manifest = json.loads((repo_root / "lima" / "tool-versions.json").read_text())
+
+    for tool in ("docker_ce", "containerd_io", "docker_buildx_plugin"):
+        spec = manifest["tools"][tool]
+        assert spec["consumers"] == {"lima": False}, tool
+        assert spec["integrity"] == "version-only", tool
+        assert spec["datasource"] == "github-releases", tool
+        assert re.fullmatch(r"\d+\.\d+\.\d+", spec["version"]), tool
+
+
+@pytest.mark.unit
+def test_docker_legacy_pins_stay_outside_lima_consumers(repo_root: Path):
+    """The rollback pin reader must not register Docker as a Lima consumer.
+
+    The live manifest keeps ``consumers.lima: false`` for all three Docker
+    records. The embedded provisioner reads their versions only through
+    ``docker_legacy_pin_version`` in its all-true legacy branch, so the manifest
+    validator stays clean and sees no generic ``manifest_version`` read.
+    """
+
+    manifest = json.loads((repo_root / "lima" / "tool-versions.json").read_text())
+    docker_tools = {"docker_ce", "containerd_io", "docker_buildx_plugin"}
+    for tool in sorted(docker_tools):
+        assert manifest["tools"][tool]["consumers"]["lima"] is False, tool
+
+    assert validate_tool_versions(repo_root) == []
+
+    system_script = (repo_root / "lima" / "provision-system.sh").read_text()
+    assert "docker_legacy_pin_version()" in system_script
+    assert "docker_legacy_pin_version docker_ce" in system_script
+    version_reads = set(_LIMA_MANIFEST_VERSION_PATTERN.findall(system_script))
+    assert not version_reads & docker_tools
 
 
 @pytest.mark.unit

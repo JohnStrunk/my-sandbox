@@ -123,8 +123,6 @@
       "matchPackageNames": [
         "@opencode/cli",
         "coderabbit-cli",
-        "moby/moby",
-        "docker/buildx",
         "golang",
         "helm/helm",
         "kubernetes/kubernetes",
@@ -150,22 +148,10 @@
       "groupName": "devbox tool versions",
     },
     {
-      "description": "Normalize Docker Engine release tags for the manifest pin",
+      "description": "Hold legacy Docker RPM pins for pre-existing VMs; versions float at VM creation",
       "matchPackageNames": [
         "moby/moby",
-      ],
-      "extractVersion": "^docker-v(?<version>\\d+\\.\\d+\\.\\d+)$",
-    },
-    {
-      "description": "Wait for Docker's Fedora repo before bumping containerd.io",
-      "matchPackageNames": [
         "containerd/containerd",
-      ],
-      "enabled": false,
-    },
-    {
-      "description": "Wait for Docker's Fedora repo before bumping Buildx",
-      "matchPackageNames": [
         "docker/buildx",
       ],
       "enabled": false,

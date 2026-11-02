@@ -2,7 +2,6 @@
 
 import gzip
 import hashlib
-import json
 from pathlib import Path
 from urllib.error import URLError
 
@@ -11,76 +10,63 @@ from compression import zstd
 
 import scripts.check_docker_rpm_availability as dra
 
-_VERSIONS = {
-    "docker_ce": "98.7.6",
-    "containerd_io": "97.6.5",
-    "docker_buildx_plugin": "96.5.4",
-}
-_PACKAGES = (
-    ("docker-ce", "docker_ce", 3),
-    ("docker-ce-cli", "docker_ce", 1),
-    ("containerd.io", "containerd_io", 0),
-    ("docker-buildx-plugin", "docker_buildx_plugin", 0),
-)
+_VERSION = "29.9.2"
+_RELEASE = "1.fc44"
 
 
-def _write_manifest(tmp_path: Path, versions: dict[str, str]) -> Path:
-    manifest = {
-        "tools": {tool: {"version": version} for tool, version in versions.items()}
-    }
-    path = tmp_path / "tool-versions.json"
-    path.write_text(json.dumps(manifest, indent=2) + "\n")
-    return path
-
-
-def _primary_xml(
+def _package_entry(
+    name: str,
+    arch: str,
     *,
-    omit: set[tuple[str, str]] | None = None,
-    epochs: dict[tuple[str, str], int] | None = None,
-    omit_epoch: set[tuple[str, str]] | None = None,
-    hrefs: dict[tuple[str, str], str] | None = None,
-    release: str = "1.fc44",
-    extra_releases: dict[tuple[str, str], str] | None = None,
-    extra_hrefs: dict[tuple[str, str], str] | None = None,
-) -> bytes:
-    omit = omit or set()
-    epochs = epochs or {}
-    omit_epoch = omit_epoch or set()
+    version: str = _VERSION,
+    release: str = _RELEASE,
+    epoch: int | None = 0,
+    href: str | None = None,
+) -> str:
+    href = href or f"Packages/{name}-{version}-{release}.{arch}.rpm"
+    epoch_attr = "" if epoch is None else f' epoch="{epoch}"'
+    return (
+        '<package type="rpm">\n'
+        f"  <name>{name}</name>\n"
+        f"  <arch>{arch}</arch>\n"
+        f'  <version{epoch_attr} ver="{version}" rel="{release}"/>\n'
+        f'  <location href="{href}"/>\n'
+        "</package>"
+    )
+
+
+def _entries(
+    arch: str,
+    *,
+    omit: set[str] | frozenset[str] = frozenset(),
+    version: str = _VERSION,
+    release: str = _RELEASE,
+    epoch: int | None = 0,
+    versions: dict[str, str] | None = None,
+    releases: dict[str, str] | None = None,
+    hrefs: dict[str, str] | None = None,
+) -> list[str]:
+    """Return primary metadata entries for the four required packages."""
+
+    versions = versions or {}
+    releases = releases or {}
     hrefs = hrefs or {}
-    extra_releases = extra_releases or {}
-    extra_hrefs = extra_hrefs or {}
-    entries = []
-    for arch in dra.SUPPORTED_ARCHES:
-        for name, tool, default_epoch in _PACKAGES:
-            key = (name, arch)
-            if key in omit:
-                continue
-            version = _VERSIONS[tool]
-            epoch = epochs.get(key, default_epoch)
-            epoch_attr = "" if key in omit_epoch else f' epoch="{epoch}"'
-            href = hrefs.get(key, f"Packages/{name}-{version}-{release}.{arch}.rpm")
-            entries.append(
-                f'  <package type="rpm">\n'
-                f"    <name>{name}</name>\n"
-                f"    <arch>{arch}</arch>\n"
-                f'    <version{epoch_attr} ver="{version}" rel="{release}"/>\n'
-                f'    <location href="{href}"/>\n'
-                f"  </package>"
-            )
-            if key not in extra_releases:
-                continue
-            extra = extra_releases[key]
-            extra_href = extra_hrefs.get(
-                key, f"Packages/{name}-{version}-{extra}.{arch}.rpm"
-            )
-            entries.append(
-                f'  <package type="rpm">\n'
-                f"    <name>{name}</name>\n"
-                f"    <arch>{arch}</arch>\n"
-                f'    <version{epoch_attr} ver="{version}" rel="{extra}"/>\n'
-                f'    <location href="{extra_href}"/>\n'
-                f"  </package>"
-            )
+    return [
+        _package_entry(
+            name,
+            arch,
+            version=versions.get(name, version),
+            release=releases.get(name, release),
+            epoch=epoch,
+            href=hrefs.get(name),
+        )
+        for name in dra.DOCKER_RPM_PACKAGES
+        if name not in omit
+    ]
+
+
+def _primary_xml(*entry_groups: list[str]) -> bytes:
+    entries = [entry for group in entry_groups for entry in group]
     return (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         '<metadata xmlns="http://linux.duke.edu/metadata/common">\n'
@@ -108,7 +94,6 @@ class _FakeRepo:
         primaries: dict[str, bytes],
         *,
         hrefs: dict[str, str] | None = None,
-        head_error: str | None = None,
         head_failures: set[str] | None = None,
     ) -> None:
         self.primaries = primaries
@@ -116,10 +101,9 @@ class _FakeRepo:
             arch: _repomd(primary, (hrefs or {}).get(arch, "repodata/primary.xml.zst"))
             for arch, primary in primaries.items()
         }
-        self.head_error = head_error
-        self.head_failures = head_failures or set()
         self.fetches: list[str] = []
-        self.heads: list[str] = []
+        self.head_failures = head_failures or set()
+        self.heads: list[tuple[str, float]] = []
 
     def fetch(self, url: str, max_bytes: int, timeout: float) -> bytes:
         self.fetches.append(url)
@@ -131,9 +115,9 @@ class _FakeRepo:
         raise AssertionError(f"unexpected URL: {url}")
 
     def head(self, url: str, timeout: float) -> None:
-        self.heads.append(url)
-        if self.head_error and self.head_error in url:
-            raise dra.DockerRepoError(f"HEAD {url} returned 404")
+        """Synthetic HEAD checker: never touches the network."""
+
+        self.heads.append((url, timeout))
         if any(fragment in url for fragment in self.head_failures):
             raise dra.DockerRepoError(f"HEAD {url} returned 404")
 
@@ -173,13 +157,18 @@ class _RetryRepo(_FakeRepo):
 
 def _repo(
     *,
-    primary: bytes | None = None,
-    primaries: dict[str, bytes] | None = None,
+    x86_64: list[str] | None = None,
+    aarch64: list[str] | None = None,
     **kwargs,
 ) -> _FakeRepo:
-    if primaries is None:
-        payload = primary if primary is not None else zstd.compress(_primary_xml())
-        primaries = dict.fromkeys(dra.SUPPORTED_ARCHES, payload)
+    primaries = {
+        "x86_64": zstd.compress(
+            _primary_xml(x86_64 if x86_64 is not None else _entries("x86_64"))
+        ),
+        "aarch64": zstd.compress(
+            _primary_xml(aarch64 if aarch64 is not None else _entries("aarch64"))
+        ),
+    }
     return _FakeRepo(primaries, **kwargs)
 
 
@@ -197,29 +186,357 @@ def _write_template(tmp_path: Path, releases: dict[str, str]) -> Path:
     return path
 
 
-def _check(repo: _FakeRepo, tmp_path: Path, versions: dict[str, str] | None = None):
-    return dra.check_docker_rpm_availability(
-        manifest_path=_write_manifest(tmp_path, versions or _VERSIONS),
-        fetch=repo.fetch,
-        head=repo.head,
-    )
+def _check(repo: _FakeRepo) -> tuple[list[str], list[str]]:
+    return dra.check_docker_rpm_availability(fetch=repo.fetch, head=repo.head)
+
+
+def _head_names(repo: _FakeRepo) -> list[str]:
+    return [url.rsplit("/", 1)[-1] for url, _timeout in repo.heads]
+
+
+@pytest.fixture(autouse=True)
+def _no_live_http(monkeypatch):
+    """Fail fast if a test forgets to inject synthetic fetch/HEAD callables."""
+
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("unit tests must not perform live HTTP requests")
+
+    monkeypatch.setattr(dra._OPENER, "open", unexpected)
 
 
 @pytest.mark.unit
-def test_checks_all_pinned_packages_for_both_arches(tmp_path: Path):
+def test_checks_every_required_package_for_both_arches():
     repo = _repo()
 
-    errors = _check(repo, tmp_path)
+    errors, report = _check(repo)
+
+    assert dra.DOCKER_RPM_PACKAGES == (
+        "docker-ce",
+        "docker-ce-cli",
+        "containerd.io",
+        "docker-buildx-plugin",
+    )
+    assert errors == []
+    assert report == [
+        f"{arch}: {name}: 1 release(s), newest 0:{_VERSION}-{_RELEASE}"
+        for arch in dra.SUPPORTED_ARCHES
+        for name in dra.DOCKER_RPM_PACKAGES
+    ]
+    release = dra.detect_fedora_release()
+    assert {url.split("/")[6] for url in repo.fetches} == set(dra.SUPPORTED_ARCHES)
+    assert all(f"fedora/{release}/" in url for url in repo.fetches)
+
+
+@pytest.mark.unit
+def test_reports_independent_architecture_specific_newest_versions():
+    """Architectures are checked separately; differing versions are reported."""
+
+    repo = _repo(
+        x86_64=_entries("x86_64", versions={"docker-ce": "29.9.2"}),
+        aarch64=_entries("aarch64", versions={"docker-ce": "29.8.1"}),
+    )
+
+    errors, report = _check(repo)
 
     assert errors == []
-    assert {url.split("/")[-1] for url in repo.heads} == {
-        f"{name}-{_VERSIONS[tool]}-1.fc44.{arch}.rpm"
-        for name, tool, _epoch in _PACKAGES
-        for arch in dra.SUPPORTED_ARCHES
-    }
-    assert {url.split("/")[6] for url in repo.heads} == set(dra.SUPPORTED_ARCHES)
-    release = dra.detect_fedora_release()
-    assert all(f"fedora/{release}/" in url for url in repo.heads + repo.fetches)
+    assert f"x86_64: docker-ce: 1 release(s), newest 0:29.9.2-{_RELEASE}" in report
+    assert f"aarch64: docker-ce: 1 release(s), newest 0:29.8.1-{_RELEASE}" in report
+    # Architecture-specific versions are checked independently, not compared.
+    assert f"docker-ce-29.9.2-{_RELEASE}.x86_64.rpm" in _head_names(repo)
+    assert f"docker-ce-29.8.1-{_RELEASE}.aarch64.rpm" in _head_names(repo)
+    assert len(repo.heads) == len(dra.DOCKER_RPM_PACKAGES) * 2
+
+
+@pytest.mark.unit
+def test_reports_missing_package_for_one_architecture_only():
+    repo = _repo(aarch64=_entries("aarch64", omit={"containerd.io"}))
+
+    errors, report = _check(repo)
+
+    assert errors == [
+        f"aarch64: containerd.io is absent from Docker Fedora "
+        f"{dra.detect_fedora_release()} stable repodata"
+    ]
+    # The other architecture and the remaining aarch64 packages are still
+    # checked, reported, and HEADed.
+    assert len(report) == len(dra.DOCKER_RPM_PACKAGES) * 2 - 1
+    assert not any("aarch64: containerd.io" in line for line in report)
+    assert f"containerd.io-{_VERSION}-{_RELEASE}.aarch64.rpm" not in _head_names(repo)
+    assert len(repo.heads) == len(dra.DOCKER_RPM_PACKAGES) * 2 - 1
+
+
+@pytest.mark.unit
+def test_reports_every_missing_package_for_both_architectures():
+    # The repository still lists other Docker packages, so metadata is valid
+    # but none of the four required packages is present for either arch.
+    repo = _repo(
+        x86_64=[_package_entry("docker-compose-plugin", "x86_64")],
+        aarch64=[_package_entry("docker-compose-plugin", "aarch64")],
+    )
+
+    errors, report = _check(repo)
+
+    assert report == []
+    assert repo.heads == []
+    assert len(errors) == len(dra.DOCKER_RPM_PACKAGES) * 2
+    for arch in dra.SUPPORTED_ARCHES:
+        for name in dra.DOCKER_RPM_PACKAGES:
+            assert any(
+                error.startswith(f"{arch}: {name} is absent") for error in errors
+            )
+
+
+@pytest.mark.unit
+def test_requires_each_package_built_for_the_repository_architecture():
+    """A package listed only for the other architecture does not satisfy it."""
+
+    repo = _repo(
+        x86_64=[
+            _package_entry("docker-ce", "aarch64"),
+            *(_entries("x86_64", omit={"docker-ce"})),
+        ]
+    )
+
+    errors, _report = _check(repo)
+
+    assert errors == [
+        f"x86_64: docker-ce is absent from Docker Fedora "
+        f"{dra.detect_fedora_release()} stable repodata"
+    ]
+    assert repo.heads
+    assert f"docker-ce-{_VERSION}-{_RELEASE}.x86_64.rpm" not in _head_names(repo)
+    assert len(repo.heads) == len(dra.DOCKER_RPM_PACKAGES) * 2 - 1
+
+
+@pytest.mark.unit
+def test_reports_the_newest_epoch_then_version():
+    repo = _repo(
+        x86_64=[
+            _package_entry("docker-ce", "x86_64", epoch=1, version="99.0.0"),
+            _package_entry("docker-ce", "x86_64", epoch=3, version="1.0.0"),
+            *_entries("x86_64", omit={"docker-ce"}),
+        ],
+        aarch64=[
+            _package_entry("docker-ce", "aarch64", version="29.9.2"),
+            _package_entry("docker-ce", "aarch64", version="29.10.0"),
+            *_entries("aarch64", omit={"docker-ce"}),
+        ],
+    )
+
+    errors, report = _check(repo)
+
+    assert errors == []
+    assert f"x86_64: docker-ce: 2 release(s), newest 3:1.0.0-{_RELEASE}" in report
+    assert f"aarch64: docker-ce: 2 release(s), newest 0:29.10.0-{_RELEASE}" in report
+    assert f"docker-ce-1.0.0-{_RELEASE}.x86_64.rpm" in _head_names(repo)
+    assert f"docker-ce-29.10.0-{_RELEASE}.aarch64.rpm" in _head_names(repo)
+    assert f"docker-ce-99.0.0-{_RELEASE}.x86_64.rpm" not in _head_names(repo)
+    assert f"docker-ce-29.9.2-{_RELEASE}.aarch64.rpm" not in _head_names(repo)
+
+
+# RPM-like ordering pairs: (older, newer). Each spec may override epoch,
+# version, and release; unspecified fields use the shared defaults.
+_ORDERING_CASES = [
+    ({"version": "29.9.2"}, {"version": "30.0.0~rc1"}),
+    ({"version": "30.0.0~rc1"}, {"version": "30.0.0"}),
+    ({"version": "30.0.0~rc1"}, {"version": "30.0.0a"}),
+    ({"version": "1.a"}, {"version": "1.2"}),
+    ({"version": "1.9"}, {"version": "1.10"}),
+    (
+        {"version": "30.0.0", "release": "1.fc44"},
+        {"version": "30.0.0", "release": "2.fc44"},
+    ),
+    ({"epoch": 0, "version": "99.0.0"}, {"epoch": 1, "version": "1.0.0"}),
+]
+_ORDERING_IDS = [
+    "prerelease-30-beats-29",
+    "final-beats-own-prerelease",
+    "tilde-beats-alpha",
+    "alpha-below-numeric",
+    "numeric-integer-compare",
+    "release-order",
+    "epoch-before-version",
+]
+
+
+def _repo_package(spec: dict[str, object]) -> "dra.RepoPackage":
+    return dra.RepoPackage(
+        name="docker-ce",
+        arch="x86_64",
+        epoch=int(spec.get("epoch", 0)),
+        version=str(spec["version"]),
+        release=str(spec.get("release", _RELEASE)),
+        href="Packages/unused.rpm",
+    )
+
+
+def _spec_evr(spec: dict[str, object]) -> str:
+    return f"{spec.get('epoch', 0)}:{spec['version']}-{spec.get('release', _RELEASE)}"
+
+
+def _spec_href(spec: dict[str, object], arch: str = "x86_64") -> str:
+    return f"docker-ce-{spec['version']}-{spec.get('release', _RELEASE)}.{arch}.rpm"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(("older", "newer"), _ORDERING_CASES, ids=_ORDERING_IDS)
+def test_version_key_orders_rpm_like(
+    older: dict[str, object], newer: dict[str, object]
+):
+    older_package = _repo_package(older)
+    newer_package = _repo_package(newer)
+
+    assert dra._version_key(older_package) < dra._version_key(newer_package)
+    assert dra._newest_package([older_package, newer_package]) == newer_package
+    assert dra._newest_package([newer_package, older_package]) == newer_package
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(("older", "newer"), _ORDERING_CASES, ids=_ORDERING_IDS)
+def test_selects_the_rpm_newest_artifact_for_report_and_head(
+    older: dict[str, object], newer: dict[str, object]
+):
+    repo = _repo(
+        x86_64=[
+            _package_entry("docker-ce", "x86_64", **older),
+            _package_entry("docker-ce", "x86_64", **newer),
+            *_entries("x86_64", omit={"docker-ce"}),
+        ]
+    )
+
+    errors, report = _check(repo)
+
+    assert errors == []
+    assert f"x86_64: docker-ce: 2 release(s), newest {_spec_evr(newer)}" in report
+    newest_href = _spec_href(newer)
+    older_href = _spec_href(older)
+    assert newest_href in _head_names(repo)
+    assert older_href not in _head_names(repo)
+    assert _head_names(repo).count(newest_href) == 1
+
+
+@pytest.mark.unit
+def test_accepts_any_package_release():
+    repo = _repo(
+        x86_64=_entries("x86_64", release="77.fc44"),
+        aarch64=_entries("aarch64", release="77.fc44"),
+    )
+
+    errors, report = _check(repo)
+
+    assert errors == []
+    assert all(line.endswith("newest 0:29.9.2-77.fc44") for line in report)
+
+
+@pytest.mark.unit
+def test_accepts_packages_without_an_epoch_attribute():
+    repo = _repo(
+        x86_64=_entries("x86_64", epoch=None),
+        aarch64=_entries("aarch64", epoch=None),
+    )
+
+    errors, report = _check(repo)
+
+    assert errors == []
+    assert all(line.endswith(f"newest 0:{_VERSION}-{_RELEASE}") for line in report)
+
+
+@pytest.mark.unit
+def test_heads_each_newest_artifact_once_with_the_requested_timeout():
+    repo = _repo()
+
+    errors, _report = dra.check_docker_rpm_availability(
+        fetch=repo.fetch, head=repo.head, timeout=7.5
+    )
+
+    assert errors == []
+    assert len(repo.heads) == len(dra.DOCKER_RPM_PACKAGES) * 2
+    assert len({url for url, _timeout in repo.heads}) == len(repo.heads)
+    assert {timeout for _url, timeout in repo.heads} == {7.5}
+
+
+@pytest.mark.unit
+def test_heads_only_the_newest_release_for_each_package():
+    repo = _repo(
+        aarch64=[
+            *_entries("aarch64", releases={"docker-ce": "9.fc44"}),
+            _package_entry("docker-ce", "aarch64", release=_RELEASE),
+        ]
+    )
+
+    errors, report = _check(repo)
+
+    assert errors == []
+    assert "aarch64: docker-ce: 2 release(s), newest 0:29.9.2-9.fc44" in report
+    newest_href = "docker-ce-29.9.2-9.fc44.aarch64.rpm"
+    older_href = f"docker-ce-29.9.2-{_RELEASE}.aarch64.rpm"
+    assert _head_names(repo).count(newest_href) == 1
+    assert older_href not in _head_names(repo)
+    assert len(repo.heads) == len(dra.DOCKER_RPM_PACKAGES) * 2
+
+
+@pytest.mark.unit
+def test_accepts_an_unreachable_older_release_when_the_newest_responds():
+    repo = _repo(
+        x86_64=[
+            *_entries("x86_64", releases={"docker-ce": "9.fc44"}),
+            _package_entry("docker-ce", "x86_64", release=_RELEASE),
+        ],
+        head_failures={f"docker-ce-29.9.2-{_RELEASE}.x86_64.rpm"},
+    )
+
+    errors, report = _check(repo)
+
+    assert errors == []
+    assert "x86_64: docker-ce: 2 release(s), newest 0:29.9.2-9.fc44" in report
+
+
+@pytest.mark.unit
+def test_reports_an_unreachable_newest_artifact():
+    failed_href = f"docker-ce-cli-{_VERSION}-{_RELEASE}.aarch64.rpm"
+    repo = _repo(head_failures={failed_href})
+
+    errors, report = _check(repo)
+
+    assert len(errors) == 1
+    error = errors[0]
+    assert error.startswith(f"aarch64: docker-ce-cli newest 0:{_VERSION}-{_RELEASE}")
+    assert "artifact is unavailable" in error
+    assert "HEAD " in error and "returned 404" in error
+    assert not any(line.startswith("aarch64: docker-ce-cli:") for line in report)
+    assert len(report) == len(dra.DOCKER_RPM_PACKAGES) * 2 - 1
+    # One unreachable artifact does not stop the remaining checks.
+    assert len(repo.heads) == len(dra.DOCKER_RPM_PACKAGES) * 2
+    assert _head_names(repo).count(failed_href) == 1
+
+
+@pytest.mark.unit
+def test_rejects_an_untrusted_older_release_before_any_head():
+    repo = _repo(
+        x86_64=[
+            *_entries("x86_64", releases={"docker-ce": "9.fc44"}),
+            _package_entry(
+                "docker-ce",
+                "x86_64",
+                release=_RELEASE,
+                href="https://evil.example/docker-ce.rpm",
+            ),
+        ]
+    )
+
+    with pytest.raises(dra.DockerRepoError, match="not an allowed"):
+        dra.check_docker_rpm_availability(
+            releasever="44", fetch=repo.fetch, head=repo.head
+        )
+    assert repo.heads == [], "every listed location is validated before any HEAD"
+
+
+@pytest.mark.unit
+def test_rejects_unsupported_architecture():
+    with pytest.raises(dra.DockerRepoError, match="unsupported architecture"):
+        dra.check_docker_rpm_availability(
+            releasever="44", arches=("riscv64",), fetch=_repo().fetch
+        )
 
 
 @pytest.mark.unit
@@ -227,15 +544,13 @@ def test_uses_release_from_both_template_image_urls(tmp_path: Path):
     template = _write_template(tmp_path, {"x86_64": "47", "aarch64": "47"})
     repo = _repo()
 
-    errors = dra.check_docker_rpm_availability(
-        manifest_path=_write_manifest(tmp_path, _VERSIONS),
-        devbox_template=template,
-        fetch=repo.fetch,
-        head=repo.head,
+    errors, _report = dra.check_docker_rpm_availability(
+        devbox_template=template, fetch=repo.fetch, head=repo.head
     )
 
     assert errors == []
-    assert all("fedora/47/" in url for url in repo.heads + repo.fetches)
+    assert all("fedora/47/" in url for url in repo.fetches)
+    assert all("fedora/47/" in url for url, _timeout in repo.heads)
 
 
 @pytest.mark.unit
@@ -261,149 +576,49 @@ def test_rejects_unreadable_template(tmp_path: Path):
 
 
 @pytest.mark.unit
-def test_accepts_any_package_release(tmp_path: Path):
-    primary = zstd.compress(_primary_xml(release="77.fc44"))
-    repo = _repo(primary=primary)
-
-    assert _check(repo, tmp_path) == []
-
-
-@pytest.mark.unit
-def test_accepts_packages_without_an_epoch_attribute(tmp_path: Path):
-    no_epoch = {("containerd.io", arch) for arch in dra.SUPPORTED_ARCHES}
-    no_epoch |= {("docker-buildx-plugin", arch) for arch in dra.SUPPORTED_ARCHES}
-    primary = zstd.compress(_primary_xml(omit_epoch=no_epoch))
-    repo = _repo(primary=primary)
-
-    assert _check(repo, tmp_path) == []
-
-
-@pytest.mark.unit
-def test_reports_missing_package_for_one_architecture(tmp_path: Path):
-    primary = zstd.compress(_primary_xml(omit={("containerd.io", "aarch64")}))
-    repo = _repo(primary=primary)
-
-    errors = _check(repo, tmp_path)
-
-    assert len(errors) == 1
-    assert "aarch64" in errors[0]
-    assert "containerd.io" in errors[0]
-    assert "97.6.5" in errors[0]
-
-
-@pytest.mark.unit
-def test_reports_wrong_epoch_as_missing(tmp_path: Path):
-    primary = zstd.compress(_primary_xml(epochs={("docker-ce", "x86_64"): 2}))
-    repo = _repo(primary=primary)
-
-    errors = _check(repo, tmp_path)
-
-    assert len(errors) == 1
-    assert "x86_64" in errors[0]
-    assert "docker-ce 3:98.7.6" in errors[0]
-
-
-@pytest.mark.unit
-def test_reports_head_failure_as_unavailable(tmp_path: Path):
-    repo = _repo(head_error="docker-ce-cli-98.7.6-1.fc44.aarch64.rpm")
-
-    errors = _check(repo, tmp_path)
-
-    assert len(errors) == 1
-    assert "docker-ce-cli 1:98.7.6" in errors[0]
-    assert "listed but unavailable" in errors[0]
-
-
-@pytest.mark.unit
-def test_uses_an_available_alternate_release(tmp_path: Path):
-    key = ("docker-ce-cli", "aarch64")
-    listed = "docker-ce-cli-98.7.6-1.fc44.aarch64.rpm"
-    alternate = "docker-ce-cli-98.7.6-2.fc44.aarch64.rpm"
-    primary = zstd.compress(_primary_xml(extra_releases={key: "2.fc44"}))
-    repo = _repo(primary=primary, head_failures={listed})
-
-    errors = _check(repo, tmp_path)
-
-    assert errors == []
-    attempted = [
-        url.rsplit("/", 1)[-1]
-        for url in repo.heads
-        if "docker-ce-cli-" in url and url.endswith(".aarch64.rpm")
-    ]
-    assert attempted == [listed, alternate]
-
-
-@pytest.mark.unit
-def test_reports_unavailable_when_no_release_artifact_responds(tmp_path: Path):
-    key = ("docker-ce-cli", "aarch64")
-    listed = "docker-ce-cli-98.7.6-1.fc44.aarch64.rpm"
-    alternate = "docker-ce-cli-98.7.6-2.fc44.aarch64.rpm"
-    primary = zstd.compress(_primary_xml(extra_releases={key: "2.fc44"}))
-    repo = _repo(primary=primary, head_failures={listed, alternate})
-
-    errors = _check(repo, tmp_path)
-
-    assert len(errors) == 1
-    assert "listed but unavailable in 2 release(s)" in errors[0]
-    assert "1.fc44" in errors[0]
-    assert "2.fc44" in errors[0]
-
-
-@pytest.mark.unit
-def test_rejects_an_untrusted_alternate_release_location(tmp_path: Path):
-    key = ("docker-ce-cli", "aarch64")
-    primary = zstd.compress(
-        _primary_xml(
-            extra_releases={key: "2.fc44"},
-            extra_hrefs={key: "https://evil.example/docker-ce-cli.rpm"},
-        )
-    )
-    # The first candidate must fail so the untrusted alternate is attempted.
-    repo = _repo(primary=primary, head_failures={"-1.fc44.aarch64.rpm"})
-
-    with pytest.raises(dra.DockerRepoError, match="not an allowed"):
-        _check(repo, tmp_path)
-
-
-@pytest.mark.unit
-def test_rejects_primary_checksum_mismatch(tmp_path: Path):
-    primary = zstd.compress(_primary_xml())
-    repo = _repo(primaries=dict.fromkeys(dra.SUPPORTED_ARCHES, primary))
-    repo.primaries = dict.fromkeys(dra.SUPPORTED_ARCHES, primary + b"tampered")
+def test_rejects_primary_checksum_mismatch():
+    repo = _repo()
+    repo.primaries = {
+        arch: primary + b"tampered" for arch, primary in repo.primaries.items()
+    }
 
     with pytest.raises(dra.DockerRepoError, match="SHA-256 mismatch"):
-        _check(repo, tmp_path)
+        _check(repo)
 
 
 @pytest.mark.unit
 @pytest.mark.parametrize("status", [404, 410])
-def test_retries_primary_404_with_a_fresh_repomd_once(tmp_path: Path, status: int):
-    primary = zstd.compress(_primary_xml())
+def test_retries_primary_404_with_a_fresh_repomd_once(status: int):
+    primary = zstd.compress(_primary_xml(_entries("x86_64"), _entries("aarch64")))
     repo = _RetryRepo(
         dict.fromkeys(dra.SUPPORTED_ARCHES, primary),
         primary_status=status,
         primary_failures=dict.fromkeys(dra.SUPPORTED_ARCHES, 1),
     )
 
-    assert _check(repo, tmp_path) == []
+    errors, _report = _check(repo)
+
+    assert errors == []
     assert repo.repomd_fetches == 4
 
 
 @pytest.mark.unit
-def test_retries_a_primary_checksum_mismatch_once(tmp_path: Path):
-    primary = zstd.compress(_primary_xml())
+def test_retries_a_primary_checksum_mismatch_once():
+    primary = zstd.compress(_primary_xml(_entries("x86_64"), _entries("aarch64")))
     repo = _RetryRepo(
         dict.fromkeys(dra.SUPPORTED_ARCHES, primary),
         checksum_failures=dict.fromkeys(dra.SUPPORTED_ARCHES, 1),
     )
 
-    assert _check(repo, tmp_path) == []
+    errors, _report = _check(repo)
+
+    assert errors == []
     assert repo.repomd_fetches == 4
 
 
 @pytest.mark.unit
-def test_does_not_retry_non_retryable_primary_errors(tmp_path: Path):
-    primary = zstd.compress(_primary_xml())
+def test_does_not_retry_non_retryable_primary_errors():
+    primary = zstd.compress(_primary_xml(_entries("x86_64"), _entries("aarch64")))
     repo = _RetryRepo(
         dict.fromkeys(dra.SUPPORTED_ARCHES, primary),
         primary_status=500,
@@ -411,119 +626,78 @@ def test_does_not_retry_non_retryable_primary_errors(tmp_path: Path):
     )
 
     with pytest.raises(dra.DockerRepoError, match="HTTP 500"):
-        _check(repo, tmp_path)
+        _check(repo)
     assert repo.repomd_fetches == 1
 
 
 @pytest.mark.unit
-def test_does_not_retry_a_second_404(tmp_path: Path):
-    primary = zstd.compress(_primary_xml())
+def test_does_not_retry_a_second_404():
+    primary = zstd.compress(_primary_xml(_entries("x86_64"), _entries("aarch64")))
     repo = _RetryRepo(
         dict.fromkeys(dra.SUPPORTED_ARCHES, primary),
         primary_failures=dict.fromkeys(dra.SUPPORTED_ARCHES, 2),
     )
 
     with pytest.raises(dra.DockerRepoError, match="HTTP 404"):
-        _check(repo, tmp_path)
+        _check(repo)
     assert repo.repomd_fetches == 2
 
 
 @pytest.mark.unit
-def test_rejects_untrusted_primary_location(tmp_path: Path):
-    repo = _repo(
-        hrefs=dict.fromkeys(
-            dra.SUPPORTED_ARCHES, "https://evil.example/primary.xml.zst"
-        )
-    )
+def test_rejects_untrusted_primary_location():
+    repo = _repo()
+    repo.repomd = {
+        arch: _repomd(repo.primaries[arch], "https://evil.example/primary.xml.zst")
+        for arch in dra.SUPPORTED_ARCHES
+    }
 
     with pytest.raises(dra.DockerRepoError, match="not an allowed"):
-        _check(repo, tmp_path)
-
-
-@pytest.mark.unit
-def test_rejects_untrusted_package_location(tmp_path: Path):
-    primary = zstd.compress(
-        _primary_xml(
-            hrefs={("docker-ce", "x86_64"): "https://evil.example/docker-ce.rpm"}
-        )
-    )
-    repo = _repo(primary=primary)
-
-    with pytest.raises(dra.DockerRepoError, match="not an allowed"):
-        _check(repo, tmp_path)
-
-
-@pytest.mark.unit
-def test_resolves_normal_docker_relative_hrefs():
-    base_url = dra._repository_base_url("44", "x86_64")
-    prefix = "https://download.docker.com/linux/fedora/44/x86_64/stable/"
-
-    assert (
-        dra._resolve_repo_url(base_url, "repodata/repomd.xml")
-        == prefix + "repodata/repomd.xml"
-    )
-    assert (
-        dra._resolve_repo_url(base_url, "Packages/docker-ce-98.7.6-1.fc44.x86_64.rpm")
-        == prefix + "Packages/docker-ce-98.7.6-1.fc44.x86_64.rpm"
-    )
+        _check(repo)
 
 
 @pytest.mark.unit
 @pytest.mark.parametrize(
     "href",
     [
-        "/linux/fedora/44/aarch64/stable/Packages/docker-ce-98.7.6.rpm",
-        "https://download.docker.com/linux/fedora/44/aarch64/stable/"
-        "Packages/docker-ce-98.7.6.rpm",
-        "/linux/fedora/43/x86_64/stable/Packages/docker-ce-98.7.6.rpm",
+        # Foreign host and non-HTTPS scheme.
+        "https://evil.example/docker-ce.rpm",
+        "http://download.docker.com/linux/fedora/44/x86_64/stable/"
+        "Packages/docker-ce.rpm",
+        # Absolute locations in another architecture or Fedora release.
+        "/linux/fedora/44/aarch64/stable/Packages/docker-ce.rpm",
         "https://download.docker.com/linux/fedora/43/x86_64/stable/"
-        "Packages/docker-ce-98.7.6.rpm",
+        "Packages/docker-ce.rpm",
+        # Traversal, including percent-encoded separators and dot segments.
+        "../aarch64/stable/Packages/docker-ce.rpm",
+        "../../43/x86_64/stable/Packages/docker-ce.rpm",
+        "%2e%2e/%2e%2e/aarch64/stable/Packages/docker-ce.rpm",
+        "..%2faarch64%2fstable%2fPackages%2fdocker-ce.rpm",
+        # Query, fragment, and unsafe path characters.
+        "Packages/docker-ce.rpm?download=1",
+        "Packages/docker-ce.rpm#fragment",
+        "Packages\\docker-ce.rpm",
     ],
 )
-def test_rejects_package_href_from_another_arch_or_release(tmp_path: Path, href: str):
-    primary = zstd.compress(_primary_xml(hrefs={("docker-ce", "x86_64"): href}))
-    repo = _repo(primary=primary)
+def test_rejects_a_package_location_outside_the_trusted_subtree(href: str):
+    """Package locations must stay in the signed repository subtree.
 
-    with pytest.raises(
-        dra.DockerRepoError, match="outside the Docker Fedora repository subtree"
-    ):
-        dra.check_docker_rpm_availability(
-            manifest_path=_write_manifest(tmp_path, _VERSIONS),
-            releasever="44",
-            fetch=repo.fetch,
-            head=repo.head,
+    The gate reports repository metadata availability, so it must not accept a
+    listing whose artifact URL escapes the Docker Fedora release/architecture
+    subtree it just read. Bad locations are rejected before any HEAD request.
+    """
+
+    repo = _repo(
+        x86_64=_entries(
+            "x86_64",
+            hrefs={"docker-ce": href},
         )
-    assert repo.heads == []
+    )
 
-
-@pytest.mark.unit
-@pytest.mark.parametrize(
-    "href",
-    [
-        "../aarch64/stable/Packages/docker-ce-98.7.6.rpm",
-        "../../43/x86_64/stable/Packages/docker-ce-98.7.6.rpm",
-        "Packages/../../aarch64/stable/Packages/docker-ce-98.7.6.rpm",
-        "%2e%2e/%2e%2e/43/x86_64/stable/Packages/docker-ce-98.7.6.rpm",
-        "%2E%2E/%2E%2E/aarch64/stable/Packages/docker-ce-98.7.6.rpm",
-        "../%2e%2e/43/x86_64/stable/Packages/docker-ce-98.7.6.rpm",
-        "%252e%252e/aarch64/stable/Packages/docker-ce-98.7.6.rpm",
-        "..%2faarch64%2fstable%2fPackages%2fdocker-ce-98.7.6.rpm",
-        "https://download.docker.com/linux/fedora/44/x86_64/stable/"
-        "%2e%2e/%2e%2e/aarch64/stable/Packages/docker-ce-98.7.6.rpm",
-    ],
-)
-def test_rejects_traversal_in_package_href(tmp_path: Path, href: str):
-    primary = zstd.compress(_primary_xml(hrefs={("docker-ce", "x86_64"): href}))
-    repo = _repo(primary=primary)
-
-    with pytest.raises(dra.DockerRepoError, match="Docker repository"):
+    with pytest.raises(dra.DockerRepoError, match="Docker"):
         dra.check_docker_rpm_availability(
-            manifest_path=_write_manifest(tmp_path, _VERSIONS),
-            releasever="44",
-            fetch=repo.fetch,
-            head=repo.head,
+            releasever="44", fetch=repo.fetch, head=repo.head
         )
-    assert repo.heads == []
+    assert repo.heads == [], "an untrusted href must be rejected before any HEAD"
 
 
 @pytest.mark.unit
@@ -535,7 +709,7 @@ def test_rejects_repository_redirects():
 
 
 @pytest.mark.unit
-def test_rejects_primary_href_from_another_arch(tmp_path: Path):
+def test_rejects_primary_href_from_another_arch():
     cross_arch = "/linux/fedora/44/aarch64/stable/repodata/primary.xml.zst"
     repo = _repo(hrefs=dict.fromkeys(dra.SUPPORTED_ARCHES, cross_arch))
 
@@ -543,11 +717,9 @@ def test_rejects_primary_href_from_another_arch(tmp_path: Path):
         dra.DockerRepoError, match="outside the Docker Fedora repository subtree"
     ):
         dra.check_docker_rpm_availability(
-            manifest_path=_write_manifest(tmp_path, _VERSIONS),
-            releasever="44",
-            fetch=repo.fetch,
-            head=repo.head,
+            releasever="44", fetch=repo.fetch, head=repo.head
         )
+    assert repo.heads == []
 
 
 @pytest.mark.unit
@@ -568,20 +740,41 @@ def test_rejects_urls_outside_the_docker_fedora_repository(url: str):
 
 
 @pytest.mark.unit
-def test_rejects_malformed_primary_xml(tmp_path: Path):
-    repo = _repo(primary=zstd.compress(b"<metadata>"))
+def test_resolves_normal_docker_relative_hrefs():
+    base_url = dra._repository_base_url("44", "x86_64")
+    prefix = "https://download.docker.com/linux/fedora/44/x86_64/stable/"
 
-    with pytest.raises(dra.DockerRepoError, match="could not parse"):
-        _check(repo, tmp_path)
+    assert (
+        dra._resolve_repo_url(base_url, "repodata/repomd.xml")
+        == prefix + "repodata/repomd.xml"
+    )
+    assert (
+        dra._resolve_repo_url(base_url, "Packages/docker-ce-98.7.6-1.fc44.x86_64.rpm")
+        == prefix + "Packages/docker-ce-98.7.6-1.fc44.x86_64.rpm"
+    )
 
 
 @pytest.mark.unit
-def test_rejects_dtd_in_primary_metadata(tmp_path: Path):
+def test_rejects_malformed_primary_xml():
+    repo = _repo()
+    bad = zstd.compress(b"<metadata>")
+    repo.primaries = dict.fromkeys(dra.SUPPORTED_ARCHES, bad)
+    repo.repomd = {arch: _repomd(bad) for arch in dra.SUPPORTED_ARCHES}
+
+    with pytest.raises(dra.DockerRepoError, match="could not parse"):
+        _check(repo)
+
+
+@pytest.mark.unit
+def test_rejects_dtd_in_primary_metadata():
     malformed = b'<?xml version="1.0"?><!DOCTYPE metadata [<!ENTITY x "y">]><metadata/>'
-    repo = _repo(primary=zstd.compress(malformed))
+    repo = _repo()
+    payload = zstd.compress(malformed)
+    repo.primaries = dict.fromkeys(dra.SUPPORTED_ARCHES, payload)
+    repo.repomd = {arch: _repomd(payload) for arch in dra.SUPPORTED_ARCHES}
 
     with pytest.raises(dra.DockerRepoError, match="DTD or entity"):
-        _check(repo, tmp_path)
+        _check(repo)
 
 
 @pytest.mark.unit
@@ -599,15 +792,17 @@ def test_rejects_unsupported_primary_compression():
 
 
 @pytest.mark.unit
-def test_accepts_a_gzip_primary(tmp_path: Path):
-    primary = gzip.compress(_primary_xml())
-    repo = _repo(primaries=dict.fromkeys(dra.SUPPORTED_ARCHES, primary))
+def test_accepts_a_gzip_primary():
+    primary = gzip.compress(_primary_xml(_entries("x86_64"), _entries("aarch64")))
+    repo = _FakeRepo(dict.fromkeys(dra.SUPPORTED_ARCHES, primary))
     repo.repomd = {
         arch: _repomd(primary, "repodata/primary.xml.gz")
         for arch in dra.SUPPORTED_ARCHES
     }
 
-    assert _check(repo, tmp_path) == []
+    errors, _report = _check(repo)
+
+    assert errors == []
 
 
 @pytest.mark.unit
@@ -626,34 +821,6 @@ def test_network_error_is_reported_as_repository_error(monkeypatch):
 
 
 @pytest.mark.unit
-def test_manifest_versions_drive_the_check(tmp_path: Path):
-    arbitrary = {
-        "docker_ce": "v98.7.6",
-        "containerd_io": "97.6.5",
-        "docker_buildx_plugin": "96.5.4",
-    }
-    expected = dra.load_expected_packages(_write_manifest(tmp_path, arbitrary))
-
-    assert [package.name for package in expected] == [
-        name for name, _tool, _epoch in _PACKAGES
-    ]
-    assert [package.version for package in expected] == [
-        "98.7.6",
-        "98.7.6",
-        "97.6.5",
-        "96.5.4",
-    ]
-
-
-@pytest.mark.unit
-def test_rejects_manifest_without_a_docker_version(tmp_path: Path):
-    path = _write_manifest(tmp_path, {"docker_ce": "98.7.6"})
-
-    with pytest.raises(dra.DockerRepoError, match="containerd_io"):
-        dra.load_expected_packages(path)
-
-
-@pytest.mark.unit
 @pytest.mark.parametrize("releasever", ["", "0", "abc", "1000"])
 def test_rejects_invalid_fedora_release(releasever: str):
     with pytest.raises(dra.DockerRepoError, match="Fedora release"):
@@ -661,25 +828,38 @@ def test_rejects_invalid_fedora_release(releasever: str):
 
 
 @pytest.mark.unit
-def test_main_reports_success(monkeypatch, capsys):
+def test_main_reports_newest_versions_for_both_arches(monkeypatch, capsys):
+    report = [
+        f"x86_64: docker-ce: 3 release(s), newest 3:{_VERSION}-{_RELEASE}",
+        f"aarch64: docker-ce: 2 release(s), newest 0:29.8.1-{_RELEASE}",
+    ]
     monkeypatch.setattr(dra, "detect_fedora_release", lambda _path: "44")
-    monkeypatch.setattr(dra, "check_docker_rpm_availability", lambda **_kwargs: [])
+    monkeypatch.setattr(
+        dra, "check_docker_rpm_availability", lambda **_kwargs: ([], report)
+    )
 
     assert dra.main([]) == 0
-    assert "Fedora 44" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    for line in report:
+        assert line in output
+    assert "lists every required package for Fedora 44" in output
+    assert "newest-artifact HEAD checks succeeded." in output
+    assert "pinned package" not in output
 
 
 @pytest.mark.unit
-def test_main_exits_one_when_a_package_is_missing(monkeypatch, capsys):
+def test_main_reports_the_report_before_exiting_one(monkeypatch, capsys):
+    report = [f"x86_64: docker-ce: 1 release(s), newest 0:{_VERSION}-{_RELEASE}"]
+    errors = ["aarch64: containerd.io is absent from Docker Fedora 44 stable repodata"]
     monkeypatch.setattr(dra, "detect_fedora_release", lambda _path: "44")
     monkeypatch.setattr(
-        dra,
-        "check_docker_rpm_availability",
-        lambda **_kwargs: ["x86_64: containerd.io 0:97.6.5 is absent"],
+        dra, "check_docker_rpm_availability", lambda **_kwargs: (errors, report)
     )
 
     assert dra.main([]) == 1
-    assert "ERROR: x86_64: containerd.io 0:97.6.5 is absent" in capsys.readouterr().err
+    captured = capsys.readouterr()
+    assert report[0] in captured.out
+    assert f"ERROR: {errors[0]}" in captured.err
 
 
 @pytest.mark.unit

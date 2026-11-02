@@ -51,12 +51,6 @@ def _version_output(name: str, version: str, go_version: str) -> str:
         return f"minikube version: v{version}\ncommit: abcdef0123456789"
     if name == "node":
         return f"v{version}"
-    if name == "docker_ce":
-        return f"Docker version {version}, build 0000000"
-    if name == "containerd_io":
-        return f"containerd containerd v{version} deadbeef"
-    if name == "docker_buildx_plugin":
-        return f"github.com/docker/buildx v{version} deadbeef"
     if name == "pre_commit":
         return f"pre-commit {version}"
     if name in {"markdownlint_cli2", "opencode"}:
@@ -205,9 +199,6 @@ def test_lima_toolchain_check_reports_a_pinned_version_mismatch(
     "tool_name",
     [
         "minikube",
-        "docker_ce",
-        "containerd_io",
-        "docker_buildx_plugin",
         "coderabbit_cli",
         "golangci_lint",
         "gocyclo",
@@ -228,6 +219,40 @@ def test_lima_toolchain_check_reports_manifest_version_mismatch(
         f"{tool_name}: installed version 0.0.0, expected {expected_version}" in error
         for error in errors
     )
+
+
+_DOCKER_RPM_TOOLS = ("docker_ce", "containerd_io", "docker_buildx_plugin")
+
+
+@pytest.mark.parametrize("tool_name", _DOCKER_RPM_TOOLS)
+@pytest.mark.unit
+def test_docker_rpm_versions_are_not_lima_toolchain_pins(
+    repo_root: Path, tmp_path: Path, tool_name: str
+):
+    """Docker RPM versions float at VM creation and are never pin-checked.
+
+    Provisioning and readiness verify package identity, architecture, and the
+    pinned Docker signing key instead, so the toolchain check must not compare
+    the installed RPM version with the manifest.
+    """
+
+    manifest = _manifest(repo_root)
+    assert manifest["tools"][tool_name]["consumers"]["lima"] is False
+    assert tool_name not in _VERSION_COMMANDS
+    manifest["tools"][tool_name]["version"] = "0.0.1"
+    manifest_path = _write_manifest(tmp_path / "manifest.json", manifest)
+    successful = _successful_runner(manifest)
+    commands: list[tuple[str, ...]] = []
+
+    def runner(command):
+        commands.append(tuple(command))
+        return successful(command)
+
+    successes, errors = check_toolchain(manifest_path, runner)
+
+    assert errors == []
+    assert not any(line.startswith(f"{tool_name}:") for line in successes)
+    assert not any(command[0] in {"docker", "containerd"} for command in commands)
 
 
 @pytest.mark.unit

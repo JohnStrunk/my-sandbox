@@ -580,6 +580,8 @@ fi
 # The key is public, committed, and SHA-256 verified before DNF trusts it.
 # Docker Release (CE rpm) fingerprint: 060A 61C5 1B55 8A7F 742B 77AA C52F EB6B 621E 9F35
 DOCKER_GPG_KEY_SHA256=e6c650e0700b1bf4868b693b30761b926844befc8a0acb7ac0dd9b1faf1b7423
+# Long (16-hex) key ID of the same fingerprint, as reported in RPM headers.
+DOCKER_RPM_SIGNING_KEY_ID=c52feb6b621e9f35
 docker_gpg_key_file=/etc/pki/rpm-gpg/RPM-GPG-KEY-docker-ce
 docker_gpg_key_tmp="$(new_temp_dir)/docker-ce.asc"
 copy_repo_file lima/keys/docker-ce.asc "$docker_gpg_key_tmp"
@@ -595,11 +597,15 @@ if ! cmp -s "$docker_gpg_key_tmp" "$docker_gpg_key_file"; then
 fi
 rpm --import "$docker_gpg_key_file"
 
-# Docker CE and Buildx come from Docker's official Fedora repository. Keep
-# Engine, CLI, containerd.io, and Buildx on canonical version pins. Request the
-# exact name/epoch/version but let the repo select the current Fedora release
-# build. Skip RPM scriptlets; the system Docker units are enabled explicitly
-# below.
+# Docker CE and Buildx come from Docker's official Fedora repository. While the
+# live manifest declares no Lima consumer for these packages, versions float: a
+# fresh VM installs whatever DNF resolves as the latest compatible set for its
+# architecture, and a complete installed set is never refreshed on later boots.
+# A pre-#412 live checkout still declares all three as Lima consumers and its
+# live toolchain checks require their pins, so those checkouts converge on the
+# exact manifest versions, including a downgrade, to keep the VM bootable. Lima
+# embeds this script at VM creation; recreate the VM for a newer floating set.
+# Skip RPM scriptlets; the system Docker units are enabled explicitly below.
 docker_repo_file=/etc/yum.repos.d/docker-ce.repo
 docker_repo_tmp="$(new_temp_dir)/docker-ce.repo"
 cat >"$docker_repo_tmp" <<'EOF'
@@ -615,40 +621,178 @@ if ! cmp -s "$docker_repo_tmp" "$docker_repo_file"; then
   install -m 0644 "$docker_repo_tmp" "$docker_repo_file"
 fi
 
-docker_version="$(manifest_version docker_ce)"
-containerd_version="$(manifest_version containerd_io)"
-docker_buildx_version="$(manifest_version docker_buildx_plugin)"
-docker_ce_expected="docker-ce 3 ${docker_version}"
-docker_cli_expected="docker-ce-cli 1 ${docker_version}"
-containerd_expected="containerd.io 0 ${containerd_version}"
-docker_buildx_expected="docker-buildx-plugin 0 ${docker_buildx_version}"
+docker_rpm_packages=(docker-ce docker-ce-cli containerd.io docker-buildx-plugin)
+docker_rpms_installed() {
+  local package
+  for package in "${docker_rpm_packages[@]}"; do
+    rpm -q "$package" >/dev/null 2>&1 || return 1
+  done
+}
+# Fedora RPMs carry the build signature in the RSA header, which reports the
+# full 16-hex key ID. Fall back to the legacy signature tags for older packages.
+docker_rpm_signing_key_id() {
+  local package="$1" signatures key_id
+  if ! signatures="$(rpm -q --queryformat \
+    '%{RSAHEADER:pgpsig}\n%{DSAHEADER:pgpsig}\n%{SIGPGP:pgpsig}\n%{SIGGPG:pgpsig}\n' \
+    "$package" 2>/dev/null)"; then
+    return 1
+  fi
+  if ! key_id="$(grep -m1 -oE 'Key ID [0-9a-fA-F]{16}' <<<"$signatures")"; then
+    return 1
+  fi
+  printf '%s\n' "${key_id#Key ID }"
+}
+# Trust the installed set only when every package is the expected RPM for this
+# architecture and its signature came from the pinned Docker key. DNF enforces
+# the same key through gpgcheck and repo_gpgcheck, so a mismatch means the
+# packages were replaced outside the signed Fedora repository.
+verify_docker_rpm_origin() {
+  local package arch key_id host_arch
+  host_arch="$(uname -m)"
+  for package in "${docker_rpm_packages[@]}"; do
+    if ! arch="$(rpm -q --queryformat '%{ARCH}' "$package" 2>/dev/null)"; then
+      echo "devbox: required Docker package $package is not installed" >&2
+      return 1
+    fi
+    if [[ "$arch" != "$host_arch" ]]; then
+      echo "devbox: Docker package $package is $arch, expected $host_arch" >&2
+      return 1
+    fi
+    if ! key_id="$(docker_rpm_signing_key_id "$package")"; then
+      echo "devbox: cannot read the RPM signing key for Docker package $package" >&2
+      return 1
+    fi
+    if [[ "${key_id,,}" != "$DOCKER_RPM_SIGNING_KEY_ID" ]]; then
+      echo "devbox: Docker package $package is signed by key $key_id, not the" \
+        "pinned Docker release key; recreate the VM from a trusted template" >&2
+      return 1
+    fi
+  done
+}
+
+# The live manifest selects floating packages (all three tools declare no Lima
+# consumer) or pre-#412 pin convergence (all three declare a Lima consumer).
+# Mixed, missing, or non-boolean flags mean the checkout is inconsistent, so
+# refuse to guess between pinning and floating.
+docker_rpm_policy() {
+  local tool value floating=false pinned=false
+  for tool in docker_ce containerd_io docker_buildx_plugin; do
+    if ! value="$(jq -r --arg tool "$tool" '
+      .tools[$tool].consumers.lima
+      | if type == "boolean" then tostring
+        elif . == null then "missing"
+        else "invalid"
+        end
+    ' "$MANIFEST")"; then
+      echo "devbox: cannot read the Docker RPM consumer policy for '$tool'" \
+        "from the live tool manifest" >&2
+      return 1
+    fi
+    case "$value" in
+      false) floating=true ;;
+      true) pinned=true ;;
+      missing)
+        echo "devbox: manifest tool '$tool' has no consumers.lima flag;" \
+          "expected true (pre-#412) or false (floating)" >&2
+        return 1
+        ;;
+      *)
+        echo "devbox: invalid consumers.lima '$value' for manifest tool" \
+          "'$tool'; expected true (pre-#412) or false (floating)" >&2
+        return 1
+        ;;
+    esac
+  done
+  if [[ "$floating" == true && "$pinned" == true ]]; then
+    echo "devbox: mixed consumers.lima flags for Docker RPMs in the live" \
+      "tool manifest; refusing to mix pinned and floating installs" >&2
+    return 1
+  fi
+  if [[ "$pinned" == true ]]; then
+    printf 'pinned\n'
+  else
+    printf 'floating\n'
+  fi
+}
+
+# Read a pre-#412 Docker pin from the live manifest without registering it as a
+# generic manifest consumer. The current manifest intentionally keeps these
+# versions as compatibility metadata with consumers.lima=false, so only the
+# legacy pinned branch may consume them.
+docker_legacy_pin_version() {
+  local tool="$1" version
+  if ! version="$(jq -er --arg tool "$tool" \
+    '.tools[$tool].version' "$MANIFEST")"; then
+    echo "devbox: legacy Docker pin for '$tool' is missing from the live" \
+      "tool manifest" >&2
+    return 1
+  fi
+  version="${version#v}"
+  if [[ ! "$version" =~ ^[0-9]+(\.[0-9]+){1,3}([+-][A-Za-z0-9.]+)?$ ]]; then
+    echo "devbox: invalid legacy Docker pin '$version' for manifest tool" \
+      "'$tool'" >&2
+    return 1
+  fi
+  printf '%s\n' "$version"
+}
+
+docker_rpm_mode="$(docker_rpm_policy)" || exit 1
 docker_rpms_changed=false
-docker_rpm_identity() {
-  rpm -q --queryformat '%{NAME} %{EPOCHNUM} %{VERSION}' "$1" \
-    2>/dev/null || true
-}
-docker_rpms_match_pins() {
-  [[ "$(docker_rpm_identity docker-ce)" == "$docker_ce_expected" ]] \
-    && [[ "$(docker_rpm_identity docker-ce-cli)" == "$docker_cli_expected" ]] \
-    && [[ "$(docker_rpm_identity containerd.io)" == "$containerd_expected" ]] \
-    && [[ "$(docker_rpm_identity docker-buildx-plugin)" \
-      == "$docker_buildx_expected" ]]
-}
-if ! docker_rpms_match_pins; then
-  docker_rpms_changed=true
-  dnf install -y --enablerepo=docker-ce-stable \
-    --setopt=install_weak_deps=False --setopt=tsflags=noscripts \
-    "docker-ce-3:${docker_version}" \
-    "docker-ce-cli-1:${docker_version}" \
-    "containerd.io-${containerd_version}" \
-    "docker-buildx-plugin-0:${docker_buildx_version}"
-  dnf clean all
-  rm -rf /var/cache/dnf
-fi
-if ! docker_rpms_match_pins; then
-  echo "devbox: Docker CE/containerd/Buildx RPMs do not match the manifest pins" >&2
-  exit 1
-fi
+case "$docker_rpm_mode" in
+  floating)
+    if ! docker_rpms_installed; then
+      docker_rpms_changed=true
+      dnf install -y --enablerepo=docker-ce-stable \
+        --setopt=install_weak_deps=False --setopt=tsflags=noscripts \
+        "${docker_rpm_packages[@]}"
+      dnf clean all
+      rm -rf /var/cache/dnf
+    fi
+    ;;
+  pinned)
+    # Pre-#412 live checkouts still require exact Engine, CLI, containerd.io,
+    # and Buildx versions in their toolchain checks and preflight.
+    docker_version="$(docker_legacy_pin_version docker_ce)"
+    containerd_version="$(docker_legacy_pin_version containerd_io)"
+    docker_buildx_version="$(docker_legacy_pin_version docker_buildx_plugin)"
+    docker_ce_expected="docker-ce 3 ${docker_version}"
+    docker_cli_expected="docker-ce-cli 1 ${docker_version}"
+    containerd_expected="containerd.io 0 ${containerd_version}"
+    docker_buildx_expected="docker-buildx-plugin 0 ${docker_buildx_version}"
+    docker_rpm_identity() {
+      rpm -q --queryformat '%{NAME} %{EPOCHNUM} %{VERSION}' "$1" \
+        2>/dev/null || true
+    }
+    docker_rpms_match_pins() {
+      [[ "$(docker_rpm_identity docker-ce)" == "$docker_ce_expected" ]] \
+        && [[ "$(docker_rpm_identity docker-ce-cli)" == "$docker_cli_expected" ]] \
+        && [[ "$(docker_rpm_identity containerd.io)" == "$containerd_expected" ]] \
+        && [[ "$(docker_rpm_identity docker-buildx-plugin)" \
+          == "$docker_buildx_expected" ]]
+    }
+    if ! docker_rpms_match_pins; then
+      docker_rpms_changed=true
+      dnf install -y --allow-downgrade --enablerepo=docker-ce-stable \
+        --setopt=install_weak_deps=False --setopt=tsflags=noscripts \
+        "docker-ce-3:${docker_version}" \
+        "docker-ce-cli-1:${docker_version}" \
+        "containerd.io-${containerd_version}" \
+        "docker-buildx-plugin-0:${docker_buildx_version}"
+      dnf clean all
+      rm -rf /var/cache/dnf
+    fi
+    if ! docker_rpms_match_pins; then
+      echo "devbox: Docker CE/containerd/Buildx RPMs do not match the live" \
+        "manifest pins" >&2
+      exit 1
+    fi
+    ;;
+  *)
+    echo "devbox: internal error: unknown Docker RPM policy '$docker_rpm_mode'" >&2
+    exit 1
+    ;;
+esac
+verify_docker_rpm_origin
 
 assert_rpm_owner() {
   local path="$1" expected="$2" actual
@@ -697,10 +841,11 @@ fi
 systemctl daemon-reload
 systemctl enable --now containerd.service docker.socket docker.service
 if [[ "$docker_rpms_changed" == true ]]; then
-  # Restart the daemons after an RPM pin update so they do not keep running
-  # binaries that DNF replaced while the VM was shutting down or booting. Do
-  # this after enable --now so both units are active even on a fresh VM, and
-  # independent of which service happened to start first during boot.
+  # Restart the daemons after the one-time package install so they do not keep
+  # running binaries that DNF replaced while the VM was shutting down or
+  # booting. Do this after enable --now so both units are active even on a
+  # fresh VM, and independent of which service happened to start first during
+  # boot.
   systemctl restart containerd.service
   systemctl restart docker.service
 fi

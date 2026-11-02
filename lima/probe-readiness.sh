@@ -7,6 +7,10 @@ fail() {
   exit 1
 }
 
+# Long (16-hex) key ID of Docker's release key; keep it in sync with
+# lima/provision-system.sh and lima/docker-ce-preflight.sh.
+DOCKER_RPM_SIGNING_KEY_ID=c52feb6b621e9f35
+
 # Keep this reader contract synchronized with provision-vm-level.sh:
 # exactly one L[1-9][0-9]* line, root:root mode 0644, inside a root:root
 # mode-0755 /etc/devbox.
@@ -300,6 +304,39 @@ if ! docker_daemon_uid="$(stat -c '%u' "/proc/$docker_daemon_pid")"; then
 fi
 [[ "$docker_daemon_uid" == 0 ]] \
   || fail "the Docker system service process is not owned by root"
+# Docker RPM versions float to whatever the signed Fedora stable
+# repository provided when this VM was created, so verify package
+# identity and signing key instead of a version pin.
+docker_rpm_signing_key_id() {
+  local package="$1" signatures key_id
+  local queryformat='%{RSAHEADER:pgpsig}\n%{DSAHEADER:pgpsig}\n'
+  queryformat+='%{SIGPGP:pgpsig}\n%{SIGGPG:pgpsig}\n'
+  if ! signatures="$(rpm -q --queryformat "$queryformat" \
+    "$package" 2>/dev/null)"; then
+    return 1
+  fi
+  if ! key_id="$(
+    grep -m1 -oE 'Key ID [0-9a-fA-F]{16}' <<<"$signatures"
+  )"; then
+    return 1
+  fi
+  printf '%s\n' "${key_id#Key ID }"
+}
+for package in docker-ce docker-ce-cli containerd.io \
+  docker-buildx-plugin; do
+  docker_package_arch="$(rpm -q --queryformat '%{ARCH}' \
+    "$package" 2>/dev/null)" \
+    || fail "Docker package $package is not installed"
+  [[ "$docker_package_arch" == "$(uname -m)" ]] \
+    || fail "Docker package $package is $docker_package_arch; "\
+      "expected $(uname -m)"
+  docker_package_key="$(docker_rpm_signing_key_id "$package")" \
+    || fail "cannot read the RPM signing key for Docker package $package"
+  [[ "${docker_package_key,,}" == "$DOCKER_RPM_SIGNING_KEY_ID" ]] \
+    || fail "Docker package $package is signed by key "\
+      "$docker_package_key, "\
+      "not Docker's release key; recreate the VM from a trusted template"
+done
 getent group docker >/dev/null \
   || fail "the rootful Docker socket group is missing"
 id -nG | tr ' ' '\n' | grep -qx docker \
@@ -359,15 +396,39 @@ if ! docker_server_version="$(
 )"; then
   fail "the Docker CE API did not report a server version"
 fi
-if ! expected_docker_version="$(
-  jq -er '.tools.docker_ce.version | sub("^v"; "")' \
-    /etc/devbox/tool-versions.json
+[[ "$docker_server_version" =~ \
+  ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.]+)?$ ]] \
+  || fail "the Docker CE API reported an invalid server version: "\
+    "$docker_server_version"
+if ! docker_server_arch="$(
+  jq -er '.Arch' <<<"$docker_version_json"
 )"; then
-  fail "the Docker CE version pin is missing from the tool manifest"
+  fail "the Docker CE API did not report a server architecture"
 fi
-[[ "$docker_server_version" == "$expected_docker_version" ]] \
-  || fail "Docker server is $docker_server_version; "\
-    "expected Docker CE $expected_docker_version"
+if ! docker_server_os="$(
+  jq -er '.Os' <<<"$docker_version_json"
+)"; then
+  fail "the Docker CE API did not report a server operating system"
+fi
+[[ "$docker_server_os" == linux ]] \
+  || fail "Docker server operating system is $docker_server_os; "\
+    "expected linux"
+if ! docker_server_platform="$(
+  jq -er '.Platform.Name' <<<"$docker_version_json"
+)"; then
+  fail "the Docker CE API did not report a platform name"
+fi
+[[ "$docker_server_platform" == "Docker Engine"* ]] \
+  || fail "the Docker API at $DOCKER_SOCKET is not Docker Engine: "\
+    "$docker_server_platform"
+case "$(uname -m)" in
+  x86_64) expected_docker_arch=amd64 ;;
+  aarch64) expected_docker_arch=arm64 ;;
+  *) fail "unsupported architecture: $(uname -m)" ;;
+esac
+[[ "$docker_server_arch" == "$expected_docker_arch" ]] \
+  || fail "Docker server architecture is $docker_server_arch; "\
+    "expected $expected_docker_arch"
 curl --fail --silent --show-error --max-time 5 \
   --unix-socket "$PODMAN_SOCKET" http://d/_ping 2>/dev/null \
   | grep -qx OK \
