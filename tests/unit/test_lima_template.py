@@ -14,6 +14,9 @@ import yaml
 
 LIMA_DIR = "lima"
 
+# Public Docker Release key ID (fingerprint suffix), not a secret.
+DOCKER_RPM_KEY_ID = "c52feb6b621e9f35"  # pragma: allowlist secret
+
 EXPECTED_MOUNT_LOCATIONS = {
     "~/.agents",
     "~/.coderabbit",
@@ -53,6 +56,14 @@ def _template(repo_root: Path) -> dict:
 
 def _script(repo_root: Path, name: str) -> str:
     return (repo_root / LIMA_DIR / name).read_text()
+
+
+def _shell_function(text: str, name: str) -> str:
+    """Return a top-level shell function definition from a script."""
+
+    match = re.search(rf"(?ms)^{re.escape(name)}\(\) \{{\n.*?^\}}$", text)
+    assert match, f"missing shell function {name!r}"
+    return match.group(0)
 
 
 def _version_tuple(value: str) -> tuple[int, ...]:
@@ -491,11 +502,25 @@ def test_vm_skill_documents_safe_docker_buildx_usage_and_recreation(
         "`--allow` entitlements are outside the supported profile" in normalized_skill
     )
     assert (
-        "Changes to embedded provisioning require `devbox --recreate`"
-        in normalized_skill
+        "Docker package selection lives in the embedded provisioner, so use "
+        "`devbox --recreate` to adopt the current policy." in normalized_skill
     )
-    assert "Existing VMs must be recreated with `devbox --recreate`" in readme
-    assert "boot-time toolchain/readiness validation can fail" in readme
+    assert (
+        "Existing VMs can keep using their installed versions, but must be "
+        "recreated with `devbox --recreate` to adopt the current floating "
+        "policy; a normal restart does not update a complete package set." in readme
+    )
+    # The docs no longer warn that boot-time validation fails before
+    # recreation; current preflight/toolchain checks do not require exact RPM
+    # versions, while the legacy rollback mode remains documented.
+    assert "boot-time toolchain/readiness validation can fail" not in readme
+    assert (
+        "Docker RPM versions are not exact-version assertions in this check." in readme
+    )
+    assert (
+        "these checks do not require exact Docker RPM versions; "
+        "`devbox-toolchain-check` excludes Docker RPMs" in readme
+    )
 
 
 @pytest.mark.unit
@@ -887,47 +912,146 @@ def test_external_gcloud_rpm_skips_root_scriptlets(repo_root: Path):
 
 
 @pytest.mark.unit
-def test_docker_ce_uses_pinned_signature_checked_rpms_and_rootful_services(
+def test_docker_ce_floats_signed_rpms_and_verifies_origin_and_identity(
     repo_root: Path,
 ):
     system_script = _script(repo_root, "provision-system.sh")
     user_script = _script(repo_root, "provision-user.sh")
     docker_preflight = _script(repo_root, "docker-ce-preflight.sh")
     manifest = _template(repo_root)
-    tool_versions = (repo_root / "lima/tool-versions.json").read_text()
     docker_key = (repo_root / "lima/keys/docker-ce.asc").read_bytes()
     docker_key_sha256 = hashlib.sha256(docker_key).hexdigest()
 
-    assert '"docker_ce"' in tool_versions
-    assert '"containerd_io"' in tool_versions
-    assert '"docker_buildx_plugin"' in tool_versions
+    # Origin: the committed key and the signed Fedora stable repository.
     assert f"DOCKER_GPG_KEY_SHA256={docker_key_sha256}" in system_script
     assert "copy_repo_file lima/keys/docker-ce.asc" in system_script
     assert 'rpm --import "$docker_gpg_key_file"' in system_script
-    assert "repo_gpgcheck=1" in system_script
-    assert "file:///etc/pki/rpm-gpg/RPM-GPG-KEY-docker-ce" in system_script
-    assert "[docker-ce-stable]" in system_script
-    assert (
-        "https://download.docker.com/linux/fedora/$releasever/$basearch/stable"
-        in system_script
+    for setting in (
+        "[docker-ce-stable]",
+        "baseurl=https://download.docker.com/linux/fedora/$releasever/$basearch/stable",
+        "enabled=0",
+        "gpgcheck=1",
+        "repo_gpgcheck=1",
+        "gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-docker-ce",
+    ):
+        assert f"\n{setting}\n" in system_script
+
+    # The live manifest selects floating packages today: all three Docker tools
+    # declare no Lima consumer, so their stored versions are not install pins.
+    tool_versions = json.loads(
+        (repo_root / LIMA_DIR / "tool-versions.json").read_text()
     )
-    assert "enabled=0" in system_script
-    assert "gpgcheck=1" in system_script
-    assert "--enablerepo=docker-ce-stable" in system_script
-    assert "manifest_version docker_ce" in system_script
-    assert "manifest_version containerd_io" in system_script
-    assert "manifest_version docker_buildx_plugin" in system_script
-    assert '"docker-ce-3:${docker_version}"' in system_script
-    assert '"docker-ce-cli-1:${docker_version}"' in system_script
-    assert '"containerd.io-${containerd_version}"' in system_script
-    assert '"docker-buildx-plugin-0:${docker_buildx_version}"' in system_script
+    for tool in ("docker_ce", "containerd_io", "docker_buildx_plugin"):
+        assert tool_versions["tools"][tool]["consumers"]["lima"] is False, tool
+        # Legacy version metadata is retained for the rollback path.
+        assert tool_versions["tools"][tool]["version"], tool
+
     assert (
-        'docker_buildx_expected="docker-buildx-plugin 0 ${docker_buildx_version}"'
-        in system_script
+        "docker_rpm_packages=(docker-ce docker-ce-cli containerd.io "
+        "docker-buildx-plugin)" in system_script
     )
-    assert "docker_rpm_identity docker-buildx-plugin" in system_script
-    assert "docker-buildx-plugin" in system_script
-    assert "docker-ce-rootless-extras" not in system_script
+    assert "docker_rpms_installed()" in system_script
+    assert 'rpm -q "$package" >/dev/null 2>&1 || return 1' in system_script
+
+    # The live manifest selects the policy, and ambiguous flags fail closed
+    # instead of guessing between pinned and floating installs.
+    policy_function = _shell_function(system_script, "docker_rpm_policy")
+    assert "false) floating=true" in policy_function
+    assert "true) pinned=true" in policy_function
+    assert "mixed consumers.lima flags" in policy_function
+    assert "has no consumers.lima flag" in policy_function
+    assert "invalid consumers.lima" in policy_function
+    assert 'docker_rpm_mode="$(docker_rpm_policy)" || exit 1' in system_script
+
+    policy_block = re.search(
+        r'(?ms)^docker_rpm_mode="\$\(docker_rpm_policy\)" \|\| exit 1\n'
+        r".*?^esac$",
+        system_script,
+    )
+    assert policy_block, "missing Docker RPM policy dispatch"
+    floating_match = re.search(
+        r"(?ms)^  floating\)\n(.*?)^    ;;$", policy_block.group(0)
+    )
+    pinned_match = re.search(r"(?ms)^  pinned\)\n(.*?)^    ;;$", policy_block.group(0))
+    assert floating_match, "missing floating Docker RPM branch"
+    assert pinned_match, "missing legacy pinned Docker RPM branch"
+    floating_branch = floating_match.group(1)
+    pinned_branch = pinned_match.group(1)
+
+    # Floating branch: unversioned names, resolved only when the set is
+    # incomplete, and no exact version/epoch identity logic.
+    assert "if ! docker_rpms_installed; then" in floating_branch
+    assert "dnf install -y --enablerepo=docker-ce-stable" in floating_branch
+    assert '"${docker_rpm_packages[@]}"' in floating_branch
+    for floating_absent in (
+        "manifest_version",
+        "docker_legacy_pin_version",
+        "--allow-downgrade",
+        "docker_rpm_identity",
+        "docker-ce-3:",
+        "docker-ce-cli-1:",
+        "containerd.io-${",
+        "docker-buildx-plugin-0:",
+    ):
+        assert floating_absent not in floating_branch, floating_absent
+
+    # Exact pins exist only in the all-true legacy branch, which restores
+    # pre-#412 pin convergence for old live checkouts (including downgrades).
+    # The dedicated reader keeps those records out of the generic Lima
+    # consumer contract (consumers.lima: false in the current manifest).
+    for pin_read in (
+        "docker_legacy_pin_version docker_ce",
+        "docker_legacy_pin_version containerd_io",
+        "docker_legacy_pin_version docker_buildx_plugin",
+    ):
+        assert pin_read in pinned_branch
+    for tool in ("docker_ce", "containerd_io", "docker_buildx_plugin"):
+        assert f"manifest_version {tool}" not in system_script
+    assert '"docker-ce-3:${docker_version}"' in pinned_branch
+    assert '"docker-ce-cli-1:${docker_version}"' in pinned_branch
+    assert '"containerd.io-${containerd_version}"' in pinned_branch
+    assert '"docker-buildx-plugin-0:${docker_buildx_version}"' in pinned_branch
+    assert pinned_branch.count("--allow-downgrade") == 1
+    assert "docker_rpm_identity" in pinned_branch
+    assert "do not match the live" in pinned_branch
+    # The pin specs and downgrade are confined to the legacy branch.
+    assert "--allow-downgrade" not in policy_block.group(0).replace(pinned_branch, "")
+    rest_of_script = system_script.replace(pinned_branch, "")
+    for pinned_only in (
+        "docker-ce-3:",
+        "docker-ce-cli-1:",
+        "docker-buildx-plugin-0:",
+    ):
+        assert pinned_only not in rest_of_script, pinned_only
+
+    assert "--setopt=install_weak_deps=False --setopt=tsflags=noscripts" in (
+        system_script
+    )
+    # A boot with the complete set installed must not refresh or upgrade it.
+    assert "dnf upgrade" not in system_script
+    assert "dnf update" not in system_script
+    assert "--refresh" not in system_script
+
+    # Package identity and signing key are verified on every boot, even when
+    # DNF installed nothing.
+    assert f"DOCKER_RPM_SIGNING_KEY_ID={DOCKER_RPM_KEY_ID}" in system_script
+    assert "verify_docker_rpm_origin()" in system_script
+    assert system_script.index("if ! docker_rpms_installed; then") < (
+        system_script.index("\nverify_docker_rpm_origin\n")
+    )
+    assert "rpm -q --queryformat '%{ARCH}'" in system_script
+    assert "%{RSAHEADER:pgpsig}" in system_script
+    # rpm prints several signature tags; take one match without a head pipeline
+    # (a `grep | head` pipeline can fail under `set -o pipefail`).
+    system_key_helper = _shell_function(system_script, "docker_rpm_signing_key_id")
+    assert "grep -m1 -oE 'Key ID [0-9a-fA-F]{16}'" in system_key_helper
+    assert "| head" not in system_key_helper
+    legacy_pin_helper = _shell_function(system_script, "docker_legacy_pin_version")
+    assert 'version="${version#v}"' in legacy_pin_helper
+    assert "invalid legacy Docker pin" in legacy_pin_helper
+    assert "is missing from the live" in legacy_pin_helper
+    assert "manifest_integrity_policy" not in legacy_pin_helper
+    assert "pinned Docker release key" in system_script
     assert "assert_rpm_owner /usr/bin/docker docker-ce-cli" in system_script
     assert "assert_rpm_owner /usr/bin/dockerd docker-ce" in system_script
     assert "assert_rpm_owner /usr/bin/containerd containerd.io" in system_script
@@ -935,9 +1059,7 @@ def test_docker_ce_uses_pinned_signature_checked_rpms_and_rootful_services(
         "assert_rpm_owner /usr/libexec/docker/cli-plugins/docker-buildx "
         "docker-buildx-plugin" in system_script
     )
-    assert "docker_release" not in system_script
-    assert "rpm -q --queryformat '%{NAME} %{EPOCHNUM} %{VERSION}'" in system_script
-    assert "--setopt=tsflags=noscripts" in system_script
+    assert "docker-ce-rootless-extras" not in system_script
     assert "rpm -q podman-docker" in system_script
     assert (
         'KIND_EXPERIMENTAL_PROVIDER="${KIND_EXPERIMENTAL_PROVIDER:-docker}"'
@@ -969,9 +1091,43 @@ def test_docker_ce_uses_pinned_signature_checked_rpms_and_rootful_services(
     assert "rootful Docker socket is missing" in docker_preflight
     assert "docker-ce-rootless-extras" not in docker_preflight
     assert "containerd.io" in docker_preflight
-    assert ".tools.docker_ce.version" in docker_preflight
-    assert "containerd_io" in docker_preflight
-    assert "{{.Client.Version}}|{{.Server.Version}}" in docker_preflight
+    assert "docker-buildx-plugin" in docker_preflight
+    # Preflight rejects an unexpected source, package, or endpoint.
+    assert f"DOCKER_CE_RPM_SIGNING_KEY_ID={DOCKER_RPM_KEY_ID}" in docker_preflight
+    assert "DOCKER_CE_RPM_PACKAGES=(docker-ce docker-ce-cli containerd.io " in (
+        docker_preflight
+    )
+    assert "rpm -q --queryformat '%{ARCH}'" in docker_preflight
+    assert "%{RSAHEADER:pgpsig}" in docker_preflight
+    preflight_key_helper = _shell_function(
+        docker_preflight, "docker_ce_rpm_signing_key_id"
+    )
+    assert "grep -m1 -oE 'Key ID [0-9a-fA-F]{16}'" in preflight_key_helper
+    assert "| head" not in preflight_key_helper
+    assert "not the Docker release key" in docker_preflight
+    assert "/etc/yum.repos.d/docker-ce.repo" in docker_preflight
+    assert "/etc/pki/rpm-gpg/RPM-GPG-KEY-docker-ce" in docker_preflight
+    assert "repo_gpgcheck=1" in docker_preflight
+    assert "gpgcheck=1" in docker_preflight
+    # The identity probe must clear caller overrides, pin the rootful socket,
+    # and name the default context so a user currentContext cannot redirect it.
+    unset_position = docker_preflight.index("unset DOCKER_HOST DOCKER_CONTEXT")
+    export_position = docker_preflight.index(
+        "export DOCKER_HOST='unix:///var/run/docker.sock'"
+    )
+    probe_position = docker_preflight.index("docker --context default version")
+    assert unset_position < export_position < probe_position
+    assert (
+        "{{.Client.Version}}|{{.Server.Version}}|{{.Server.Arch}}|"
+        "{{.Server.Platform.Name}}" in docker_preflight
+    )
+    assert "invalid client version" in docker_preflight
+    assert "invalid server version" in docker_preflight
+    assert "reported architecture" in docker_preflight
+    assert "expected Docker Engine" in docker_preflight
+    # The floating policy replaces both the version pin and the manifest read.
+    assert ".tools.docker_ce.version" not in docker_preflight
+    assert "containerd_io" not in docker_preflight
     assert "docker_rpms_changed=false" in system_script
     assert 'if [[ "$docker_rpms_changed" == true ]]; then' in system_script
     assert "systemctl restart containerd.service" in system_script
@@ -984,6 +1140,7 @@ def test_readiness_checks_distinct_docker_ce_and_podman_endpoints(
     repo_root: Path,
 ):
     probe = _script(repo_root, "probe-readiness.sh")
+    inline_probe = _template(repo_root)["probes"][0]["script"]
 
     assert "/var/run/docker.sock" in probe
     assert "DOCKER_SOCKET=/var/run/docker.sock" in probe
@@ -1003,9 +1160,32 @@ def test_readiness_checks_distinct_docker_ce_and_podman_endpoints(
     assert "the guest user cannot access the rootful Docker socket" in probe
     assert 'docker_daemon_uid" == 0' in probe
     assert "http://d/version" in probe
-    assert ".tools.docker_ce.version" in probe
     assert '--unix-socket "$PODMAN_SOCKET" http://d/_ping' in probe
     assert "the separate rootless Podman API is not responding" in probe
+    # Package identity and signing key replace the retired version pin.
+    assert "for package in docker-ce docker-ce-cli containerd.io \\" in probe
+    assert "docker-buildx-plugin; do" in probe
+    assert "rpm -q --queryformat '%{ARCH}'" in probe
+    assert 'docker_package_arch" == "$(uname -m)"' in probe
+    assert "%{RSAHEADER:pgpsig}" in probe
+    probe_key_helper = _shell_function(probe, "docker_rpm_signing_key_id")
+    assert "grep -m1 -oE 'Key ID [0-9a-fA-F]{16}'" in probe_key_helper
+    assert "| head" not in probe_key_helper
+    # The key ID is a named constant shared with provisioning/preflight, and the
+    # comparison must use that constant rather than an inline literal.
+    comparison = '[[ "${docker_package_key,,}" == "$DOCKER_RPM_SIGNING_KEY_ID" ]]'
+    for text in (probe, inline_probe):
+        assert f"DOCKER_RPM_SIGNING_KEY_ID={DOCKER_RPM_KEY_ID}" in text
+        assert comparison in text
+        # No inline key literal comparison may remain.
+        assert f"== {DOCKER_RPM_KEY_ID}" not in text
+    assert "not Docker's release key; recreate the VM from a trusted template" in probe
+    assert 'docker_server_os" == linux' in probe
+    assert "Docker API at $DOCKER_SOCKET is not Docker Engine" in probe
+    assert "expected_docker_arch=amd64" in probe
+    assert "expected_docker_arch=arm64" in probe
+    assert 'docker_server_arch" == "$expected_docker_arch"' in probe
+    assert ".tools.docker_ce.version" not in probe
 
 
 @pytest.mark.unit

@@ -12,6 +12,22 @@ require the provider to be selected.
 The VM template, host requirements, mounts, provisioning, and lifecycle details
 are documented in [`lima/README.md`](lima/README.md).
 
+With the current manifest's `consumers.lima: false` flags for `docker_ce`,
+`containerd_io`, and `docker_buildx_plugin`, fresh and recreated VMs request the
+unversioned DNF5 package names `docker-ce`, `docker-ce-cli`, `containerd.io`,
+and `docker-buildx-plugin` from Docker's signature-checked Fedora stable
+repository; DNF selects the latest compatible set. The stored manifest
+versions are not current install pins. This is an intentional
+stable/recreate-only cadence: complete sets are not refreshed on ordinary
+restarts, so long-lived VMs may lag Fedora stable until `devbox --recreate`.
+
+If a set is absent or partial, boot provisioning retries all four names. DNF5
+does not upgrade already-installed named packages, so missing components may be
+installed from current metadata while installed siblings stay as-is; partial
+repair does not guarantee a coherent newest set. Recreate for a coherent
+newest compatible set. Fedora stable metadata is mutable, and newest EVRs may
+differ by architecture. See the Lima guide for details.
+
 ## Start and manage the VM
 
 After completing the one-time host setup in the Lima guide, run the launcher
@@ -196,8 +212,9 @@ changes must still pass the fresh-L2 checklist in the
 The #319 backend matrix explicitly exercises kind+Docker CE, kind+Podman,
 Minikube+Docker CE, Minikube+Podman, and Minikube+KVM2. It pins kind 0.33.0's
 Kubernetes 1.37.0 node image by digest and starts Minikube with Kubernetes
-1.37.0; Minikube, Docker CE, and kubectl versions are pinned in
-`lima/tool-versions.json`.
+1.37.0; Minikube and kubectl versions are pinned in `lima/tool-versions.json`.
+Under current policy, Docker RPM versions are selected from Fedora stable when
+a VM is first provisioned or recreated.
 Every smoke uses a digest-pinned BusyBox workload. Validators require explicit
 driver selection and never fall back or skip. Tests verify the actual
 Docker/Podman node resource or KVM2 libvirt L2 domain, then delete the cluster
@@ -226,24 +243,36 @@ schedule.
 
 ## Tool-version maintenance
 
-`lima/tool-versions.json` is the canonical pin manifest. Lima provisioning,
-CI, pre-commit, and Renovate consume or validate its entries. When changing a
-pin, run:
+`lima/tool-versions.json` is canonical for actively manifest-pinned tools. Lima
+provisioning, CI, pre-commit, and Renovate consume or validate active entries.
+It retains version metadata for `docker_ce`, `containerd_io`, and
+`docker_buildx_plugin`, all currently marked `consumers.lima: false`; those
+values are not current install pins, and Renovate updates for the records are
+disabled. For rollback only, the embedded provisioner uses the exact version
+values when a pre-#412 live manifest marks all three entries
+`consumers.lima: true`. This lets a VM using the new provisioner boot after the
+checkout is switched back to a pre-#412 checkout if Fedora stable still offers
+those package versions; that availability is not guaranteed. Current policy
+does not pin Docker versions. When changing an active pin, run:
 
 ```shell
 python3 scripts/validate_tool_versions.py
 python3 scripts/verify_provenance.py
 ```
 
-When changing a Docker CE, containerd.io, or Buildx pin, also run
-`uv run --isolated --no-sync python scripts/check_docker_rpm_availability.py`.
-It checks Docker's Fedora stable repodata for the Fedora release configured by
-`lima/devbox.yaml` on both supported architectures for the exact manifest
-versions and RPM epochs, and HEADs each matched package. The two cloud-image
-URLs must agree on the release or the check fails closed. This is an
-availability gate only: DNF signature verification and the x86_64 VM tier
-remain authoritative for integrity and runtime compatibility, and the check
-does not resolve dependencies.
+Run the availability check when changing Docker RPM policy or Fedora release
+inputs:
+
+```shell
+uv run --isolated --no-sync python scripts/check_docker_rpm_availability.py
+```
+
+The Fedora 44 CI gate checks all four RPMs and HEADs the newest artifacts
+independently on x86_64 and aarch64, reporting each architecture's newest EVRs;
+they need not match. This is an availability gate, not an exact manifest
+version check or dependency solver. DNF signature verification and the x86_64
+VM tier remain authoritative for package integrity and runtime compatibility;
+aarch64 runtime behavior is not covered by that gate.
 
 Every tool and downloaded agent skill in the manifest declares an explicit
 `integrity` policy: `sha256` or `version-only`. The checksum-managed release
@@ -263,10 +292,10 @@ rustup, Helm, and kubectl. They remain exact HTTPS version/commit pins, but are
 **not SHA-256-verified**. Go retains Renovate's timestamped `golang-version`
 datasource and the global 10-day release-age gate. Although go.dev's JSON feed
 publishes Linux hashes, it lacks timestamps to join to the version datasource,
-so Go is version-only in v1. Other package-manager tool pins are likewise
-marked `version-only` because the manifest does not carry package artifact
-digests. acli uses Atlassian's official Homebrew formula for its version and
-both architecture digests. Its feeds have no release
+so Go is version-only in v1. Other actively managed package-manager tool pins
+are likewise marked `version-only` because the manifest does not carry package
+artifact digests. acli uses Atlassian's official Homebrew formula for its
+version and both architecture digests. Its feeds have no release
 timestamps, so a scoped `timestamp-optional` rule lets the acli group update
 without the global 10-day wait. All other dependencies keep that gate unchanged.
 
@@ -283,11 +312,11 @@ PR.
 Review any change to `provenance.url_templates` against the base branch: those
 URLs select the assets checked by CI, and Renovate should only update the
 artifact version/digest records, not their provenance templates.
-Manifest-only updates are applied when the VM next starts (for example, run
-`devbox --stop` and then `devbox`). For scripted manifest refresh followed by a
-command, use `devbox --stop && devbox -- <command>` (for example,
+Active tool-manifest updates are applied when the VM next starts (for example,
+run `devbox --stop` and then `devbox`). For scripted manifest refresh followed
+by a command, use `devbox --stop && devbox -- <command>` (for example,
 `devbox --stop && devbox -- git status`); edits to embedded Lima provisioning
-or template files require `devbox --recreate`.
+or template files, including Docker RPM selection, require `devbox --recreate`.
 
 ## Repository map
 

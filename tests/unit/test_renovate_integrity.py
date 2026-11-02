@@ -174,27 +174,74 @@ def _simulate_renovate_artifact_update(
     return manifest_text, list(reversed(updates))
 
 
-_ARBITRARY_DOCKER_VERSIONS = {
-    "docker_ce": "98.7.6",
-    "containerd_io": "97.6.5",
-    "docker_buildx_plugin": "96.5.4",
-}
-
-
 def _shell_function(script: str, name: str) -> str:
     match = re.search(rf"(?ms)^{re.escape(name)}\(\) \{{\n.*?^\}}$", script)
     assert match, f"missing shell function {name!r} in provision-system.sh"
     return match.group(0)
 
 
-def _docker_rpm_pin_block(script: str) -> str:
-    match = re.search(
-        r'(?ms)^docker_version="\$\(manifest_version docker_ce\)"\n'
-        r".*?^  exit 1\n^fi$",
+_DOCKER_RPM_TOOLS = ("docker_ce", "containerd_io", "docker_buildx_plugin")
+_DOCKER_RPM_PACKAGES = (
+    "docker-ce",
+    "docker-ce-cli",
+    "containerd.io",
+    "docker-buildx-plugin",
+)
+# Docker's RPM epochs, mirrored from the production pin specs.
+_DOCKER_RPM_EPOCHS = {
+    "docker-ce": 3,
+    "docker-ce-cli": 1,
+    "containerd.io": 0,
+    "docker-buildx-plugin": 0,
+}
+_DOCKER_KEY_ID = "c52feb6b621e9f35"  # pragma: allowlist secret - public key ID
+_DOCKER_PACKAGE_TOOL = {
+    "docker-ce": "docker_ce",
+    "docker-ce-cli": "docker_ce",
+    "containerd.io": "containerd_io",
+    "docker-buildx-plugin": "docker_buildx_plugin",
+}
+# Version DNF is simulated as selecting; deliberately unrelated to the manifest.
+_DNF_SELECTED_VERSION = "99.1.1"
+
+
+def _docker_rpm_block(script: str) -> str:
+    """Return the production Docker RPM policy, key pin, and install block.
+
+    The legacy all-true branch reads pins through ``docker_legacy_pin_version``
+    rather than the generic ``manifest_version`` so the manifest validator keeps
+    treating Docker records with ``consumers.lima: false`` as non-consumers.
+    """
+
+    packages = re.search(r"(?m)^docker_rpm_packages=\(.*\)$", script)
+    assert packages, "missing Docker RPM package list in provision-system.sh"
+    key = re.search(r"(?m)^DOCKER_RPM_SIGNING_KEY_ID=\S+$", script)
+    assert key, "missing Docker RPM signing key pin in provision-system.sh"
+    helpers = "\n\n".join(
+        _shell_function(script, name)
+        for name in (
+            "docker_rpms_installed",
+            "docker_rpm_signing_key_id",
+            "verify_docker_rpm_origin",
+            "docker_rpm_policy",
+            "docker_legacy_pin_version",
+        )
+    )
+    block = re.search(
+        r'(?ms)^docker_rpm_mode="\$\(docker_rpm_policy\)" \|\| exit 1\n'
+        r".*?^verify_docker_rpm_origin$",
         script,
     )
-    assert match, "missing Docker RPM pin block in provision-system.sh"
-    return match.group(0)
+    assert block, "missing Docker RPM install policy in provision-system.sh"
+    return (
+        packages.group(0)
+        + "\n"
+        + key.group(0)
+        + "\n\n"
+        + helpers
+        + "\n\n"
+        + block.group(0)
+    )
 
 
 def _write_executable(path: Path, contents: str) -> None:
@@ -202,18 +249,115 @@ def _write_executable(path: Path, contents: str) -> None:
     path.chmod(0o755)
 
 
+def _host_rpm_arch() -> str:
+    return subprocess.run(
+        ["uname", "-m"], check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+def _manifest_docker_versions(repo_root: Path) -> dict[str, str]:
+    """Return the checked-in manifest versions used by the legacy pin mode."""
+
+    manifest = json.loads((repo_root / "lima" / "tool-versions.json").read_text())
+    return {tool: manifest["tools"][tool]["version"] for tool in _DOCKER_RPM_TOOLS}
+
+
+def _policy_modes(mode: object) -> dict[str, object]:
+    return dict.fromkeys(_DOCKER_RPM_TOOLS, mode)
+
+
+def _docker_manifest(
+    tmp_path: Path,
+    repo_root: Path,
+    modes: dict[str, object],
+    *,
+    versions: dict[str, str] | None = None,
+    omit_versions: frozenset[str] = frozenset(),
+) -> Path:
+    """Write a live-manifest stand-in with the requested consumer flags.
+
+    ``modes`` values are booleans, or ``"missing"``/``"invalid"`` to simulate an
+    absent or non-boolean ``consumers.lima`` flag. ``versions`` overrides the
+    checked-in versions; ``omit_versions`` drops a version record entirely.
+    """
+
+    base_versions = _manifest_docker_versions(repo_root)
+    base_versions.update(versions or {})
+    tools = {}
+    for tool in _DOCKER_RPM_TOOLS:
+        mode = modes[tool]
+        consumers: dict[str, object] = {}
+        if mode == "missing":
+            pass
+        elif mode == "invalid":
+            consumers["lima"] = "false"
+        else:
+            consumers["lima"] = mode
+        record: dict[str, object] = {
+            "integrity": "version-only",
+            "consumers": consumers,
+        }
+        if tool not in omit_versions:
+            record["version"] = base_versions[tool]
+        tools[tool] = record
+    path = tmp_path / "live-tool-versions.json"
+    path.write_text(json.dumps({"tools": tools}, indent=2) + "\n")
+    return path
+
+
+def _expected_pin_specs(versions: dict[str, str]) -> list[str]:
+    return [
+        f"docker-ce-3:{versions['docker_ce']}",
+        f"docker-ce-cli-1:{versions['docker_ce']}",
+        f"containerd.io-{versions['containerd_io']}",
+        f"docker-buildx-plugin-0:{versions['docker_buildx_plugin']}",
+    ]
+
+
+def _installed_pin_lines(
+    versions: dict[str, str], arch: str | None = None
+) -> list[str]:
+    arch = arch or _host_rpm_arch()
+    return [
+        f"{name} {arch} {_DOCKER_KEY_ID} {_DOCKER_RPM_EPOCHS[name]} "
+        f"{versions[_DOCKER_PACKAGE_TOOL[name]]}"
+        for name in _DOCKER_RPM_PACKAGES
+    ]
+
+
 def _fake_docker_rpm_tools(tmp_path: Path) -> tuple[Path, Path, Path]:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     state = tmp_path / "installed-rpms"
     log = tmp_path / "dnf.log"
+    # State lines: "<name> <arch> <key-id> <epoch> <version>".
     _write_executable(
         fake_bin / "rpm",
         """#!/usr/bin/env bash
 set -euo pipefail
 package="${!#}"
 [[ -f "$RPM_STATE" ]] || exit 1
-grep -m1 -- "^${package} " "$RPM_STATE"
+line="$(grep -m1 -- "^${package} " "$RPM_STATE" || true)"
+[[ -n "$line" ]] || exit 1
+read -r name arch key epoch version <<<"$line"
+if [[ "$*" != *--queryformat* ]]; then
+  printf '%s %s\\n' "$package" "$version"
+  exit 0
+fi
+format="$3"
+case "$format" in
+  *RSAHEADER*)
+    printf 'RSA/SHA256, Tue 20 Jan 2026 03:22:11 AM EST, Key ID %s\\n' "$key"
+    printf '(none)\\n(none)\\n(none)\\n'
+    if [[ -n "${RPM_EXTRA_KEY_ID:-}" ]]; then
+      printf 'DSA/SHA256, Tue 20 Jan 2026 03:22:11 AM EST, Key ID %s\\n' \
+        "$RPM_EXTRA_KEY_ID"
+    fi
+    ;;
+  *EPOCHNUM*) printf '%s %s %s\\n' "$name" "$epoch" "$version" ;;
+  *ARCH*) printf '%s\\n' "$arch" ;;
+  *) echo "unexpected rpm query format: $format" >&2; exit 64 ;;
+esac
 """,
     )
     # The extracted production block clears the dnf cache; intercept that
@@ -236,70 +380,92 @@ set -euo pipefail
 printf '%s\\n' "$*" >>"$DNF_LOG"
 if [[ "$1 $2" == "clean all" ]]; then exit 0; fi
 [[ "$1" == install ]] || { echo "unexpected dnf invocation: $*" >&2; exit 64; }
+if [[ "${DNF_INSTALL_FAILS:-}" == 1 ]]; then
+  echo 'simulated dnf install failure' >&2
+  exit 1
+fi
+if [[ "${DNF_INSTALLS_NOTHING:-}" == 1 ]]; then exit 0; fi
 : >"$RPM_STATE"
 for argument in "$@"; do
   case "$argument" in
+    install|-y|--allow-downgrade|--enablerepo=*|--setopt=*) continue ;;
     docker-ce-3:*)
-      printf 'docker-ce 3 %s\\n' "${argument#docker-ce-3:}" >>"$RPM_STATE"
-      ;;
+      name=docker-ce; epoch=3; version="${argument#docker-ce-3:}" ;;
     docker-ce-cli-1:*)
-      printf 'docker-ce-cli 1 %s\\n' "${argument#docker-ce-cli-1:}" >>"$RPM_STATE"
-      ;;
-    containerd.io-*)
-      printf 'containerd.io 0 %s\\n' "${argument#containerd.io-}" >>"$RPM_STATE"
-      ;;
+      name=docker-ce-cli; epoch=1; version="${argument#docker-ce-cli-1:}" ;;
+    containerd.io-[0-9]*)
+      name=containerd.io; epoch=0; version="${argument#containerd.io-}" ;;
     docker-buildx-plugin-0:*)
-      printf 'docker-buildx-plugin 0 %s\\n' \
-        "${argument#docker-buildx-plugin-0:}" >>"$RPM_STATE"
-      ;;
+      name=docker-buildx-plugin; epoch=0
+      version="${argument#docker-buildx-plugin-0:}" ;;
+    docker-ce) name=docker-ce; epoch=3; version="$DNF_SELECTED_VERSION" ;;
+    docker-ce-cli) name=docker-ce-cli; epoch=1; version="$DNF_SELECTED_VERSION" ;;
+    containerd.io) name=containerd.io; epoch=0; version="$DNF_SELECTED_VERSION" ;;
+    docker-buildx-plugin)
+      name=docker-buildx-plugin; epoch=0; version="$DNF_SELECTED_VERSION" ;;
+    *) continue ;;
   esac
+  printf '%s %s %s %s %s\\n' "$name" "$RPM_ARCH" \
+    "${DNF_SIGNING_KEY:-c52feb6b621e9f35}" "$epoch" "$version" >>"$RPM_STATE"
 done
-if [[ "${DNF_INSTALL_DRIFT:-}" == 1 ]]; then
-  awk '{ $3 = $3 "-drift"; print }' "$RPM_STATE" >"$RPM_STATE.drift"
-  mv "$RPM_STATE.drift" "$RPM_STATE"
-fi
 """,
     )
     return fake_bin, state, log
 
 
-def _run_docker_rpm_pin_block(
+def _install_docker_rpms(
+    state: Path,
+    *,
+    arch: str | None = None,
+    key: str = _DOCKER_KEY_ID,
+    version: str = _DNF_SELECTED_VERSION,
+    versions: dict[str, str] | None = None,
+    packages: tuple[str, ...] = _DOCKER_RPM_PACKAGES,
+) -> None:
+    """Install fake RPMs; ``versions`` is keyed by manifest tool name."""
+
+    arch = arch or _host_rpm_arch()
+    tool_versions = versions or {}
+    per_package = {
+        name: tool_versions.get(_DOCKER_PACKAGE_TOOL[name], version)
+        for name in _DOCKER_RPM_PACKAGES
+    }
+    state.write_text(
+        "".join(
+            f"{name} {arch} {key} {_DOCKER_RPM_EPOCHS[name]} {per_package[name]}\n"
+            for name in packages
+        )
+    )
+
+
+def _run_docker_rpm_block(
     repo_root: Path,
     fake_bin: Path,
-    manifest: Path,
     state: Path,
     log: Path,
+    manifest: Path,
     *,
-    drift: bool = False,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     script = (repo_root / "lima" / "provision-system.sh").read_text()
     harness = (
-        "\n\n".join(
-            (
-                "set -euo pipefail",
-                "declare -A VERSION_ONLY_DIAGNOSTICS=()",
-                _shell_function(script, "manifest_integrity_policy"),
-                _shell_function(script, "report_version_only"),
-                _shell_function(script, "manifest_version"),
-                _docker_rpm_pin_block(script),
-            )
-        )
-        + "\n"
+        "set -euo pipefail\n"
+        "declare -A VERSION_ONLY_DIAGNOSTICS=()\n" + _docker_rpm_block(script) + "\n"
     )
-    env = {
-        "PATH": f"{fake_bin}:/usr/bin:/bin",
-        "MANIFEST": str(manifest),
-        "RPM_STATE": str(state),
-        "DNF_LOG": str(log),
-    }
-    if drift:
-        env["DNF_INSTALL_DRIFT"] = "1"
     return subprocess.run(
         ["bash", "-c", harness],
         check=False,
         capture_output=True,
         text=True,
-        env=env,
+        env={
+            "PATH": f"{fake_bin}:/usr/bin:/bin",
+            "RPM_STATE": str(state),
+            "DNF_LOG": str(log),
+            "RPM_ARCH": _host_rpm_arch(),
+            "MANIFEST": str(manifest),
+            "DNF_SELECTED_VERSION": _DNF_SELECTED_VERSION,
+            **(env or {}),
+        },
         timeout=15,
     )
 
@@ -532,24 +698,24 @@ def test_ruby_renovate_pin_waits_for_fedora_44_rpm(repo_root: Path):
 
 
 @pytest.mark.unit
-def test_docker_ce_renovate_pin_normalizes_moby_release_tags(repo_root: Path):
+def test_docker_rpm_renovate_updates_are_held_while_versions_float(repo_root: Path):
+    """Docker RPM versions come from DNF, so Renovate must not bump the pins.
+
+    The manifest entries stay so existing VMs can be described and the
+    dependency metadata remains valid, but no automated bump can make a
+    reviewed-version tuple a prerequisite for provisioning.
+    """
+
     manifest = json.loads((repo_root / "lima" / "tool-versions.json").read_text())
     docker_ce = manifest["tools"]["docker_ce"]
     containerd_io = manifest["tools"]["containerd_io"]
     buildx = manifest["tools"]["docker_buildx_plugin"]
     config = (repo_root / ".github" / "renovate.json5").read_text()
     version_group = _config_object(config, '"groupName": "devbox tool versions"')
-    extract_rule = _config_object(
+    hold_rule = _config_object(
         config,
-        '"description": "Normalize Docker Engine release tags for the manifest pin"',
-    )
-    containerd_rule = _config_object(
-        config,
-        '"description": "Wait for Docker\'s Fedora repo before bumping containerd.io"',
-    )
-    buildx_rule = _config_object(
-        config,
-        '"description": "Wait for Docker\'s Fedora repo before bumping Buildx"',
+        '"description": "Hold legacy Docker RPM pins for pre-existing VMs; '
+        'versions float at VM creation"',
     )
 
     assert docker_ce["datasource"] == "github-releases"
@@ -558,24 +724,17 @@ def test_docker_ce_renovate_pin_normalizes_moby_release_tags(repo_root: Path):
     assert containerd_io["datasource"] == "github-releases"
     assert containerd_io["depName"] == "containerd/containerd"
     assert re.fullmatch(r"\d+\.\d+\.\d+", containerd_io["version"])
-    assert '"moby/moby"' in version_group
     assert buildx["datasource"] == "github-releases"
     assert buildx["depName"] == "docker/buildx"
     assert re.fullmatch(r"\d+\.\d+\.\d+", buildx["version"])
-    assert '"docker/buildx"' in version_group
-    assert '"enabled": false' in buildx_rule
-    assert '"containerd/containerd"' in containerd_rule
-    assert '"enabled": false' in containerd_rule
-    assert (
-        r'"extractVersion": "^docker-v(?<version>\\d+\\.\\d+\\.\\d+)$"' in extract_rule
-    )
-    parsed_tag = re.fullmatch(r"docker-v(?P<version>\d+\.\d+\.\d+)", "docker-v29.8.2")
-    assert parsed_tag
-    assert parsed_tag.group("version") == "29.8.2"
-    assert (
-        re.fullmatch(r"docker-v(?P<version>\d+\.\d+\.\d+)", "docker-v29.9.0-rc.1")
-        is None
-    )
+
+    for package in ("moby/moby", "containerd/containerd", "docker/buildx"):
+        assert f'"{package}"' in hold_rule
+        assert f'"{package}"' not in version_group
+    assert '"enabled": false' in hold_rule
+    # The old tag normalization only existed to drive the exact-version pin.
+    assert "Normalize Docker Engine release tags" not in config
+    assert "^docker-v" not in config
 
 
 @pytest.mark.unit
@@ -596,59 +755,434 @@ def test_rust_renovate_pin_uses_full_semver(repo_root: Path):
 
 
 @pytest.mark.unit
-def test_docker_rpm_pins_follow_the_manifest_through_install_and_verify(
+def test_floating_policy_installs_unversioned_names_only_when_incomplete(
     repo_root: Path, tmp_path: Path
 ):
-    """Arbitrary manifest pins drive the Docker RPM install and re-check.
+    """A fresh VM lets DNF pick the latest signed set; no version is passed.
 
-    Provisioning installs the exact manifest versions and then re-reads the
-    installed RPM identities, so a test-maintained "approved" version tuple
-    would only block Renovate bumps. Exercise the real pin block with fake
-    RPMs so the version pass-through and the mismatch rejection are covered
-    without live network or package installation.
+    This uses the checked-in manifest, whose three Docker tools currently
+    declare no Lima consumer, so the real live file selects floating packages.
     """
-    manifest = json.loads((repo_root / "lima" / "tool-versions.json").read_text())
-    for tool, version in _ARBITRARY_DOCKER_VERSIONS.items():
-        manifest["tools"][tool]["version"] = version
-    manifest_path = tmp_path / "tool-versions.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
 
+    manifest = repo_root / "lima" / "tool-versions.json"
+    tools = json.loads(manifest.read_text())["tools"]
+    assert all(tools[tool]["consumers"]["lima"] is False for tool in _DOCKER_RPM_TOOLS)
     fake_bin, state, log = _fake_docker_rpm_tools(tmp_path)
-    docker = _ARBITRARY_DOCKER_VERSIONS["docker_ce"]
-    containerd = _ARBITRARY_DOCKER_VERSIONS["containerd_io"]
-    buildx = _ARBITRARY_DOCKER_VERSIONS["docker_buildx_plugin"]
 
-    installed = _run_docker_rpm_pin_block(
-        repo_root, fake_bin, manifest_path, state, log
-    )
+    installed = _run_docker_rpm_block(repo_root, fake_bin, state, log, manifest)
 
     assert installed.returncode == 0, installed.stderr
     install_command = log.read_text()
+    install_line = next(
+        line for line in install_command.splitlines() if line.startswith("install ")
+    )
+    assert install_line == (
+        "install -y --enablerepo=docker-ce-stable "
+        "--setopt=install_weak_deps=False --setopt=tsflags=noscripts "
+        + " ".join(_DOCKER_RPM_PACKAGES)
+    )
+    assert "--allow-downgrade" not in install_line
     assert "rm -rf /var/cache/dnf" in install_command
-    for pin in (
-        f"docker-ce-3:{docker}",
-        f"docker-ce-cli-1:{docker}",
-        f"containerd.io-{containerd}",
-        f"docker-buildx-plugin-0:{buildx}",
-    ):
-        assert pin in install_command
+    # The unversioned names leave the choice to DNF: no epoch/version token.
+    requested = install_line.split("--setopt=tsflags=noscripts ", 1)[1].split()
+    assert requested == list(_DOCKER_RPM_PACKAGES)
+    for argument in requested:
+        assert ":" not in argument
+        assert not any(character.isdigit() for character in argument)
+    installed_state = state.read_text()
+    for name in _DOCKER_RPM_PACKAGES:
+        assert f"{name} {_host_rpm_arch()} {_DOCKER_KEY_ID} " in installed_state
+
+
+@pytest.mark.unit
+def test_floating_complete_set_is_not_refreshed_on_later_boots(
+    repo_root: Path, tmp_path: Path
+):
+    """A complete installed set is trusted as-is; no DNF transaction runs."""
+
+    manifest = _docker_manifest(tmp_path, repo_root, _policy_modes(False))
+    fake_bin, state, log = _fake_docker_rpm_tools(tmp_path)
+    _install_docker_rpms(state, version="1.2.3")
+
+    result = _run_docker_rpm_block(repo_root, fake_bin, state, log, manifest)
+
+    assert result.returncode == 0, result.stderr
+    assert not log.exists() or log.read_text() == ""
     assert state.read_text().splitlines() == [
-        f"docker-ce 3 {docker}",
-        f"docker-ce-cli 1 {docker}",
-        f"containerd.io 0 {containerd}",
-        f"docker-buildx-plugin 0 {buildx}",
+        f"{name} {_host_rpm_arch()} {_DOCKER_KEY_ID} {_DOCKER_RPM_EPOCHS[name]} 1.2.3"
+        for name in _DOCKER_RPM_PACKAGES
     ]
 
-    state.unlink()
-    drifted = _run_docker_rpm_pin_block(
-        repo_root, fake_bin, manifest_path, state, log, drift=True
+
+@pytest.mark.unit
+def test_floating_partial_set_installs_all_unversioned_names(
+    repo_root: Path, tmp_path: Path
+):
+    manifest = _docker_manifest(tmp_path, repo_root, _policy_modes(False))
+    fake_bin, state, log = _fake_docker_rpm_tools(tmp_path)
+    _install_docker_rpms(state, packages=("docker-ce",))
+
+    result = _run_docker_rpm_block(repo_root, fake_bin, state, log, manifest)
+
+    assert result.returncode == 0, result.stderr
+    install_line = next(
+        line for line in log.read_text().splitlines() if line.startswith("install ")
+    )
+    assert install_line.endswith(" ".join(_DOCKER_RPM_PACKAGES))
+    assert "--allow-downgrade" not in install_line
+    assert len(state.read_text().splitlines()) == len(_DOCKER_RPM_PACKAGES)
+
+
+@pytest.mark.unit
+def test_legacy_policy_downgrades_newer_set_to_live_manifest_pins(
+    repo_root: Path, tmp_path: Path
+):
+    """An all-true manifest restores pre-#412 exact-EVR convergence."""
+
+    versions = _manifest_docker_versions(repo_root)
+    manifest = _docker_manifest(tmp_path, repo_root, _policy_modes(True))
+    fake_bin, state, log = _fake_docker_rpm_tools(tmp_path)
+    _install_docker_rpms(state, versions=dict.fromkeys(_DOCKER_RPM_TOOLS, "99.0.0"))
+
+    result = _run_docker_rpm_block(repo_root, fake_bin, state, log, manifest)
+
+    assert result.returncode == 0, result.stderr
+    install_line = next(
+        line for line in log.read_text().splitlines() if line.startswith("install ")
+    )
+    assert install_line.startswith("install -y --allow-downgrade ")
+    requested = install_line.split()
+    assert requested == [
+        "install",
+        "-y",
+        "--allow-downgrade",
+        "--enablerepo=docker-ce-stable",
+        "--setopt=install_weak_deps=False",
+        "--setopt=tsflags=noscripts",
+        *_expected_pin_specs(versions),
+    ]
+    # The pinned branch wins over the floating branch.
+    assert "docker-ce" not in requested
+    assert "rm -rf /var/cache/dnf" in log.read_text()
+    assert state.read_text().splitlines() == _installed_pin_lines(versions)
+    # Docker legacy pins are read outside the generic version-only consumer
+    # path, so no manifest-integrity diagnostic is emitted.
+    assert "uses version-only integrity" not in result.stderr
+
+
+@pytest.mark.unit
+def test_legacy_policy_matching_pins_skip_dnf(repo_root: Path, tmp_path: Path):
+    versions = _manifest_docker_versions(repo_root)
+    manifest = _docker_manifest(tmp_path, repo_root, _policy_modes(True))
+    fake_bin, state, log = _fake_docker_rpm_tools(tmp_path)
+    _install_docker_rpms(state, versions=versions)
+
+    result = _run_docker_rpm_block(repo_root, fake_bin, state, log, manifest)
+
+    assert result.returncode == 0, result.stderr
+    assert not log.exists() or log.read_text() == ""
+    assert state.read_text().splitlines() == _installed_pin_lines(versions)
+
+
+@pytest.mark.unit
+def test_legacy_policy_normalizes_a_leading_v(repo_root: Path, tmp_path: Path):
+    """Legacy pins may carry upstream's ``v`` prefix; install specs do not."""
+
+    versions = _manifest_docker_versions(repo_root)
+    prefixed = {tool: f"v{versions[tool]}" for tool in _DOCKER_RPM_TOOLS}
+    manifest = _docker_manifest(
+        tmp_path, repo_root, _policy_modes(True), versions=prefixed
+    )
+    fake_bin, state, log = _fake_docker_rpm_tools(tmp_path)
+
+    result = _run_docker_rpm_block(repo_root, fake_bin, state, log, manifest)
+
+    assert result.returncode == 0, result.stderr
+    install_line = next(
+        line for line in log.read_text().splitlines() if line.startswith("install ")
+    )
+    assert install_line.split()[-4:] == _expected_pin_specs(versions)
+    assert state.read_text().splitlines() == _installed_pin_lines(versions)
+
+
+@pytest.mark.unit
+def test_legacy_policy_rejects_an_invalid_pin(repo_root: Path, tmp_path: Path):
+    manifest = _docker_manifest(
+        tmp_path,
+        repo_root,
+        _policy_modes(True),
+        versions={"docker_ce": "not-a-version"},
+    )
+    fake_bin, state, log = _fake_docker_rpm_tools(tmp_path)
+
+    result = _run_docker_rpm_block(repo_root, fake_bin, state, log, manifest)
+
+    assert result.returncode != 0
+    assert (
+        "invalid legacy Docker pin 'not-a-version' for manifest tool 'docker_ce'"
+        in result.stderr
+    )
+    assert not log.exists() or log.read_text() == ""
+
+
+@pytest.mark.unit
+def test_legacy_policy_rejects_a_missing_pin(repo_root: Path, tmp_path: Path):
+    manifest = _docker_manifest(
+        tmp_path,
+        repo_root,
+        _policy_modes(True),
+        omit_versions=frozenset({"docker_ce"}),
+    )
+    fake_bin, state, log = _fake_docker_rpm_tools(tmp_path)
+
+    result = _run_docker_rpm_block(repo_root, fake_bin, state, log, manifest)
+
+    assert result.returncode != 0
+    assert "legacy Docker pin for 'docker_ce' is missing from the live" in result.stderr
+    assert not log.exists() or log.read_text() == ""
+
+
+@pytest.mark.unit
+def test_docker_legacy_pin_helper_is_separate_from_generic_consumers(
+    repo_root: Path,
+):
+    """The Docker rollback pin reader must not look like a Lima consumer.
+
+    ``scripts/validate_tool_versions.py`` treats ``manifest_version <tool>`` as
+    a declared Lima consumer read. Docker records stay ``consumers.lima: false``
+    in the current manifest, so the legacy branch uses a dedicated helper.
+    """
+
+    script = (repo_root / "lima" / "provision-system.sh").read_text()
+    block = _docker_rpm_block(script)
+
+    assert "docker_legacy_pin_version()" in block
+    for tool in _DOCKER_RPM_TOOLS:
+        assert f"docker_legacy_pin_version {tool}" in block
+        assert f"manifest_version {tool}" not in block
+    helper = _shell_function(script, "docker_legacy_pin_version")
+    assert 'version="${version#v}"' in helper
+    assert "invalid legacy Docker pin" in helper
+    assert "is missing from the live" in helper
+
+
+@pytest.mark.unit
+def test_legacy_policy_fails_when_pins_do_not_converge(repo_root: Path, tmp_path: Path):
+    versions = _manifest_docker_versions(repo_root)
+    manifest = _docker_manifest(tmp_path, repo_root, _policy_modes(True))
+    fake_bin, state, log = _fake_docker_rpm_tools(tmp_path)
+    _install_docker_rpms(state, versions=dict.fromkeys(_DOCKER_RPM_TOOLS, "99.0.0"))
+
+    result = _run_docker_rpm_block(
+        repo_root,
+        fake_bin,
+        state,
+        log,
+        manifest,
+        env={"DNF_INSTALLS_NOTHING": "1"},
     )
 
-    assert drifted.returncode != 0
-    assert (
-        "Docker CE/containerd/Buildx RPMs do not match the manifest pins"
-        in drifted.stderr
+    assert result.returncode != 0
+    assert "do not match the live" in result.stderr
+    assert "manifest pins" in result.stderr
+    assert versions["docker_ce"] in " ".join(
+        line for line in log.read_text().splitlines() if line.startswith("install ")
     )
+
+
+@pytest.mark.unit
+def test_mixed_consumer_flags_fail_closed(repo_root: Path, tmp_path: Path):
+    modes = _policy_modes(False) | {"containerd_io": True}
+    manifest = _docker_manifest(tmp_path, repo_root, modes)
+    fake_bin, state, log = _fake_docker_rpm_tools(tmp_path)
+
+    result = _run_docker_rpm_block(repo_root, fake_bin, state, log, manifest)
+
+    assert result.returncode != 0
+    assert "mixed consumers.lima flags" in result.stderr
+    assert "refusing to mix pinned and floating installs" in result.stderr
+    assert not log.exists() or log.read_text() == ""
+
+
+@pytest.mark.unit
+def test_missing_consumer_flag_fails_closed(repo_root: Path, tmp_path: Path):
+    modes = _policy_modes(False) | {"docker_ce": "missing"}
+    manifest = _docker_manifest(tmp_path, repo_root, modes)
+    fake_bin, state, log = _fake_docker_rpm_tools(tmp_path)
+
+    result = _run_docker_rpm_block(repo_root, fake_bin, state, log, manifest)
+
+    assert result.returncode != 0
+    assert "has no consumers.lima flag" in result.stderr
+    assert not log.exists() or log.read_text() == ""
+
+
+@pytest.mark.unit
+def test_invalid_consumer_flag_fails_closed(repo_root: Path, tmp_path: Path):
+    modes = _policy_modes(False) | {"docker_buildx_plugin": "invalid"}
+    manifest = _docker_manifest(tmp_path, repo_root, modes)
+    fake_bin, state, log = _fake_docker_rpm_tools(tmp_path)
+
+    result = _run_docker_rpm_block(repo_root, fake_bin, state, log, manifest)
+
+    assert result.returncode != 0
+    assert (
+        "invalid consumers.lima 'invalid' for manifest tool "
+        "'docker_buildx_plugin'" in result.stderr
+    )
+    assert "expected true (pre-#412) or false (floating)" in result.stderr
+    assert not log.exists() or log.read_text() == ""
+
+
+@pytest.mark.unit
+def test_floating_install_failure_keeps_installed_state(
+    repo_root: Path, tmp_path: Path
+):
+    """A failed DNF transaction stops provisioning without mutating the set."""
+
+    manifest = _docker_manifest(tmp_path, repo_root, _policy_modes(False))
+    fake_bin, state, log = _fake_docker_rpm_tools(tmp_path)
+    # Start from a partial set so the floating branch attempts a transaction.
+    _install_docker_rpms(state, packages=("docker-ce",))
+    installed_before = state.read_text()
+
+    result = _run_docker_rpm_block(
+        repo_root,
+        fake_bin,
+        state,
+        log,
+        manifest,
+        env={"DNF_INSTALL_FAILS": "1"},
+    )
+
+    assert result.returncode != 0
+    assert "simulated dnf install failure" in result.stderr
+    assert state.read_text() == installed_before
+    assert "rm -rf /var/cache/dnf" not in log.read_text()
+
+
+@pytest.mark.unit
+def test_unreadable_manifest_fails_closed(repo_root: Path, tmp_path: Path):
+    """The live manifest is the policy source; an unreadable one never installs."""
+
+    fake_bin, state, log = _fake_docker_rpm_tools(tmp_path)
+
+    result = _run_docker_rpm_block(
+        repo_root,
+        fake_bin,
+        state,
+        log,
+        tmp_path / "missing-manifest.json",
+    )
+
+    assert result.returncode != 0
+    assert "cannot read the Docker RPM consumer policy" in result.stderr
+    assert not log.exists() or log.read_text() == ""
+
+
+@pytest.mark.unit
+def test_docker_rpm_origin_requires_the_pinned_signing_key(
+    repo_root: Path, tmp_path: Path
+):
+    manifest = _docker_manifest(tmp_path, repo_root, _policy_modes(False))
+    fake_bin, state, log = _fake_docker_rpm_tools(tmp_path)
+    _install_docker_rpms(state, key="deadbeefdeadbeef")
+
+    result = _run_docker_rpm_block(repo_root, fake_bin, state, log, manifest)
+
+    assert result.returncode != 0
+    assert "signed by key deadbeefdeadbeef" in result.stderr
+    assert "pinned Docker release key" in result.stderr
+    assert not log.exists() or log.read_text() == ""
+
+
+@pytest.mark.unit
+def test_docker_rpm_signing_key_reads_a_single_match(repo_root: Path, tmp_path: Path):
+    """rpm reports several signature tags; the first key ID decides trust."""
+
+    manifest = _docker_manifest(tmp_path, repo_root, _policy_modes(False))
+    fake_bin, state, log = _fake_docker_rpm_tools(tmp_path)
+    _install_docker_rpms(state)
+
+    accepted = _run_docker_rpm_block(
+        repo_root,
+        fake_bin,
+        state,
+        log,
+        manifest,
+        env={"RPM_EXTRA_KEY_ID": "deadbeefdeadbeef"},
+    )
+    assert accepted.returncode == 0, accepted.stderr
+    assert not log.exists() or log.read_text() == ""
+
+    _install_docker_rpms(state, key="deadbeefdeadbeef")
+    rejected = _run_docker_rpm_block(
+        repo_root,
+        fake_bin,
+        state,
+        log,
+        manifest,
+        env={"RPM_EXTRA_KEY_ID": _DOCKER_KEY_ID},
+    )
+    assert rejected.returncode != 0
+    assert "signed by key deadbeefdeadbeef" in rejected.stderr
+
+
+@pytest.mark.unit
+def test_docker_rpm_install_rejected_when_dnf_selects_an_untrusted_key(
+    repo_root: Path, tmp_path: Path
+):
+    """Origin is re-verified after install, not assumed from the repo URL."""
+
+    manifest = _docker_manifest(tmp_path, repo_root, _policy_modes(False))
+    fake_bin, state, log = _fake_docker_rpm_tools(tmp_path)
+
+    result = _run_docker_rpm_block(
+        repo_root,
+        fake_bin,
+        state,
+        log,
+        manifest,
+        env={"DNF_SIGNING_KEY": "deadbeefdeadbeef"},
+    )
+
+    assert result.returncode != 0
+    assert "signed by key deadbeefdeadbeef" in result.stderr
+
+
+@pytest.mark.unit
+def test_docker_rpm_origin_rejects_an_architecture_mismatch(
+    repo_root: Path, tmp_path: Path
+):
+    manifest = _docker_manifest(tmp_path, repo_root, _policy_modes(False))
+    fake_bin, state, log = _fake_docker_rpm_tools(tmp_path)
+    foreign_arch = "aarch64" if _host_rpm_arch() != "aarch64" else "x86_64"
+    _install_docker_rpms(state, arch=foreign_arch)
+
+    result = _run_docker_rpm_block(repo_root, fake_bin, state, log, manifest)
+
+    assert result.returncode != 0
+    assert f"is {foreign_arch}, expected {_host_rpm_arch()}" in result.stderr
+
+
+@pytest.mark.unit
+def test_floating_install_fails_when_the_full_set_is_still_missing(
+    repo_root: Path, tmp_path: Path
+):
+    manifest = _docker_manifest(tmp_path, repo_root, _policy_modes(False))
+    fake_bin, state, log = _fake_docker_rpm_tools(tmp_path)
+
+    result = _run_docker_rpm_block(
+        repo_root,
+        fake_bin,
+        state,
+        log,
+        manifest,
+        env={"DNF_INSTALLS_NOTHING": "1"},
+    )
+
+    assert result.returncode != 0
+    assert "required Docker package docker-ce is not installed" in result.stderr
 
 
 @pytest.mark.unit

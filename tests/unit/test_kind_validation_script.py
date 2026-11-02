@@ -1,4 +1,5 @@
 import atexit
+import re
 import subprocess
 import uuid
 from pathlib import Path
@@ -9,6 +10,48 @@ import pytest
 def _write_executable(path: Path, contents: str) -> None:
     path.write_text(contents)
     path.chmod(0o755)
+
+
+def _docker_preflight_fixtures(
+    tmp_path: Path,
+) -> dict[str, str]:
+    """Create the signed-repo fixtures the Docker preflight expects.
+
+    ``lima/docker-ce-preflight.sh`` pins the repository definition and RPM key
+    to fixed ``/etc`` paths. The validator still checks their contents, so the
+    test supplies equivalent fixture files and overrides the two path globals
+    through a ``BASH_ENV`` shim once the validator sources the preflight.
+    """
+
+    key_file = tmp_path / "RPM-GPG-KEY-docker-ce"
+    key_file.write_text("fixture Docker release key\n")
+    repo_file = tmp_path / "docker-ce.repo"
+    repo_file.write_text(
+        "[docker-ce-stable]\n"
+        "name=Docker CE Stable - $basearch\n"
+        "baseurl=https://download.docker.com/linux/fedora/$releasever/$basearch/stable\n"
+        "enabled=0\n"
+        "gpgcheck=1\n"
+        "repo_gpgcheck=1\n"
+        f"gpgkey=file://{key_file}\n"
+    )
+    shim = tmp_path / "preflight-fixture-env.bash"
+    shim.write_text(
+        "source() {\n"
+        '  builtin source "$@"\n'
+        '  case "${1##*/}" in\n'
+        "    docker-ce-preflight.sh)\n"
+        '      DOCKER_CE_REPO_FILE="$DEVBOX_TEST_DOCKER_CE_REPO_FILE"\n'
+        '      DOCKER_CE_KEY_FILE="$DEVBOX_TEST_DOCKER_CE_KEY_FILE"\n'
+        "      ;;\n"
+        "  esac\n"
+        "}\n"
+    )
+    return {
+        "BASH_ENV": str(shim),
+        "DEVBOX_TEST_DOCKER_CE_REPO_FILE": str(repo_file),
+        "DEVBOX_TEST_DOCKER_CE_KEY_FILE": str(key_file),
+    }
 
 
 def _fake_tools(tmp_path: Path) -> tuple[Path, dict[str, str]]:
@@ -89,12 +132,27 @@ if [[ "${DOCKER_HOST:-}" != unix:///var/run/docker.sock ]]; then
   exit 65
 fi
 printf '%s|%s\\n' "$*" "${DOCKER_HOST:-<unset>}" >>"$DOCKER_LOG"
+if [[ "$1" == --context ]]; then
+  [[ "${2:-}" == default ]] || {
+    echo 'Docker did not use the explicit default context' >&2
+    exit 65
+  }
+  shift 2
+fi
 case "$1" in
   version)
     if [[ "${PREFLIGHT_WARNING:-}" == 1 ]]; then
       echo 'simulated docker warning' >&2
     fi
-    printf '%s\\n' "${DOCKER_VERSION:-29.9.0|29.9.0}"
+    if [[ -n "${DOCKER_VERSION:-}" ]]; then
+      printf '%s\\n' "$DOCKER_VERSION"
+    else
+      case "$(uname -m)" in
+        aarch64) docker_arch=arm64 ;;
+        *) docker_arch=amd64 ;;
+      esac
+      printf '%s\\n' "29.9.0|29.9.0|${docker_arch}|Docker Engine - Community"
+    fi
     ;;
   ps)
     if [[ "${PREFLIGHT_WARNING:-}" == 1 ]]; then
@@ -228,25 +286,36 @@ set -euo pipefail
 if [[ "${PREFLIGHT_WARNING:-}" == 1 ]]; then
   echo 'simulated rpm warning' >&2
 fi
-case "$*" in
-  *'/docker') printf 'docker-ce-cli\\n' ;;
-  *'/dockerd') printf 'docker-ce\\n' ;;
-  *'/containerd') printf 'containerd.io\\n' ;;
-  *' podman-docker') exit 1 ;;
-  *' docker-ce') printf '%s\\n' "${DOCKER_PACKAGE_VERSION:-29.9.0}" ;;
-  *' docker-ce-cli') printf '%s\\n' "${DOCKER_PACKAGE_VERSION:-29.9.0}" ;;
-  *' containerd.io') printf '%s\\n' "${CONTAINERD_PACKAGE_VERSION:-2.3.6}" ;;
-  *) echo "unexpected rpm invocation: $*" >&2; exit 64 ;;
-esac
+if [[ " $* " == *' podman-docker '* ]]; then exit 1; fi
+if [[ "$*" == *--queryformat* ]]; then
+  if [[ "$1" == "-qf" ]]; then
+    case "${!#}" in
+      */docker) printf 'docker-ce-cli\\n' ;;
+      */dockerd) printf 'docker-ce\\n' ;;
+      */containerd) printf 'containerd.io\\n' ;;
+      */docker-buildx) printf 'docker-buildx-plugin\\n' ;;
+      *) echo "unexpected rpm -qf path: ${!#}" >&2; exit 64 ;;
+    esac
+    exit 0
+  fi
+  format="$3"
+  case "$format" in
+    *RSAHEADER*)
+      printf 'RSA/SHA256, Tue 20 Jan 2026 03:22:11 AM EST, Key ID %s\\n' \\
+        "${DOCKER_PACKAGE_KEY_ID:-c52feb6b621e9f35}"
+      printf '(none)\\n(none)\\n(none)\\n'
+      ;;
+    *ARCH*)
+      if [[ "${DOCKER_PACKAGE_MISSING:-}" == 1 ]]; then exit 1; fi
+      printf '%s\\n' "${DOCKER_PACKAGE_ARCH:-$(uname -m)}"
+      ;;
+    *) echo "unexpected rpm query format: $format" >&2; exit 64 ;;
+  esac
+  exit 0
+fi
+echo "unexpected rpm invocation: $*" >&2
+exit 64
 """,
-    )
-    _write_executable(
-        fake_bin / "jq",
-        "#!/bin/sh\n"
-        'if [ "${PREFLIGHT_WARNING:-}" = 1 ]; then '
-        "echo 'simulated jq warning' >&2; fi\n"
-        'case "$*" in *containerd_io*) printf "2.3.6\\n" ;; '
-        '*) printf "29.9.0\\n" ;; esac\n',
     )
     _write_executable(
         fake_bin / "stat",
@@ -299,6 +368,7 @@ esac
         "DOCKER_LOG": str(tmp_path / "docker.log"),
         "PODMAN_LOG": str(tmp_path / "podman.log"),
         "RESOURCE_DIR": str(resources),
+        **_docker_preflight_fixtures(tmp_path),
     }
     Path(env["TMPDIR"]).mkdir()
     return log, env
@@ -351,7 +421,7 @@ def test_kind_validation_explicitly_uses_backend_ready_node_and_workload(
         assert "simulated benign Podman warning" in result.stderr
         assert "simulated Podman ps warning" in result.stderr
     else:
-        for warning in ("docker", "rpm", "jq", "systemctl", "stat"):
+        for warning in ("docker", "rpm", "systemctl", "stat"):
             assert f"simulated {warning} warning" in result.stderr
         assert "simulated Docker ps warning" in result.stderr
     assert result.stdout.count("backend identity verified: 1 node(s)") == 2
@@ -393,7 +463,10 @@ def test_kind_validation_explicitly_uses_backend_ready_node_and_workload(
 
     if provider == "docker":
         docker_calls = Path(env["DOCKER_LOG"]).read_text().splitlines()
-        assert any(call.startswith("version ") for call in docker_calls)
+        assert any(
+            call.startswith("--context default version ") for call in docker_calls
+        )
+        assert not any(call.startswith("version ") for call in docker_calls)
         assert all("unix:///var/run/docker.sock" in call for call in docker_calls)
     else:
         podman_calls = Path(env["PODMAN_LOG"]).read_text().splitlines()
@@ -570,14 +643,19 @@ def test_kind_requires_explicit_supported_provider_and_valid_run_count(
 
 
 @pytest.mark.unit
-def test_kind_docker_provider_rejects_non_ce_endpoint_before_cluster_creation(
+def test_kind_docker_provider_rejects_a_non_docker_engine_endpoint(
     repo_root: Path, tmp_path: Path
 ):
     log, env = _fake_tools(tmp_path)
-    result = _run(repo_root, {**env, "DOCKER_VERSION": "29.9.0|5.7.0"}, "docker", "1")
+    result = _run(
+        repo_root,
+        {**env, "DOCKER_VERSION": "29.9.0|5.7.0|amd64|Podman Engine"},
+        "docker",
+        "1",
+    )
 
     assert result.returncode != 0
-    assert "reported client/server 29.9.0|5.7.0" in result.stderr
+    assert "reported platform Podman Engine, expected Docker Engine" in result.stderr
     assert "rootful Docker" in result.stderr
     assert not log.exists()
 
@@ -592,8 +670,11 @@ def test_kind_docker_provider_rejects_non_ce_endpoint_before_cluster_creation(
         ("SYSTEMD_DISABLED_UNIT", "docker.service", "docker.service"),
         ("SYSTEMD_DISABLED_UNIT", "docker.socket", "docker.socket"),
         ("SYSTEMD_DISABLED_UNIT", "containerd.service", "containerd.service"),
-        ("DOCKER_PACKAGE_VERSION", "9.9.9", "manifest pins 29.9.0"),
-        ("CONTAINERD_PACKAGE_VERSION", "9.9.9", "manifest pins 2.3.6"),
+        # The floating policy replaces version pins with package identity,
+        # architecture, and signing-key checks.
+        ("DOCKER_PACKAGE_KEY_ID", "deadbeefdeadbeef", "not the Docker release key"),
+        ("DOCKER_PACKAGE_ARCH", "riscv64", "is built for riscv64"),
+        ("DOCKER_PACKAGE_MISSING", "1", "required package docker-ce is missing"),
         ("DOCKER_DAEMON_UID", "1000", "1000"),
     ],
 )
@@ -606,6 +687,49 @@ def test_kind_docker_preflight_rejects_unready_rootful_engine_before_cluster_cre
 ):
     log, env = _fake_tools(tmp_path)
     result = _run(repo_root, {**env, override: value}, "docker", "1")
+
+    assert result.returncode != 0
+    assert diagnostic in result.stderr
+    assert "rootful Docker" in result.stderr
+    assert not log.exists(), (
+        "Docker preflight failures must stop before kind cluster creation"
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("mutation", "diagnostic"),
+    [
+        ("delete_repo", "repository definition"),
+        ("symlink_repo", "repository definition"),
+        ("drop_repo_gpgcheck", "does not contain repo_gpgcheck=1"),
+        ("drop_baseurl", "does not contain baseurl="),
+        ("delete_key", "pinned Docker RPM key"),
+    ],
+)
+def test_kind_docker_preflight_rejects_an_untrusted_package_source(
+    repo_root: Path,
+    tmp_path: Path,
+    mutation: str,
+    diagnostic: str,
+):
+    log, env = _fake_tools(tmp_path)
+    repo_file = Path(env["DEVBOX_TEST_DOCKER_CE_REPO_FILE"])
+    key_file = Path(env["DEVBOX_TEST_DOCKER_CE_KEY_FILE"])
+    if mutation == "delete_repo":
+        repo_file.unlink()
+    elif mutation == "symlink_repo":
+        moved = repo_file.with_name("docker-ce.repo.real")
+        repo_file.rename(moved)
+        repo_file.symlink_to(moved)
+    elif mutation == "drop_repo_gpgcheck":
+        repo_file.write_text(repo_file.read_text().replace("repo_gpgcheck=1\n", ""))
+    elif mutation == "drop_baseurl":
+        repo_file.write_text(re.sub(r"(?m)^baseurl=.*\n", "", repo_file.read_text()))
+    elif mutation == "delete_key":
+        key_file.unlink()
+
+    result = _run(repo_root, env, "docker", "1")
 
     assert result.returncode != 0
     assert diagnostic in result.stderr

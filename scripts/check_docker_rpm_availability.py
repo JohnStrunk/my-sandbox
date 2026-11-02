@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
-"""Check pinned Docker RPM availability in Docker's Fedora stable repository.
+"""Check Docker RPM availability in Docker's Fedora stable repository.
 
-The gate reads the Docker pins from ``lima/tool-versions.json`` and verifies
-that Docker's Fedora stable repodata lists each exact RPM epoch and version
-for both supported architectures. The Fedora release is derived from the
+Provisioning installs the latest compatible ``docker-ce``, ``docker-ce-cli``,
+``containerd.io``, and ``docker-buildx-plugin`` RPMs from Docker's Fedora
+stable repository instead of pinning exact versions. This gate verifies that
+the repository lists every package for both supported architectures, reports
+the newest version it sees (so an architecture-specific difference is visible
+without failing the check), and confirms that the newest artifact for each
+package and architecture is reachable. The Fedora release is derived from the
 x86_64 and aarch64 cloud-image URLs in ``lima/devbox.yaml``, which must agree.
-Any RPM release is accepted. Every release listed for a pinned version is then
-tried with a bounded HTTP HEAD request until one artifact responds, so an
-in-flight republish of the newest release does not fail the gate.
 
-Scope: this proves repository metadata and artifact availability only. It does
-not verify RPM signatures, resolve dependencies, or exercise the packages at
-runtime. DNF verifies repository metadata and package signatures with the pinned
-Docker key, and the provisioned x86_64 VM tier exercises runtime compatibility.
+Scope: this proves repository metadata and newest-artifact availability only. It
+does not verify RPM signatures, resolve dependencies, or exercise the packages
+at runtime. DNF verifies repository metadata and package signatures with the
+pinned Docker key, and the provisioned x86_64 VM tier exercises runtime
+compatibility.
 """
 
 from __future__ import annotations
@@ -22,7 +24,6 @@ import gzip
 import hashlib
 import http.client
 import io
-import json
 import re
 import sys
 import xml.etree.ElementTree as ET
@@ -40,9 +41,14 @@ from urllib.request import (
 from compression import zstd
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_MANIFEST = REPO_ROOT / "lima" / "tool-versions.json"
 DEFAULT_DEVBOX_TEMPLATE = REPO_ROOT / "lima" / "devbox.yaml"
 SUPPORTED_ARCHES = ("x86_64", "aarch64")
+DOCKER_RPM_PACKAGES = (
+    "docker-ce",
+    "docker-ce-cli",
+    "containerd.io",
+    "docker-buildx-plugin",
+)
 
 _DOCKER_REPO_HOST = "download.docker.com"
 _DOCKER_REPO_PATH_PREFIX = "/linux/fedora/"
@@ -53,20 +59,12 @@ _MAX_HREF_DECODE_ROUNDS = 3
 _HTTP_TIMEOUT_SECONDS = 30.0
 _USER_AGENT = "devbox-docker-rpm-availability"
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
-_VERSION_PATTERN = re.compile(r"^[0-9][A-Za-z0-9._+~-]*$")
 _FEDORA_IMAGE_PATTERN = re.compile(
     r"https://download\.fedoraproject\.org/pub/fedora/linux/releases/"
     r"(?P<release>\d+)/Cloud/(?P<arch>x86_64|aarch64)/"
 )
-
-# RPM epoch contracts enforced by lima/provision-system.sh. The manifest
-# supplies the versions, so this gate never carries a tool version.
-_PACKAGE_SPECS = (
-    ("docker_ce", "docker-ce", 3),
-    ("docker_ce", "docker-ce-cli", 1),
-    ("containerd_io", "containerd.io", 0),
-    ("docker_buildx_plugin", "docker-buildx-plugin", 0),
-)
+_VERSION_PART_PATTERN = re.compile(r"~|\d+|[A-Za-z]+")
+_END_OF_VERSION: tuple[int, int, str] = (0, 0, "")
 
 _FETCH_ERRORS = (URLError, TimeoutError, http.client.HTTPException, OSError)
 Fetcher = Callable[[str, int, float], bytes]
@@ -79,13 +77,6 @@ class DockerRepoError(RuntimeError):
     def __init__(self, message: str, *, status: int | None = None) -> None:
         super().__init__(message)
         self.status = status
-
-
-@dataclass(frozen=True)
-class ExpectedPackage:
-    name: str
-    epoch: int
-    version: str
 
 
 @dataclass(frozen=True)
@@ -389,31 +380,6 @@ def _parse_primary(data: bytes) -> tuple[RepoPackage, ...]:
     return tuple(packages)
 
 
-def load_expected_packages(
-    manifest_path: Path = DEFAULT_MANIFEST,
-) -> tuple[ExpectedPackage, ...]:
-    try:
-        data = json.loads(manifest_path.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
-        raise DockerRepoError(f"unable to load {manifest_path}: {exc}") from exc
-    tools = data.get("tools") if isinstance(data, dict) else None
-    if not isinstance(tools, dict):
-        raise DockerRepoError(f"{manifest_path} must contain a 'tools' object")
-    expected: list[ExpectedPackage] = []
-    for tool, name, epoch in _PACKAGE_SPECS:
-        spec = tools.get(tool)
-        version = spec.get("version") if isinstance(spec, dict) else None
-        if not isinstance(version, str) or not version:
-            raise DockerRepoError(f"{manifest_path}: tool '{tool}' has no version")
-        normalized = version.removeprefix("v")
-        if not _VERSION_PATTERN.fullmatch(normalized):
-            raise DockerRepoError(
-                f"{manifest_path}: tool '{tool}' version is not a safe token"
-            )
-        expected.append(ExpectedPackage(name=name, epoch=epoch, version=normalized))
-    return tuple(expected)
-
-
 def _validate_releasever(releasever: str) -> None:
     if not releasever.isdigit() or not 1 <= int(releasever) <= 999:
         raise DockerRepoError(
@@ -450,21 +416,6 @@ def detect_fedora_release(
     return release
 
 
-def _matching_packages(
-    packages: Iterable[RepoPackage],
-    expected: ExpectedPackage,
-    arch: str,
-) -> list[RepoPackage]:
-    return [
-        package
-        for package in packages
-        if package.name == expected.name
-        and package.arch == arch
-        and package.epoch == expected.epoch
-        and package.version == expected.version
-    ]
-
-
 def _read_primary_metadata(
     base_url: str,
     fetch: Fetcher,
@@ -493,49 +444,71 @@ def _read_primary_metadata(
     raise AssertionError("unreachable")  # pragma: no cover
 
 
-def _available_package_error(
-    base_url: str,
-    matches: list[RepoPackage],
-    head: HeadChecker,
-    timeout: float,
-) -> str | None:
-    """Return failure detail unless at least one listed artifact responds.
+def _packages_for(
+    packages: Iterable[RepoPackage],
+    name: str,
+    arch: str,
+) -> list[RepoPackage]:
+    return [
+        package for package in packages if package.name == name and package.arch == arch
+    ]
 
-    Candidates are tried in repodata order and the first success ends the
-    check. Each candidate's location is validated by
-    :func:`_resolve_repo_url` immediately before its HEAD request, so an
-    untrusted href aborts the check instead of being reported as unavailable.
+
+def _version_key(package: RepoPackage) -> tuple[object, ...]:
+    """Order versions by RPM-like semantics to select the newest artifact.
+
+    Numeric segments sort above alphabetic segments, ``~`` sorts before every
+    other segment, and an exhausted version sorts after ``~`` but before any
+    further segment. The key only picks the report/HEAD candidate; it is never
+    compared to a manifest pin.
     """
 
-    failures: list[str] = []
-    for package in matches:
-        package_url = _resolve_repo_url(base_url, package.href)
-        try:
-            head(package_url, timeout)
-        except DockerRepoError as exc:
-            failures.append(f"{package.release}: {exc}")
-        else:
-            return None
-    return "; ".join(failures)
+    def parts(value: str) -> tuple[tuple[int, int, str], ...]:
+        segments: list[tuple[int, int, str]] = []
+        for part in _VERSION_PART_PATTERN.findall(value):
+            if part == "~":
+                segments.append((-1, 0, ""))
+            elif part.isdigit():
+                segments.append((1, int(part), ""))
+            else:
+                segments.append((0, 0, part))
+        segments.append(_END_OF_VERSION)
+        return tuple(segments)
+
+    return (package.epoch, parts(package.version), parts(package.release))
+
+
+def _newest_package(packages: list[RepoPackage]) -> RepoPackage:
+    return max(packages, key=_version_key)
+
+
+def _evr(package: RepoPackage) -> str:
+    return f"{package.epoch}:{package.version}-{package.release}"
 
 
 def check_docker_rpm_availability(
-    manifest_path: Path = DEFAULT_MANIFEST,
     releasever: str | None = None,
+    *,
     devbox_template: Path = DEFAULT_DEVBOX_TEMPLATE,
     arches: tuple[str, ...] = SUPPORTED_ARCHES,
     fetch: Fetcher = _fetch_bytes,
     head: HeadChecker = _head_ok,
     timeout: float = _HTTP_TIMEOUT_SECONDS,
-) -> list[str]:
-    """Return availability errors; raise when repository metadata is unusable."""
+) -> tuple[list[str], list[str]]:
+    """Return (errors, report lines) for Docker's Fedora stable repodata.
+
+    Every matching artifact location is validated against the exact Fedora
+    release/architecture subtree, and the newest package for each name and
+    architecture gets one bounded HEAD request. An unreachable newest artifact
+    is an error: a metadata row alone does not prove the RPM is downloadable.
+    """
 
     if releasever is None:
         releasever = detect_fedora_release(devbox_template)
     else:
         _validate_releasever(releasever)
-    expected_packages = load_expected_packages(manifest_path)
     errors: list[str] = []
+    report: list[str] = []
     for arch in arches:
         if arch not in SUPPORTED_ARCHES:
             raise DockerRepoError(f"unsupported architecture: {arch}")
@@ -545,37 +518,39 @@ def check_docker_rpm_availability(
             primary_data, descriptor.href, _MAX_PRIMARY_XML_BYTES
         )
         packages = _parse_primary(primary)
-        for expected in expected_packages:
-            matches = _matching_packages(packages, expected, arch)
+        for name in DOCKER_RPM_PACKAGES:
+            matches = _packages_for(packages, name, arch)
             if not matches:
                 errors.append(
-                    f"{arch}: {expected.name} {expected.epoch}:"
-                    f"{expected.version} (any release) is absent from Docker "
-                    f"Fedora {releasever} stable repodata"
+                    f"{arch}: {name} is absent from Docker Fedora "
+                    f"{releasever} stable repodata"
                 )
                 continue
-            detail = _available_package_error(base_url, matches, head, timeout)
-            if detail is not None:
+            # Reject an artifact location outside the release/arch subtree
+            # before using or reporting the package.
+            for package in matches:
+                _resolve_repo_url(base_url, package.href)
+            newest = _newest_package(matches)
+            try:
+                head(_resolve_repo_url(base_url, newest.href), timeout)
+            except DockerRepoError as exc:
                 errors.append(
-                    f"{arch}: {expected.name} {expected.epoch}:"
-                    f"{expected.version} is listed but unavailable in "
-                    f"{len(matches)} release(s): {detail}"
+                    f"{arch}: {name} newest {_evr(newest)} is listed but its "
+                    f"artifact is unavailable: {exc}"
                 )
-    return errors
+                continue
+            report.append(
+                f"{arch}: {name}: {len(matches)} release(s), newest {_evr(newest)}"
+            )
+    return errors, report
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Check that pinned Docker RPMs are available for both supported "
+            "Check that Docker RPMs are available for both supported "
             "architectures in Docker's Fedora stable repository."
         )
-    )
-    parser.add_argument(
-        "--manifest",
-        type=Path,
-        default=DEFAULT_MANIFEST,
-        help="Path to tool-versions.json (defaults to the repo manifest).",
     )
     parser.add_argument(
         "--devbox-template",
@@ -590,23 +565,22 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         releasever = detect_fedora_release(args.devbox_template)
-        errors = check_docker_rpm_availability(
-            manifest_path=args.manifest,
-            releasever=releasever,
-        )
+        errors, report = check_docker_rpm_availability(releasever=releasever)
     except DockerRepoError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
 
+    for line in report:
+        print(line)
     if errors:
         for error in errors:
             print(f"ERROR: {error}", file=sys.stderr)
         return 1
 
     print(
-        "Docker RPM metadata lists every pinned package for "
+        "Docker RPM metadata lists every required package for "
         f"Fedora {releasever} {', '.join(SUPPORTED_ARCHES)}; "
-        "artifact HEAD checks succeeded."
+        "newest-artifact HEAD checks succeeded."
     )
     return 0
 

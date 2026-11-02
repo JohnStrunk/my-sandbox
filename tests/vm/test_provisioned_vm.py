@@ -171,18 +171,6 @@ repo_path="$1"
 docker_socket=/var/run/docker.sock
 rootless_docker_socket="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/docker.sock"
 podman_socket="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/podman/podman.sock"
-expected_version="$(
-  jq -er '.tools.docker_ce.version | sub("^v"; "")' \
-    /etc/devbox/tool-versions.json
-)"
-expected_containerd_version="$(
-  jq -er '.tools.containerd_io.version | sub("^v"; "")' \
-    /etc/devbox/tool-versions.json
-)"
-expected_buildx_version="$(
-  jq -er '.tools.docker_buildx_plugin.version | sub("^v"; "")' \
-    /etc/devbox/tool-versions.json
-)"
 unset DOCKER_HOST DOCKER_CONTEXT
 docker_cli_path="$(command -v docker)"
 # shellcheck disable=SC1091
@@ -197,13 +185,48 @@ source /etc/profile.d/devbox-toolchain.sh
 [[ "$(docker context inspect default --format '{{.Endpoints.docker.Host}}')" \
   == unix:///var/run/docker.sock ]]
 [[ "$docker_cli_path" == /usr/bin/docker ]]
+
+# Docker RPM versions float to whatever the signed Fedora stable repository
+# provided when this VM was created, so verify package identity, architecture,
+# and the pinned Docker signing key instead of an exact version tuple. The
+# reported versions are printed so architecture-specific differences are
+# visible in the test log.
+host_arch="$(uname -m)"
+case "$host_arch" in
+  x86_64) docker_api_arch=amd64 ;;
+  aarch64) docker_api_arch=arm64 ;;
+  *) echo "unsupported architecture: $host_arch" >&2; exit 1 ;;
+esac
+docker_rpm_packages=(docker-ce docker-ce-cli containerd.io docker-buildx-plugin)
+for package in "${docker_rpm_packages[@]}"; do
+  package_arch="$(rpm -q --queryformat '%{ARCH}' "$package")"
+  [[ "$package_arch" == "$host_arch" ]] \
+    || { echo "$package is built for $package_arch, not $host_arch" >&2; exit 1; }
+  signature="$(rpm -q --queryformat '%{RSAHEADER:pgpsig}' "$package")"
+  [[ "$signature" == *"Key ID c52feb6b621e9f35"* ]] \
+    || { echo "$package is not signed by Docker's release key:" \
+      "$signature" >&2; exit 1; }
+  package_version="$(rpm -q --queryformat '%{VERSION}' "$package")"
+  [[ "$package_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.]+)?$ ]] \
+    || { echo "$package has an unexpected version: $package_version" >&2; exit 1; }
+  printf 'docker rpm: %s %s %s\n' "$package" "$package_version" "$package_arch"
+done
 [[ "$(rpm -qf --queryformat '%{NAME}' "$docker_cli_path")" == docker-ce-cli ]]
 [[ "$(rpm -qf --queryformat '%{NAME}' /usr/bin/dockerd)" == docker-ce ]]
 [[ "$(rpm -qf --queryformat '%{NAME}' /usr/bin/containerd)" == containerd.io ]]
-[[ "$(rpm -q --queryformat '%{VERSION}' docker-ce)" == "$expected_version" ]]
-[[ "$(rpm -q --queryformat '%{VERSION}' docker-ce-cli)" == "$expected_version" ]]
-[[ "$(rpm -q --queryformat '%{VERSION}' containerd.io)" \
-  == "$expected_containerd_version" ]]
+[[ "$(rpm -qf --queryformat '%{NAME}' \
+  /usr/libexec/docker/cli-plugins/docker-buildx)" == docker-buildx-plugin ]]
+
+# The packages must still come from the signed Fedora stable repository.
+docker_repo_file=/etc/yum.repos.d/docker-ce.repo
+docker_key_file=/etc/pki/rpm-gpg/RPM-GPG-KEY-docker-ce
+[[ -f "$docker_repo_file" && ! -L "$docker_repo_file" ]]
+[[ -f "$docker_key_file" && ! -L "$docker_key_file" ]]
+grep -Fqx '[docker-ce-stable]' "$docker_repo_file"
+grep -Fqx 'repo_gpgcheck=1' "$docker_repo_file"
+grep -Fqx 'gpgcheck=1' "$docker_repo_file"
+grep -Fq 'baseurl=https://download.docker.com/linux/fedora/' "$docker_repo_file"
+
 if rpm -q podman-docker >/dev/null 2>&1; then
   echo "podman-docker must not provide the Docker CLI" >&2
   exit 1
@@ -214,12 +237,9 @@ for plugin in docker-ce-rootless-extras docker-compose-plugin; do
     exit 1
   fi
 done
-[[ "$(rpm -q --queryformat '%{NAME} %{EPOCHNUM} %{VERSION}' docker-buildx-plugin)" \
-  == "docker-buildx-plugin 0 ${expected_buildx_version}" ]]
-[[ "$(rpm -qf --queryformat '%{NAME}' \
-  /usr/libexec/docker/cli-plugins/docker-buildx)" == "docker-buildx-plugin" ]]
 buildx_version="$(docker buildx version)"
-[[ "$buildx_version" == *"v${expected_buildx_version}"* ]]
+[[ "$buildx_version" =~ ^github\.com/docker/buildx\ v[0-9]+\.[0-9]+\.[0-9]+ ]] \
+  || { echo "unexpected buildx version: $buildx_version" >&2; exit 1; }
 for unit in containerd.service docker.socket docker.service; do
   systemctl is-enabled --quiet "$unit"
   systemctl is-active --quiet "$unit"
@@ -235,10 +255,18 @@ docker_service_pid="$(systemctl show --property=MainPID --value docker.service)"
 [[ "$(stat -c %u "/proc/${docker_service_pid}")" == 0 ]]
 [[ "$(stat -c '%U:%G:%a' "$docker_socket")" == root:docker:660 ]]
 [[ -r "$docker_socket" && -w "$docker_socket" ]]
-client_version="$(docker version --format '{{.Client.Version}}')"
-server_version="$(docker version --format '{{.Server.Version}}')"
-[[ "$client_version" == "$expected_version" ]]
-[[ "$server_version" == "$expected_version" ]]
+# Name the default context explicitly so a user Docker config currentContext
+# cannot redirect the identity probe.
+client_version="$(docker --context default version --format '{{.Client.Version}}')"
+server_version="$(docker --context default version --format '{{.Server.Version}}')"
+server_arch="$(docker --context default version --format '{{.Server.Arch}}')"
+server_platform="$(
+  docker --context default version --format '{{.Server.Platform.Name}}'
+)"
+[[ "$client_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]
+[[ "$server_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]
+[[ "$server_arch" == "$docker_api_arch" ]]
+[[ "$server_platform" == "Docker Engine"* ]]
 
 __PODMAN_OFFLINE_GUARD__
 container_id=""
@@ -297,11 +325,20 @@ verify_runtime_offline
     )
 
     assert result.returncode == 0, (
-        "Docker CE and kind did not run independently of Podman.\n"
+        "Docker CE and kind did not run independently of Podman, or the "
+        "floating signed RPM set failed its identity/architecture checks.\n"
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
     assert "backend identity verified" in result.stdout
     assert "via docker" in result.stdout
+    # Installed RPM versions are reported (they float with the signed repo).
+    for package in (
+        "docker-ce",
+        "docker-ce-cli",
+        "containerd.io",
+        "docker-buildx-plugin",
+    ):
+        assert f"docker rpm: {package} " in result.stdout
 
 
 @pytest.mark.vm
@@ -324,7 +361,7 @@ def test_minikube_docker_ce_backend_runs_inside_the_provisioned_vm(
     )
 
     assert result.returncode == 0, (
-        "Minikube did not use the pinned rootful Docker CE backend and complete "
+        "Minikube did not use the trusted rootful Docker CE backend and complete "
         "its cluster/workload smoke test. Check the strict Docker CE preflight "
         "diagnostic; this backend test is not skipped when dependencies are "
         "missing.\n"

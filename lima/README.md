@@ -402,15 +402,16 @@ After the lock is released, a concurrent lifecycle action may win, so the
 follow-on command can fail rather than restarting the VM.
 
 `devbox` compares a running VM's provisioning fingerprint with the current
-checkout and warns when they differ. Stop and start the VM to apply
-manifest-only tool changes; edits to `lima/devbox.yaml` or embedded provisioning
-scripts require `devbox --recreate`, which uses the current checkout's template
-and provisioners rather than the old instance's embedded copy. Recreate is
+checkout and warns when they differ. Stop and start the VM to apply active
+manifest-only tool changes. Edits to `lima/devbox.yaml` or embedded
+provisioning scripts, including the Docker RPM policy, require
+`devbox --recreate`. The command uses the current checkout's template and
+provisioners rather than the old instance's embedded copy. Recreation is
 destructive to VM-local state but preserves host-mounted projects,
-configuration, and the dedicated OpenCode L1 state. Bare `devbox --recreate`
-opens the normal interactive shell after the new VM is ready; use a command such
-as `devbox --recreate -- true` for non-interactive automation. To refresh only
-manifest/tool updates and then run a scripted command, use
+configuration, and the dedicated OpenCode L1 state. Bare
+`devbox --recreate` opens the normal interactive shell after readiness; use
+`devbox --recreate -- true` for non-interactive automation. To refresh active
+tool-manifest updates and then run a scripted command, use
 `devbox --stop && devbox -- <command>`.
 
 `devbox -d` / `devbox --delete` removes the configured Lima instance without
@@ -428,13 +429,14 @@ every start. It stores the root-owned embedded system-script and marker-helper
 digests in `/var/lib/devbox-vm/` and the combined manifest, embedded-script,
 and tool-asset fingerprint in the VM-local
 `~/.local/share/devbox-toolchain/provisioning.fingerprint`.
-When the manifest changes, provisioning reports the drift, installs any new
-pins, runs `devbox-toolchain-check` as the isolated builder, then records the
-new fingerprint and a root-owned manifest stamp. The readiness probe checks
-that stamp and does not execute third-party package commands with host
-credentials mounted.
+When the manifest changes for an active Lima tool, provisioning reports the
+drift, installs active pins, and runs `devbox-toolchain-check` as the isolated
+builder. After it succeeds, provisioning records the new fingerprint and a
+root-owned manifest stamp. The readiness probe checks that stamp and does not
+execute third-party package commands with host credentials mounted.
 The `devbox-toolchain-check` command remains available for manual use as the
-current guest user. Apply a version-only bump without rebuilding the VM:
+current guest user. Apply an active version-only tool bump without rebuilding
+the VM:
 
 ```shell
 repo="$(dirname "$(dirname "$(readlink -f /etc/devbox/tool-versions.json)")")"
@@ -447,37 +449,62 @@ Changes to `lima/provision-vm-level.sh`, `lima/provision-system.sh`,
 `lima/provision-user.sh`, or `lima/devbox.yaml` are embedded at VM creation and
 still require the [recreate procedure](#recreating-the-vm). The non-embedded
 `lima/provision-tools.sh` helper is refreshed on each start. The
-`devbox-toolchain-check` command reports every manifest-declared Lima tool at
-its exact version, plus `make`, Python/pip, and ShellCheck.
+`devbox-toolchain-check` command reports active manifest-pinned Lima tools at
+their exact versions, plus `make`, Python/pip, and ShellCheck. Docker RPM
+versions are not exact-version assertions in this check.
 
 ### Docker CE and Podman runtimes
 
-The VM provisions **Docker CE Engine, its official CLI, `containerd.io`, and
-the Docker Buildx CLI plugin** from Docker's Fedora stable RPM repository. The
-manifest pins their versions for both supported architectures. The RPM release
-suffix is resolved from the official repo for Fedora 44; package versions and
-Docker RPM epochs are checked after installation. DNF verifies repository
-metadata and package signatures with a committed,
+With the current manifest's `consumers.lima: false` flags for `docker_ce`,
+`containerd_io`, and `docker_buildx_plugin`, fresh or recreated VMs request the
+unversioned DNF5 package names `docker-ce`, `docker-ce-cli`, `containerd.io`,
+and `docker-buildx-plugin` from Docker's official Fedora stable repository; DNF
+selects the latest compatible signed set for the guest architecture. The
+stored versions are not current install pins. This is an intentional
+stable/recreate-only cadence: a complete set is not refreshed on ordinary
+restarts, and a long-lived VM may lag Fedora stable until `devbox --recreate`.
+
+If the set is absent or partial, boot provisioning retries all four unversioned
+names. DNF5 `install <name>` does not upgrade already-installed named packages:
+missing components can be installed from current metadata while installed
+siblings stay as-is. A partial repair can leave mixed versions and
+does not guarantee a coherent newest set. Recreate to install a coherent
+newest compatible set. Fedora stable metadata is mutable, so recreation is not
+bit-for-bit package-reproducible and newest EVRs may differ between x86_64 and
+aarch64.
+
+For rollback compatibility, if the embedded provisioner reads a pre-#412 live
+manifest where all three Docker entries have `consumers.lima: true`, it uses
+their exact version values. This lets a VM created with the new provisioner
+boot after the live checkout is switched back to a pre-#412 checkout if Fedora
+stable still offers those package versions; that availability is not
+guaranteed.
+This path is only for old checkouts, and current policy does not pin Docker
+versions. Mixed, missing, or invalid consumer flags are rejected rather than
+selecting a policy.
+
+DNF verifies repository metadata and package signatures with the committed,
 SHA-256-pinned Docker key
 (`060A 61C5 1B55 8A7F 742B 77AA C52F EB6B 621E 9F35`, `gpgcheck=1`,
-`repo_gpgcheck=1`).
-The Docker repo is disabled for ordinary guest `dnf` operations and enabled only
-for the pinned install transaction. Provisioning skips third-party RPM
-scriptlets as root. Docker CE is not a Podman alias, wrapper, or `podman-docker`
-package.
-The `containerd_io` RPM is pinned separately from Docker Engine.
-Renovate updates for that pin and Buildx are disabled pending manual review of
-matching Fedora RPM availability for both supported architectures and
-compatibility. When updating any of these versions, run
+`repo_gpgcheck=1`). The Docker repo is disabled for ordinary guest `dnf`
+operations and enabled only for Docker install or repair. Provisioning skips
+third-party RPM scriptlets as root. Docker CE remains separate from Podman; it
+is not a wrapper or the `podman-docker` package.
+
+The boot readiness check and Docker preflight validate the expected RPM names
+and guest architecture, Docker signing-key identity, official repository
+configuration and signature policy, and rootful Docker service/API identity and
+health. Under current floating policy, these checks do not require exact Docker
+RPM versions; `devbox-toolchain-check` excludes Docker RPMs. The rollback
+install mode above enforces exact legacy versions when all three flags are
+`true`.
+The Fedora 44 CI availability gate verifies all four RPMs and HEADs the newest
+artifacts independently on x86_64 and aarch64. Re-run it locally with
 `uv run --isolated --no-sync python scripts/check_docker_rpm_availability.py`.
-It checks Docker's Fedora stable repodata for the Fedora release configured by
-the matching x86_64 and aarch64 cloud-image URLs in `lima/devbox.yaml`, and for
-the exact manifest versions and RPM epochs of Engine, CLI, containerd.io, and
-Buildx on both architectures (any package release), then HEADs each matched
-artifact. This proves metadata and artifact availability only. DNF still
-verifies repository metadata and RPM signatures with the pinned Docker key, the
-provisioned x86_64 VM tier exercises runtime compatibility, and aarch64 runtime
-behavior remains unverified. The gate does not resolve dependencies.
+It reports the newest EVRs for each architecture, which need not match. This is
+an availability check only, not a dependency solver. The provisioned x86_64 VM
+tier exercises runtime compatibility; aarch64 runtime behavior remains
+unverified.
 
 Docker runs as the rootful system daemon inside the Lima guest. Buildx is
 available through `docker buildx`; the optional `docker-compose-plugin` RPM is
@@ -503,12 +530,11 @@ drop-in replacement for BuildKit-only features. Podman and Docker have separate
 image stores; images must be rebuilt or explicitly transferred when switching
 runtimes.
 
-Buildx installation is part of the embedded Lima system provisioner. Existing
-VMs must be recreated with `devbox --recreate` before being used with this
-checkout. Until recreation, the live toolchain checker expects Buildx while the
-embedded installer remains stale, so boot-time toolchain/readiness validation
-can fail. Stopping and starting an existing VM does not update the embedded
-install logic.
+Docker package selection and readiness checks live in the embedded Lima system
+provisioner and template. Existing VMs can keep using their installed versions,
+but must be recreated with `devbox --recreate` to adopt the current floating
+policy; a normal restart does not update a complete package set. Recreation
+loses VM-local state.
 
 Provisioning enables the system `docker.service`, `docker.socket`, and
 `containerd.service` at boot, and adds the guest user to the `docker` group.
@@ -534,8 +560,8 @@ Do not point Docker at that socket or expect Docker to fall back to Podman.
 The kind and Minikube validators require an explicit backend and do not fall
 back to another runtime. Their Docker paths pin
 `DOCKER_HOST=unix:///var/run/docker.sock`, clear Docker context overrides, and
-check the manifest-pinned Docker CE packages, system service/socket, and server
-version. Their Podman paths preserve rootless mode, use Podman's own
+use the Docker preflight rather than requiring exact package versions. Their
+Podman paths preserve rootless mode, use Podman's own
 `$XDG_RUNTIME_DIR/podman/podman.sock` and independent store, clear inherited
 endpoint selectors, and reject a configured default remote connection; kind's
 Podman provider invokes the `podman` CLI directly. Neither runtime falls back
@@ -549,20 +575,19 @@ explicitly save/load images when moving between runtimes.
 Verify both runtimes and their separation with:
 
 ```shell
-devbox-toolchain-check            # checks pinned Docker CLI and Buildx versions
+devbox-toolchain-check            # active pins, not Docker RPM versions
 docker version                    # reports both client and Docker CE server
-docker buildx version             # reports the pinned Buildx plugin version
+docker buildx version             # reports the installed Buildx plugin version
 rpm -qf /usr/bin/docker /usr/bin/dockerd
 systemctl --no-pager status docker.service docker.socket containerd.service
 docker info
 podman info
 ```
 
-The readiness probe separately checks the Docker system service/socket and the
-manifest-pinned Docker server API version, then pings Podman's own socket. The
-provisioned-VM test creates, runs, and removes a container through Docker CE,
-then creates and deletes a kind cluster with the explicit Docker provider while
-the Podman service and socket are stopped. For troubleshooting, inspect
+The readiness probe performs these Docker checks at boot and separately pings
+Podman's own socket. The VM test creates, runs, and removes a Docker CE
+container, then creates and deletes a kind cluster with Docker while Podman's
+service and socket are stopped. For troubleshooting, inspect
 `systemctl --no-pager status docker.service docker.socket containerd.service`,
 and `sudo journalctl -u docker.service -u containerd.service`,
 and the Docker and Podman socket paths; they must remain distinct. Check for
@@ -643,14 +668,12 @@ Recreate pre-#318 VMs to apply Minikube and libvirt provisioning; until then,
 replace the embedded system provisioner.
 
 Changes to embedded provisioning scripts or `lima/devbox.yaml` require
-[recreating the VM](#recreating-the-vm). A manifest-only Docker version bump is
-applied on VM restart. Applying embedded changes for the rootful Docker runtime
-to an existing VM requires `devbox --recreate`; a normal restart does not
-replace the provisioner embedded in that VM. Recreation loses
-VM-local state. Rootless Docker data from an older VM is not migrated into the
-separate rootful Docker store. Preserve any VM-local Podman images or container
-data you need before recreating; host-mounted project/config files are
-preserved.
+[recreating the VM](#recreating-the-vm). Existing VMs retain a complete Docker
+RPM set across normal restarts; recreate to adopt the current floating policy
+and resolve the latest Fedora stable metadata. Recreation loses VM-local state.
+Rootless Docker data from an older VM is not migrated into the separate rootful
+Docker store. Preserve any VM-local Podman images or container data you need
+before recreating; host-mounted project/config files are preserved.
 
 The VM keeps `net.ipv4.conf.default.route_localnet=0` to preserve the loopback
 routing boundary; a rootless Podman published-port smoke test passed with it
@@ -677,13 +700,14 @@ one exists, unprotects and deletes it with protection rollback on failure. It
 then creates a new VM from the active checkout's `lima/devbox.yaml` and waits
 for readiness checks. If there is no old instance, it just creates the fresh
 one. With a command, it runs that command only after the VM is ready; without
-one, it opens the normal shell. Version-only tool pin changes do not require a
-recreate; stop and start the VM to apply them. Host-side
-data (`~/src`, `~/kb`, and the other mounts) is untouched; only VM-local state
-(guest home, VM-local caches, nested Podman storage, and other guest-local
-files) is lost. OpenCode's dedicated `~/.local/state/devbox-opencode` host
-directory survives recreation. The host's default `~/.local/state/opencode`
-is only a read-only, one-time import source:
+one, it opens the normal shell. Active manifest-only tool pin changes do not
+require a recreate; stop and start the VM to apply them. Docker RPM selection
+is part of embedded provisioning, so recreate to adopt its current policy.
+Host-side data (`~/src`, `~/kb`, and the other mounts) is untouched; only
+VM-local state (guest home, VM-local caches, nested Podman storage, and other
+guest-local files) is lost. OpenCode's dedicated host state directory,
+`~/.local/state/devbox-opencode`, survives recreation. The host's default
+`~/.local/state/opencode` is only a read-only, one-time import source:
 
 If the existing VM has OpenCode preferences or prompt history that were
 created only in its VM-local state directory, preserve them before deleting
@@ -906,10 +930,12 @@ integration work.
 - **Rootless Podman prerequisites**: Lima's boot scripts provide static
   `/etc/subuid` and `/etc/subgid` ranges (65,536 IDs), cgroup-v2 delegation,
   and linger.
-- **Rootful Docker CE and rootless Podman**: provisioning installs Docker CE
-  from its official signature-checked Fedora repository, separately pins
-  `containerd.io`, enables system `docker.service`, `docker.socket`, and
-  `containerd.service` at boot, and adds the guest user to the `docker` group.
+- **Rootful Docker CE and rootless Podman**: under the current manifest, new and
+  recreated VMs install the latest DNF-compatible Docker CE, CLI,
+  `containerd.io`, and Buildx RPM set by unversioned DNF5 package names from the
+  official signature-checked Fedora repository. Provisioning enables system
+  `docker.service`, `docker.socket`, and `containerd.service` at boot, and adds
+  the guest user to the `docker` group.
   Docker uses `/var/run/docker.sock` by default. Podman/netavark remains
   independently available with its own rootless API socket, store, and bridge
   configuration; neither runtime aliases or falls back to the other.
@@ -934,33 +960,41 @@ integration work.
 - Git configured for GitHub over HTTPS (SSH remotes rewritten, `gh` as
   the credential helper), identity seeded once from the host.
 
-Every tool installed at a manifest-pinned version declares a `lima` consumer
-in `lima/tool-versions.json`. Provisioning reads those versions and
-integrity policies at runtime; `scripts/validate_tool_versions.py` ensures the
-scripts consume every declared Lima tool, and `lima/check_toolchain.py` verifies
-the installed versions.
+Every actively manifest-pinned tool has a `lima` consumer in
+`lima/tool-versions.json`. Provisioning reads active versions and integrity
+policies at runtime; `scripts/validate_tool_versions.py` ensures the scripts
+consume each active Lima tool, and `lima/check_toolchain.py` verifies installed
+versions.
 
 ### Tool artifact integrity
 
-The manifest explicitly marks each downloaded tool or skill `sha256` or
-`version-only`. Docker CE and containerd use version-only manifest pins, with
-their official RPM packages signature-checked by DNF against the pinned Docker
-key. Ruby 4.0.7 is installed from Fedora 44's version-qualified RPM, not an
-upstream Ruby build. Fedora's `fedora-repos-archive` package provides the
-official `updates-archive` repository for previously stable Fedora packages.
-After installation, this repo remains enabled VM-wide with cost `10000` and
-`skip_if_unavailable=True`, so the active `fedora` and `updates` repos are
-preferred. The archive repo config sets `gpgcheck=1`, and DNF's RPM GPG
-signature verification remains enabled. During system provisioning, a DNF
-preflight checks whether the manifest pin can be resolved. If the exact version
-is no longer in active `fedora`/`updates` metadata, it can be resolved from the
-previously-stable archive; if no matching RPM is available in enabled Fedora
-metadata, provisioning fails early with guidance to choose a Fedora-published
-stable version. The post-install check requires Ruby's version to match the
-manifest. Renovate updates remain disabled because its Ruby datasource follows
-upstream releases, not Fedora package availability; update the pin manually
-only to a version Fedora has published as stable. The toolchain checker also
-verifies the pinned runtime version. Checksum-managed releases are
+The manifest assigns active downloads and skills an `integrity` policy of
+`sha256` or `version-only`. The Docker RPM records remain as legacy version
+metadata with `consumers.lima: false`; their values do not pin current installs,
+and Renovate updates for these records are disabled. The pre-#412 rollback
+behavior is described in the Docker section above. Under current policy, new
+or recreated VMs resolve the latest DNF-compatible Docker RPM set from Fedora
+stable. DNF verifies repository metadata and package signatures against the
+pinned Docker key.
+
+Ruby 4.0.7 is installed from Fedora 44's version-qualified RPM in the `updates`
+repository, not the GA `fedora` repository. Fedora's `fedora-repos-archive`
+package provides the official `updates-archive` repository for previously
+stable Fedora packages. After installation, this repo remains enabled VM-wide
+with cost `10000` and `skip_if_unavailable=True`, so the active `fedora` and
+`updates` repos are preferred. The archive repo config sets `gpgcheck=1`, and
+DNF's RPM GPG signature verification remains enabled. During system
+provisioning, a DNF preflight checks whether the manifest pin can be resolved.
+If the exact version is no longer in active `fedora`/`updates` metadata, it can
+be resolved from the previously-stable archive; if no matching RPM is available
+in enabled Fedora metadata, provisioning fails early with guidance to choose a
+Fedora-published stable version. The post-install check requires Ruby's version
+to match the manifest. Renovate updates remain disabled because its Ruby
+datasource follows upstream releases, not Fedora package availability; update
+the pin manually only to a version Fedora has published as stable. The
+toolchain checker also verifies the pinned runtime version.
+
+Checksum-managed releases are
 **Hadolint**, **golangci-lint**, **uv**, **Antigravity CLI**, **limactl**,
 **kind**, **Minikube**, **Krew**, the **ast-grep release binaries**,
 and **acli**.
@@ -1065,7 +1099,7 @@ passes, verify from inside the VM (opened with
 - [ ] VM-affecting changes passed the fresh-L2 provisioning, readiness, and
       `limactl shell <instance> -- echo hello` check above.
 - [ ] `cd ~/src/my-sandbox && git status` sees the host checkout.
-- [ ] `devbox-toolchain-check` reports the pinned manifest versions and
+- [ ] `devbox-toolchain-check` reports active manifest pins and
       operator tools; `make --version`, `kind version`, `kubectl version
       --client`, `helm version`, and `pipenv --version` all succeed.
 - [ ] From the provisioned VM, all five explicit backend invocations complete:
@@ -1074,8 +1108,10 @@ passes, verify from inside the VM (opened with
       `TMPDIR=/var/tmp lima/validate-minikube.sh kvm2`. Each proves the
       runtime or libvirt domain that created its cluster, waits for Ready,
       runs BusyBox, deletes the cluster, and verifies resource cleanup.
-- [ ] `docker version` reports the manifest-pinned client and server, and the
-      Docker smoke test succeeds while Podman's service/socket are stopped.
+- [ ] Docker preflight/readiness validates the four RPM names and architecture,
+      repository/signing-key policy, and rootful API health; `docker version`
+      reports the client and server, and the smoke passes while Podman's
+      service/socket are stopped.
 - [ ] `~/.agents/skills/devbox-tools/SKILL.md` and the ast-grep skills are
       present; VM-owned files take precedence at those skill names.
 - [ ] `HF_HOME` and `SEMBLE_CACHE_LOCATION` point under the VM-local cache,
