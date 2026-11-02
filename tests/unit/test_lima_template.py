@@ -82,15 +82,11 @@ def _probe_required_tools(repo_root: Path) -> set[str]:
     return set(required_tools.group(1).replace("\\", " ").split())
 
 
-def _base_packages(system_script: str) -> str:
-    """Return the Fedora package array from the system provisioner."""
-    packages = re.search(
-        r"^packages=\(\n(.*?)^\)",
-        system_script,
-        re.DOTALL | re.MULTILINE,
-    )
-    assert packages, "base Fedora package list is missing"
-    return packages.group(1)
+def _base_packages(repo_root: Path) -> str:
+    """Return the shared Fedora package definitions."""
+    packages = (repo_root / LIMA_DIR / "fedora-packages.sh").read_text()
+    assert "DEVBOX_FEDORA_PACKAGES=(" in packages
+    return packages
 
 
 @pytest.mark.unit
@@ -699,16 +695,14 @@ def test_system_script_adds_user_to_kvm_and_libvirt_groups(repo_root: Path):
 
 @pytest.mark.unit
 def test_system_script_installs_qemu_img_for_nested_lima(repo_root: Path):
-    system_script = _script(repo_root, "provision-system.sh")
-    packages = _base_packages(system_script)
+    packages = _base_packages(repo_root)
 
     assert re.search(r"^\s*qemu-img\s*$", packages, re.MULTILINE)
 
 
 @pytest.mark.unit
 def test_system_script_installs_ruby_openssl_build_dependencies(repo_root: Path):
-    system_script = _script(repo_root, "provision-system.sh")
-    packages = _base_packages(system_script)
+    packages = _base_packages(repo_root)
     for package in (
         "libffi-devel",
         "libyaml-devel",
@@ -728,7 +722,7 @@ def test_system_script_installs_ruby_openssl_build_dependencies(repo_root: Path)
 @pytest.mark.unit
 def test_system_script_provisions_libvirt_for_minikube_kvm2(repo_root: Path):
     system_script = _script(repo_root, "provision-system.sh")
-    packages = _base_packages(system_script)
+    packages = _base_packages(repo_root)
     for package in (
         "container-selinux",
         "libselinux-utils",
@@ -788,32 +782,32 @@ def test_system_script_installs_checksum_pinned_minikube(repo_root: Path):
 
 
 @pytest.mark.unit
-def test_system_script_installs_and_verifies_manifest_pinned_ruby(repo_root: Path):
+def test_shared_package_logic_installs_and_verifies_manifest_pinned_ruby(
+    repo_root: Path,
+):
     system_script = _script(repo_root, "provision-system.sh")
-    base_packages = _base_packages(system_script)
-    assert re.search(
-        r"^\s*fedora-repos-archive(?:\s+#.*)?\s*$",
-        base_packages,
-        re.MULTILINE,
-    ), "the Fedora archive repository must be available for pinned RPMs"
-    assert re.search(
-        r"^\s*rubypick(?:\s+#.*)?\s*$",
-        base_packages,
-        re.MULTILINE,
-    ), "Fedora's generic ruby launcher must be installed"
+    package_script = _base_packages(repo_root)
+    for package in ("fedora-repos-archive", "rubypick"):
+        assert re.search(
+            rf"^\s*{re.escape(package)}(?:\s+#.*)?\s*$",
+            package_script,
+            re.MULTILINE,
+        ), f"{package} must be installed from the shared package set"
 
-    base_install = re.search(
-        r"\bdnf\s+install\s+-y\s+--setopt=install_weak_deps=False\s+"
-        r'"\$\{missing\[@\]\}"',
-        system_script,
+    assert 'copy_repo_file lima/fedora-packages.sh "$fedora_packages_snapshot"' in (
+        system_script
     )
-    assert base_install, "base Fedora package transaction is missing"
+    assert 'source "$fedora_packages_snapshot"' in system_script
+    assert "devbox_install_fedora_packages vm" in system_script
+    assert 'devbox_install_manifest_pinned_ruby "$MANIFEST"' in system_script
 
     function_definition = re.search(
         r"(?m)^\s*(?:function\s+)?require_ruby_package_available\s*\(\)\s*\{",
-        system_script,
+        package_script,
     )
-    assert function_definition, "the Ruby package preflight must be defined inline"
+    assert function_definition, (
+        "the Ruby package preflight must be defined in the helper"
+    )
     assert "provision-ruby.sh" not in system_script, (
         "the Ruby preflight must not be sourced from the writable checkout"
     )
@@ -823,23 +817,17 @@ def test_system_script_installs_and_verifies_manifest_pinned_ruby(repo_root: Pat
     ), "provisioning must not source helper code from the writable checkout"
 
     version_read = re.search(
-        r'(?m)^\s*(?P<version_var>[A-Z_][A-Z0-9_]*)="\$\(manifest_version ruby\)"',
-        system_script,
+        r'version="\$\(manifest_version ruby\)"',
+        package_script,
     )
     assert version_read, "Ruby's version must come from the tool manifest"
-    assert base_install.start() < version_read.start(), (
-        "base Fedora packages must be installed before reading Ruby's manifest pin"
-    )
-    version_var = re.escape(version_read.group("version_var"))
 
     preflight = re.search(
-        r"(?m)^[ \t]*require_ruby_package_available[ \t]+[\"']?\$\{?"
-        + version_var
-        + r"\}?[\"']?[ \t]*$",
-        system_script,
+        r'(?m)^[ \t]*require_ruby_package_available[ \t]+"\$\{version\}"[ \t]*$',
+        package_script,
     )
     assert preflight, "the Ruby preflight must be a bare statement"
-    assert len(re.findall(preflight.re.pattern, system_script)) == 1, (
+    assert len(re.findall(preflight.re.pattern, package_script)) == 1, (
         "the Ruby preflight must run once, only on a runtime mismatch"
     )
     assert function_definition.start() < preflight.start(), (
@@ -847,10 +835,9 @@ def test_system_script_installs_and_verifies_manifest_pinned_ruby(repo_root: Pat
     )
 
     runtime_branch = re.search(
-        r'(?m)^if \[\[ "\$ruby_output" != "ruby \$\{?'
-        + version_var
-        + r'\}? "\* \]\]; then\n(?P<body>.*?)^fi$',
-        system_script,
+        r'(?m)^[ \t]*if \[\[ "\$ruby_output" != "ruby \$\{version\} "\* \]\]; then\n'
+        r"(?P<body>.*?)^[ \t]*fi$",
+        package_script,
         re.DOTALL,
     )
     assert runtime_branch, "the Ruby runtime mismatch branch is missing"
@@ -859,9 +846,9 @@ def test_system_script_installs_and_verifies_manifest_pinned_ruby(repo_root: Pat
     )
 
     install = re.search(
-        rf"\bdnf\s+install\b[^\n]*(?:\\\n\s*[^\n]*)*"
-        rf'"ruby-\$\{{{version_var}\}}"',
-        system_script,
+        r"\bdnf\s+install\b[^\n]*(?:\\\n\s*[^\n]*)*"
+        r'"ruby-\$\{version\}"',
+        package_script,
     )
     assert install, "Ruby install must use a version-qualified Fedora package"
     assert preflight.start() < install.start(), (
@@ -873,12 +860,12 @@ def test_system_script_installs_and_verifies_manifest_pinned_ruby(repo_root: Pat
     assert "--setopt=updates-archive.gpgcheck=1" in install.group(0), (
         "Ruby install must enable GPG checking for the updates-archive repository"
     )
-    assert system_script.count("/usr/bin/ruby --version") == 2
+    assert package_script.count("/usr/bin/ruby --version") == 2
 
-    post_install = system_script[install.end() :]
+    post_install = package_script[install.end() :]
     version_command = re.search(r"/usr/bin/ruby\s+--version\b", post_install)
     version_check = re.search(
-        rf'"\$[A-Za-z_][A-Za-z0-9_]*"\s*!=\s*"ruby \$\{{{version_var}\}} ',
+        r'"\$ruby_output"\s*!=\s*"ruby \$\{version\} ',
         post_install,
     )
     assert version_command, "Ruby version must be checked after package installation"

@@ -109,10 +109,14 @@ kept in sync with `probe-readiness.sh`, and a unit test checks the copy.
 Later changes to the embedded `lima/provision-system.sh`,
 `lima/provision-user.sh`, or `lima/devbox.yaml` do **not** propagate to an
 existing instance; recreate it to pick them up (see
-[Recreating the VM](#recreating-the-vm)). `lima/provision-tools.sh`, the tool
-manifest, and the root-owned tool assets are read from the checkout at every
-start. Version-only changes in the live tool manifest are applied on
-stop/start without recreating the VM.
+[Recreating the VM](#recreating-the-vm)). `lima/provision-system.sh` also
+embeds the SHA-256 of `lima/fedora-packages.sh`; the live helper is copied to
+root-owned storage and verified against that digest before it is sourced as
+root. Changing the shared package helper therefore also requires
+`devbox --recreate`. `lima/provision-tools.sh`, the tool manifest, and the
+root-owned tool assets are read from the checkout at every start. Version-only
+changes in the live tool manifest are applied on stop/start without recreating
+the VM.
 Ruby's Fedora archive setup and package-availability preflight run during
 embedded system provisioning. Readiness checks require the installed `ruby`
 command; `devbox-toolchain-check` verifies its manifest version. Existing VMs
@@ -1018,12 +1022,43 @@ recommendation from
 are recorded in
 [directory-sharing-benchmark.md](directory-sharing-benchmark.md).
 
+## Fedora container preflight
+
+For faster package and provisioning iteration without KVM, run the shared
+Fedora 44 container preflight from the repository root:
+
+```shell
+./scripts/fedora-preflight.sh
+```
+
+It builds the image with BuildKit and reuses local layers for unchanged
+inputs; CI builds the same `lima/fedora-preflight.Containerfile` image with the
+GitHub Actions BuildKit cache. The image entry point always refreshes DNF
+metadata and re-resolves the exact package pins, even when the cached image
+already has the packages installed. Set `FEDORA_PREFLIGHT_IMAGE` to override
+the default `my-sandbox-fedora-preflight:local` tag.
+
+The setup layers install the shared non-VM Fedora package set, the
+manifest-pinned Ruby RPM, and representative manifest-pinned release tools
+(hadolint, uv, and kind). The runtime layer verifies the installed versions.
+The preflight does not start a VM, systemd, KVM, mounts, or the full Lima
+provisioner, so it cannot validate Lima boot, mounts, readiness, or nested
+virtualization.
+
 ## Acceptance checklist
+
+For VM-affecting changes (the Lima template, provisioning scripts, shared
+package sets, or manifest pins), container preflight success is not enough.
+Provision a fresh L2 from the active checkout, wait for provisioning and
+readiness to complete, and confirm it responds with
+`limactl shell <instance> -- echo hello` before completing the checklist.
 
 After the one-time `limactl start` succeeds and the readiness probe
 passes, verify from inside the VM (opened with
 `~/src/my-sandbox/lima/devbox-shell`):
 
+- [ ] VM-affecting changes passed the fresh-L2 provisioning, readiness, and
+      `limactl shell <instance> -- echo hello` check above.
 - [ ] `cd ~/src/my-sandbox && git status` sees the host checkout.
 - [ ] `devbox-toolchain-check` reports the pinned manifest versions and
       operator tools; `make --version`, `kind version`, `kubectl version

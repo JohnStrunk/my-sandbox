@@ -1,4 +1,4 @@
-"""Behavioral tests for the inline Fedora Ruby package preflight."""
+"""Behavioral tests for the shared Fedora Ruby package preflight."""
 
 import re
 import shlex
@@ -35,14 +35,14 @@ def _write_fake_dnf(
 
 
 def _extract_function(repo_root: Path, name: str) -> str:
-    """Return only the top-level definition of `name` from the system script."""
-    system_script = (repo_root / "lima" / "provision-system.sh").read_text()
+    """Return only the top-level definition of `name` from the helper."""
+    package_script = (repo_root / "lima" / "fedora-packages.sh").read_text()
     definition = re.search(
         rf"(?m)^[ \t]*(?:function[ \t]+)?{re.escape(name)}[ \t]*\(\)[ \t]*\{{",
-        system_script,
+        package_script,
     )
-    assert definition, f"{name} must be defined inline in provision-system.sh"
-    remainder = system_script[definition.start() :]
+    assert definition, f"{name} must be defined in lima/fedora-packages.sh"
+    remainder = package_script[definition.start() :]
     closing = re.search(r"(?m)^\}[ \t]*(?:#.*)?$", remainder)
     assert closing, f"{name} must have a top-level closing brace"
     return remainder[: closing.end()]

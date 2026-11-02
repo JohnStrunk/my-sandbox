@@ -1,0 +1,12 @@
+# The Fedora preflight build only needs these inputs. Keep .git, worktrees,
+# caches, virtual environments, and unrelated repository files out of the
+# builder context. Re-include each parent directory before its file exceptions.
+*
+!lima/
+lima/*
+!lima/fedora-packages.sh
+!lima/tool-versions.json
+!scripts/
+scripts/*
+!scripts/fedora-preflight-container.sh
+!scripts/fedora-preflight-runtime.sh

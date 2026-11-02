@@ -177,7 +177,21 @@ credential mounts.
 ./scripts/sanitized-test.sh --guest-vm --vm-lock --require-recursive-vm -- \
   env UV_PROJECT_ENVIRONMENT="$UV_PROJECT_ENVIRONMENT" \
   uv run --extra test pytest -m recursive
+
+# Fedora 44 package/tool preflight (no KVM required)
+./scripts/fedora-preflight.sh
 ```
+
+The Fedora container preflight installs the shared non-VM package set, the
+manifest-pinned Ruby RPM, and representative manifest-pinned release tools. It
+uses BuildKit layer caching for repeated local builds; CI uses the GitHub
+Actions BuildKit cache. The image entry point always refreshes DNF metadata and
+re-resolves package pins, so cached tool layers cannot hide a package that has
+left the repositories. Set `FEDORA_PREFLIGHT_IMAGE` to override the default
+local image tag. The preflight is not a container-based devbox runtime and does
+not prove Lima boot, mounts, KVM, provisioning, or readiness. VM-affecting
+changes must still pass the fresh-L2 checklist in the
+[Lima guide](lima/README.md#acceptance-checklist).
 
 The #319 backend matrix explicitly exercises kind+Docker CE, kind+Podman,
 Minikube+Docker CE, Minikube+Podman, and Minikube+KVM2. It pins kind 0.33.0's

@@ -63,7 +63,9 @@
 - Any change affecting the VM must be validated by fully provisioning a fresh
   L2 from the active checkout, waiting for provisioning and readiness to
   complete, then confirming it responds with `limactl shell "$name" -- echo
-  hello` (or an equivalent check). Changes to OpenCode, LLM providers, or MCP
+  hello` (or an equivalent check). The Fedora container preflight
+  (`scripts/fedora-preflight.sh`) checks packages and manifest pins only and
+  does not satisfy this requirement. Changes to OpenCode, LLM providers, or MCP
   servers also require their relevant functional/integration checks.
   - Inspect L1 CPU, memory, and disk before provisioning. Set a unique `name`,
     then run `limactl start --yes --name "$name" --timeout 60m`; the `devbox`
@@ -113,8 +115,8 @@
 ## How PRs land
 
 - `CI Workflow - Success` is the authoritative CI prerequisite for merging. It
-  summarizes `Automated Tests`, `Pre-commit checks`, `VM Tests`, and
-  `Recursive VM Tests`.
+  summarizes `Automated Tests`, `Pre-commit checks`, `Fedora Container
+  Preflight`, `VM Tests`, and `Recursive VM Tests`.
 - Mergify queues and merges eligible PRs automatically after that check passes.
   PRs authored by `JohnStrunk` or `renovate-bot` need no approval; other
   authors need at least one approval and no changes-requested review.
