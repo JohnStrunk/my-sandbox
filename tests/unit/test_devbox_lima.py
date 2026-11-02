@@ -280,7 +280,8 @@ def test_default_launcher_creates_missing_vm_from_checkout_template(
     assert f"SrcPath={src_root}" in create_call
     assert f"RepoPath={repo_root}" in create_call
     assert f"KbPath={Path(isolated_env['HOME']) / 'kb'}" in create_call
-    assert create_call.count("--param") == 5
+    assert "VmLevel=L1" in create_call
+    assert create_call.count("--param") == 6
     assert any("--workdir" in call for call in logged)
 
 

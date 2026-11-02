@@ -42,6 +42,7 @@ EXPECTED_SHARED_RELS = sorted(
 _SCRIPTS = (
     "provision-system.sh",
     "provision-user.sh",
+    "provision-vm-level.sh",
     "probe-readiness.sh",
 )
 
@@ -318,6 +319,8 @@ def test_envtest_asset_store_is_not_provisioned_required_or_documented(
 ):
     envtest_references = ("kubebuilder-envtest", "setup-envtest")
     provisioning_and_probe_files = (
+        "lima/fedora-packages.sh",
+        "lima/provision-vm-level.sh",
         "lima/provision-system.sh",
         "lima/provision-user.sh",
         "lima/provision-tools.sh",
@@ -589,6 +592,7 @@ def test_provision_and_probe_scripts_are_referenced_and_valid(
     config = _template(repo_root)
 
     assert [(entry["mode"], entry["file"]) for entry in config["provision"]] == [
+        ("system", "provision-vm-level.sh"),
         ("system", "provision-system.sh"),
         ("user", "provision-user.sh"),
     ]
@@ -616,6 +620,7 @@ def test_params_are_consumed_by_the_user_script(repo_root: Path):
         "SrcPath": "",
         "RepoPath": "",
         "KbPath": "",
+        "VmLevel": "",
     }
     user_script = _script(repo_root, "provision-user.sh")
     # Lima rejects params that no script references ($PARAM_<Key>).
@@ -625,6 +630,7 @@ def test_params_are_consumed_by_the_user_script(repo_root: Path):
     assert "PARAM_RepoPath" in _script(repo_root, "provision-system.sh")
     assert "PARAM_SrcPath" in _script(repo_root, "provision-system.sh")
     assert "PARAM_KbPath" in _script(repo_root, "provision-system.sh")
+    assert "PARAM_VmLevel" in _script(repo_root, "provision-system.sh")
 
 
 @pytest.mark.unit

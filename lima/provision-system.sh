@@ -9,6 +9,11 @@ DEVBOX_GUEST_HOME="$(getent passwd "$DEVBOX_USER" | cut -d: -f6)"
 DEVBOX_REPO="${PARAM_RepoPath:-}"
 DEVBOX_SRC_ROOT="${PARAM_SrcPath:-}"
 DEVBOX_KB_PATH="${PARAM_KbPath:-}"
+DEVBOX_VM_LEVEL="${PARAM_VmLevel:-}"
+if [[ ! "$DEVBOX_VM_LEVEL" =~ ^L[1-9][0-9]*$ ]]; then
+  echo "devbox: VmLevel must match L[1-9][0-9]*; got '$DEVBOX_VM_LEVEL'" >&2
+  exit 1
+fi
 if [[ -z "$DEVBOX_GUEST_HOME" || ! -d "$DEVBOX_GUEST_HOME" ]]; then
   echo "devbox: could not locate the guest home for $DEVBOX_USER" >&2
   exit 1

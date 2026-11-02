@@ -282,6 +282,7 @@ def test_vm_start_command_uses_the_pinned_template_and_timeout(tmp_path: Path):
     assert "123.5s" in command
     assert "SrcPath=/workspace/src" in command
     assert f"RepoPath=/workspace/src/{repo.name}" in command
+    assert "VmLevel=L1" in command
     assert command[-1] == str(repo / "lima" / "devbox.yaml")
 
 

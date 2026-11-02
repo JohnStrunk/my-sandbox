@@ -3,8 +3,10 @@
 # environment for my-sandbox. See lima/README.md for host prerequisites,
 # the create command, and day-to-day usage.
 #
-# The instance name ("devbox") derives from this template's filename:
-#   limactl start ~/src/my-sandbox/lima/devbox.yaml
+# The instance name ("devbox") derives from this template's filename. Create
+# it through the repository launcher, which supplies every required param:
+#   devbox
+# A manual create must pass every param in the block below, including VmLevel.
 #
 # Design notes:
 # - Project files are mounted at their host paths so linked-worktree .git
@@ -126,17 +128,25 @@ containerd:
 # and only fills in the VM's global Git config when unset.
 # SrcPath is readlink -f ~/src on the host; RepoPath is the checkout below it.
 # KbPath is readlink -f ~/kb; it preserves absolute KB worktree gitdir paths.
+# VmLevel is required and set by each creation path: L1 for the standard
+# launcher, CI runner, and test fixture; L2 for the documented fresh-L2 recipe.
+# provision-vm-level.sh validates it and writes /etc/devbox/vm-level.
 param:
   GitUserName: ""
   GitUserEmail: ""
   SrcPath: ""
   RepoPath: ""
   KbPath: ""
+  VmLevel: ""
 
 # Idempotent provisioning; scripts re-run on every VM start. Lima embeds the
 # system/user scripts; changes to those or this template require recreation.
 # The system script snapshots provision-tools.sh and the live manifest at boot.
 provision:
+  # Root: explicit VM level marker. Embedded at create so restarts never
+  # depend on the creation-time checkout retaining this helper.
+  - mode: system
+    file: provision-vm-level.sh
   # Root: packages, protected host mounts, isolated pinned toolchain builder.
   # The embedded system script copies lima/fedora-packages.sh to root-owned
   # storage and verifies its SHA-256 against the digest embedded at create time
@@ -161,6 +171,80 @@ probes:
         echo "devbox readiness: $*" >&2
         exit 1
       }
+
+      # Keep this reader contract synchronized with provision-vm-level.sh:
+      # exactly one L[1-9][0-9]* line, root:root mode 0644, inside a root:root
+      # mode-0755 /etc/devbox.
+      VM_LEVEL_FILE=/etc/devbox/vm-level
+      verify_vm_level_marker() {
+        local marker_dir level metadata dir_metadata etc_target marker_target
+        local marker_fs_type
+        marker_dir="$(dirname "$VM_LEVEL_FILE")"
+        if [[ -L "$marker_dir" || ! -d "$marker_dir" ]]; then
+          fail "$marker_dir is not a guest-local directory; "\
+            "recreate the VM from the current template"
+        fi
+        if [[ -L "$VM_LEVEL_FILE" || ! -f "$VM_LEVEL_FILE" ]]; then
+          fail "$VM_LEVEL_FILE is missing or not a regular file; "\
+            "recreate the VM from the current template"
+        fi
+        if ! dir_metadata="$(
+          stat -c '%u:%g:%a' -- "$marker_dir" 2>/dev/null
+        )"; then
+          fail "cannot inspect $marker_dir"
+        fi
+        if [[ "$dir_metadata" != "0:0:755" ]]; then
+          fail "$marker_dir has $dir_metadata; expected root:root mode 0755"
+        fi
+        if ! etc_target="$(findmnt -rn -T /etc -o TARGET)"; then
+          fail "cannot inspect the filesystem containing /etc"
+        fi
+        if ! marker_target="$(
+          findmnt -rn -T "$marker_dir" -o TARGET
+        )"; then
+          fail "cannot inspect the filesystem containing $marker_dir"
+        fi
+        if [[ "$etc_target" != "$marker_target" ]]; then
+          fail "$marker_dir is on a different filesystem than /etc"
+        fi
+        if ! marker_fs_type="$(
+          findmnt -rn -T "$marker_dir" -o FSTYPE
+        )"; then
+          fail "cannot inspect the filesystem type for $marker_dir"
+        fi
+        case "$marker_fs_type" in
+          9p | virtiofs)
+            fail "$marker_dir is on host-shared filesystem '$marker_fs_type'"
+            ;;
+        esac
+        if ! metadata="$(
+          stat -c '%u:%g:%a' -- "$VM_LEVEL_FILE" 2>/dev/null
+        )"; then
+          fail "cannot inspect $VM_LEVEL_FILE"
+        fi
+        if [[ "$metadata" != "0:0:644" ]]; then
+          fail "$VM_LEVEL_FILE has $metadata; expected root:root mode 0644"
+        fi
+        if ! marker_target="$(
+          findmnt -rn -T "$VM_LEVEL_FILE" -o TARGET
+        )"; then
+          fail "cannot inspect the filesystem containing $VM_LEVEL_FILE"
+        fi
+        if [[ "$etc_target" != "$marker_target" ]]; then
+          fail "$VM_LEVEL_FILE is on a different filesystem than /etc"
+        fi
+        if ! level="$(cat -- "$VM_LEVEL_FILE")"; then
+          fail "cannot read $VM_LEVEL_FILE"
+        fi
+        if [[ ! "$level" =~ ^L[1-9][0-9]*$ ]]; then
+          fail "$VM_LEVEL_FILE contains an invalid level; "\
+            "expected L[1-9][0-9]*"
+        fi
+        if [[ "$(wc -l < "$VM_LEVEL_FILE" | tr -d ' ')" != 1 ]]; then
+          fail "$VM_LEVEL_FILE must contain exactly one line"
+        fi
+      }
+      verify_vm_level_marker
 
       TOOL_BUILDER_HOME=/var/lib/devbox-toolbuilder
       PATH="${KREW_ROOT:-$HOME/.krew}/bin:$HOME/.local/bin:$HOME/.cargo/bin:$TOOL_BUILDER_HOME/.local/bin:$TOOL_BUILDER_HOME/.cargo/bin:/usr/local/node/bin:/usr/local/go/bin:/usr/local/bin:$PATH"

@@ -24,7 +24,8 @@ def test_lima_can_start_an_l2_without_stacked_project_mounts(devbox_vm: LimaVM):
 set -euo pipefail
 name={instance}
 repo_copy={repo_copy}
-template="$(mktemp --suffix=.yaml)"
+template_dir="$(mktemp -d)"
+template="$template_dir/devbox-l2.yaml"
 cleanup() {{
   status=$?
   trap - EXIT
@@ -40,7 +41,7 @@ cleanup() {{
   else
     rm -rf -- "$repo_copy"
   fi
-  rm -f "$template"
+  rm -rf -- "$template_dir"
   exit "$status"
 }}
 trap cleanup EXIT
@@ -55,6 +56,8 @@ from pathlib import Path
 from tests.conftest import copy_repository_for_vm
 copy_repository_for_vm(Path(sys.argv[1]), Path(sys.argv[2]))
 ' {guest_repo} {quoted_repo_copy}
+install -m 0644 "$repo_copy/lima/provision-vm-level.sh" \
+  "$template_dir/provision-vm-level.sh"
 cat >"$template" <<'YAML'
 minimumLimaVersion: "2.1.3"
 vmType: qemu
@@ -73,11 +76,21 @@ mounts:
 containerd:
   system: false
   user: false
+param:
+  VmLevel: ""
+provision:
+  - mode: system
+    file: provision-vm-level.sh
 YAML
 limactl start --yes --name "$name" \
-  --timeout {vm_start_timeout():g}s "$template"
+  --timeout {vm_start_timeout():g}s \
+  --param VmLevel=L2 "$template"
 limactl shell "$name" -- bash -ceu '
   test -r /workspace/repo/lima/devbox.yaml
+  marker=/etc/devbox/vm-level
+  [[ -f "$marker" && ! -L "$marker" ]]
+  [[ "$(stat -c "%u:%g:%a" "$marker")" == 0:0:644 ]]
+  [[ "$(cat "$marker")" == L2 ]]
   bash -n /workspace/repo/devbox
   python3 /workspace/repo/scripts/validate_tool_versions.py
   for target in "$HOME/.coderabbit" "$HOME/.host-config/coderabbit"; do
@@ -119,6 +132,10 @@ def test_concurrent_l2_opencode_services_have_private_state(
 
     names = [f"recursive-opencode-{uuid.uuid4().hex[:10]}" for _ in range(2)]
     template = tmp_path / f"{names[0]}.yaml"
+    shutil.copy2(
+        Path(devbox_vm.repo_path) / "lima" / "provision-vm-level.sh",
+        tmp_path / "provision-vm-level.sh",
+    )
     template.write_text(
         yaml.safe_dump(
             {
@@ -145,9 +162,16 @@ def test_concurrent_l2_opencode_services_have_private_state(
                         "location": str(binary_path.parent),
                         "mountPoint": "/opt/opencode",
                         "writable": False,
-                    }
+                    },
                 ],
                 "containerd": {"system": False, "user": False},
+                "param": {"VmLevel": ""},
+                "provision": [
+                    {
+                        "mode": "system",
+                        "file": "provision-vm-level.sh",
+                    }
+                ],
             },
             sort_keys=False,
         )
@@ -164,7 +188,8 @@ name_b={second}
 timeout={shlex.quote(timeout)}
 start_vm() {{
   local name="$1" log="$2"
-  limactl start --yes --name "$name" --timeout "$timeout" "$template" >"$log" 2>&1
+  limactl start --yes --name "$name" --timeout "$timeout" \
+    --param VmLevel=L2 "$template" >"$log" 2>&1
 }}
 if ! start_vm "$name_a" "$template.$name_a.log"; then
   cat "$template.$name_a.log" >&2
@@ -174,6 +199,14 @@ if ! start_vm "$name_b" "$template.$name_b.log"; then
   cat "$template.$name_b.log" >&2
   exit 1
 fi
+for name in "$name_a" "$name_b"; do
+  limactl shell "$name" -- bash -ceu '
+    marker=/etc/devbox/vm-level
+    [[ -f "$marker" && ! -L "$marker" ]]
+    [[ "$(stat -c "%u:%g:%a" "$marker")" == 0:0:644 ]]
+    [[ "$(cat "$marker")" == L2 ]]
+  '
+done
 
 start_service() {{
   local name="$1" log="$2"

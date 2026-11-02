@@ -201,10 +201,11 @@ state_seed_script_sha256="$(sha256sum "$DEVBOX_REPO/lima/seed-opencode-state.py"
 manifest_sha256="$(sha256sum "$MANIFEST" | awk '{print $1}')"
 tool_script_sha256="$(cat /var/lib/devbox-vm/tool-provision.sha256)"
 tool_assets_sha256="$(cat /var/lib/devbox-vm/tool-assets.sha256)"
-fingerprint="$(printf '%s\n%s\n%s\n%s\n%s\n%s\n' \
+vm_level_script_sha256="$(cat /var/lib/devbox-vm/vm-level-provision.sha256)"
+fingerprint="$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
   "$manifest_sha256" "$system_script_sha256" "$user_script_sha256" \
   "$state_seed_script_sha256" \
-  "$tool_script_sha256" "$tool_assets_sha256" \
+  "$tool_script_sha256" "$tool_assets_sha256" "$vm_level_script_sha256" \
   | sha256sum | awk '{print $1}')"
 fingerprint_file="$HOME/.local/share/devbox-toolchain/provisioning.fingerprint"
 previous_fingerprint="$(cat "$fingerprint_file" 2>/dev/null || true)"
