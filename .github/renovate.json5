@@ -40,12 +40,18 @@
       "minimumGroupSize": 3,
     },
     {
-      "description": "Group uv version and architecture artifact updates",
+      // A uv bump yields the alias plus both architecture artifacts, and CI
+      // validation plus the provenance check reject an incomplete artifact
+      // update. A Python bump yields the root and The Source requires-python
+      // pins. A minimum group size of two lets the two-pin Python update land
+      // while a single stray update waits for the rest of its set.
+      "description": "Group uv release artifacts with the root and The Source Python pins",
       "matchPackageNames": [
         "astral-sh/uv",
+        "python",
       ],
-      "groupName": "uv release artifacts",
-      "minimumGroupSize": 3,
+      "groupName": "uv release artifacts and Python pins",
+      "minimumGroupSize": 2,
     },
     {
       "description": "Group Antigravity CLI version and architecture artifact updates",

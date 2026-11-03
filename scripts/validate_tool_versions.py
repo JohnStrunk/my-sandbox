@@ -18,6 +18,13 @@ _VERSION_LITERAL_PATTERN = re.compile(
     r"(?<![A-Za-z0-9_.-])v?\d+\.\d+(?:\.\d+)*(?:-[A-Za-z0-9.-]+)?"
     r"(?![A-Za-z0-9_.-])"
 )
+# A SHA-pinned action reference, optionally with an inline `# vX.Y.Z` release
+# comment. Its comment names the action release, not an installed tool. The
+# path is limited to inert GitHub action characters so a shell expression in a
+# `run:` block cannot borrow the exemption just by carrying a valid SHA.
+_SHA_PINNED_ACTION_REFERENCE_PATTERN = re.compile(
+    r"^\s*(?:-\s+)?uses:\s+[A-Za-z0-9._/-]+@[0-9a-f]{40}(?:\s+#.*)?$"
+)
 _TRUST_ANCHOR_PIN_PATTERN = re.compile(
     r'^\s*\["(?P<name>[a-z0-9-]+\.crt)"\]="(?P<digest>[0-9a-f]{64})"$',
     re.MULTILINE,
@@ -205,6 +212,10 @@ def _check_no_hardcoded_versions(
     """Reject package install lines that bypass the manifest lookup."""
 
     for line in _active_lines(text).splitlines():
+        # SHA-pinned action references are governed by Renovate, not by the
+        # installed tool version this check protects.
+        if _SHA_PINNED_ACTION_REFERENCE_PATTERN.match(line):
+            continue
         if not _VERSION_LITERAL_PATTERN.search(line):
             continue
         for tool_name, spec in tools.items():

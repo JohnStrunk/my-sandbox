@@ -5,20 +5,21 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import tomllib
 
 from scripts.verify_provenance import _render_url, verify_provenance
 
 _CHECKSUM_GROUPS = {
-    "hadolint/hadolint": "hadolint release artifacts",
-    "golangci/golangci-lint": "golangci-lint release artifacts",
-    "astral-sh/uv": "uv release artifacts",
-    "google-antigravity/antigravity-cli": "antigravity cli release artifacts",
-    "lima-vm/lima": "limactl release artifacts",
-    "kubernetes-sigs/kind": "kind release artifacts",
-    "kubernetes-sigs/krew": "krew release artifacts",
-    "kubernetes/minikube": "minikube release artifacts",
-    "ast-grep/ast-grep": "ast-grep release artifacts",
-    "acli": "acli release artifacts",
+    "hadolint/hadolint": ("hadolint release artifacts", 3),
+    "golangci/golangci-lint": ("golangci-lint release artifacts", 3),
+    "astral-sh/uv": ("uv release artifacts and Python pins", 2),
+    "google-antigravity/antigravity-cli": ("antigravity cli release artifacts", 3),
+    "lima-vm/lima": ("limactl release artifacts", 3),
+    "kubernetes-sigs/kind": ("kind release artifacts", 3),
+    "kubernetes-sigs/krew": ("krew release artifacts", 3),
+    "kubernetes/minikube": ("minikube release artifacts", 3),
+    "ast-grep/ast-grep": ("ast-grep release artifacts", 3),
+    "acli": ("acli release artifacts", 3),
 }
 
 
@@ -648,13 +649,39 @@ def test_each_checksum_tool_groups_alias_with_both_architecture_dependencies(
     repo_root: Path,
 ):
     config = (repo_root / ".github" / "renovate.json5").read_text()
-    for package_name, group_name in _CHECKSUM_GROUPS.items():
+    for package_name, (group_name, minimum_group_size) in _CHECKSUM_GROUPS.items():
         rule = _config_object(config, f'"groupName": "{group_name}"')
         assert f'"{package_name}"' in rule
-        assert '"minimumGroupSize": 3' in rule
+        assert f'"minimumGroupSize": {minimum_group_size}' in rule
     assert "verify_provenance.py --update" not in config
     assert "commitMessageSuffix" not in config
     assert "postUpgradeTasks" not in config
+
+
+@pytest.mark.unit
+def test_uv_renovate_group_includes_the_source_python_pins(repo_root: Path):
+    """A uv bump must be tested against the Python pins it has to support."""
+
+    manifest = json.loads((repo_root / "lima" / "tool-versions.json").read_text())
+    config = (repo_root / ".github" / "renovate.json5").read_text()
+    rule = _config_object(config, '"groupName": "uv release artifacts and Python pins"')
+
+    assert manifest["tools"]["uv"]["consumers"]["ci"] is True
+    assert rule.count('"groupName"') == 1
+    assert '"astral-sh/uv"' in rule
+    assert '"python"' in rule
+    # pep621 extracts requires-python from each pyproject as packageName
+    # "python", so both the root and The Source pins join the uv group. The
+    # minimum group size of two relies on these exact pins updating together.
+    pins = [
+        tomllib.loads((repo_root / pyproject).read_text())["project"]["requires-python"]
+        for pyproject in ("pyproject.toml", "lima/the-source/pyproject.toml")
+    ]
+    assert len(set(pins)) == 1
+    for pin in pins:
+        assert re.fullmatch(r"==\d+\.\d+\.\d+", pin)
+    # Two Python pins can group without a uv release also being available.
+    assert '"minimumGroupSize": 2' in rule
 
 
 @pytest.mark.unit

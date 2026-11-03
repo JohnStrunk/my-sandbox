@@ -4,6 +4,7 @@ import shutil
 from pathlib import Path
 
 import pytest
+import yaml
 
 from scripts.validate_tool_versions import (
     _LIMA_MANIFEST_VERSION_PATTERN,
@@ -54,6 +55,41 @@ def test_tool_version_manifest_is_synchronized(repo_root: Path):
 
 
 @pytest.mark.unit
+def test_ci_installs_the_manifest_pinned_uv(repo_root: Path):
+    """CI resolves uv from the manifest and proves the install matches it."""
+
+    manifest = json.loads((repo_root / "lima" / "tool-versions.json").read_text())
+    workflow = yaml.safe_load(
+        (repo_root / ".github" / "workflows" / "ci-workflow.yaml").read_text()
+    )
+
+    assert manifest["tools"]["uv"]["consumers"]["ci"] is True
+    for job in ("pre-commit", "test"):
+        steps = workflow["jobs"][job]["steps"]
+        names = [step.get("name") for step in steps]
+        read_index = names.index("Read pinned uv version")
+        install_index = names.index("Install uv")
+        verify_index = names.index("Verify installed uv matches the pinned version")
+        assert read_index < install_index < verify_index
+        assert ".tools.uv.version" in steps[read_index]["run"]
+        assert "lima/tool-versions.json" in steps[read_index]["run"]
+        # The manifest value reaches $GITHUB_OUTPUT only if it matches the
+        # safe-version policy that scripts/validate_tool_versions.py enforces.
+        assert (
+            r'select(test("^v?[0-9]+(\\.[0-9]+){1,3}([-+][A-Za-z0-9.]+)?\\z"))'
+        ) in steps[read_index]["run"]
+        assert steps[install_index]["with"]["version"] == (
+            "${{ steps.uv-version.outputs.version }}"
+        )
+        assert "uv --version" in steps[verify_index]["run"]
+
+    test_names = [step.get("name") for step in workflow["jobs"]["test"]["steps"]]
+    assert test_names.index("Verify installed uv matches the pinned version") < (
+        test_names.index("Verify The Source MCP environment installs")
+    )
+
+
+@pytest.mark.unit
 def test_tool_version_validator_reports_pre_commit_drift(
     repo_root: Path, tmp_path: Path
 ):
@@ -98,6 +134,72 @@ def test_tool_version_validator_rejects_hardcoded_consumer_versions(
     errors = validate_tool_versions(copy_root)
 
     assert any("hard-coded version" in error for error in errors)
+
+
+@pytest.mark.unit
+def test_validator_ignores_github_action_release_comments(
+    repo_root: Path, tmp_path: Path
+):
+    """A SHA-pinned action's ``# vX.Y.Z`` comment is not a tool install."""
+
+    copy_root = tmp_path / "repo"
+    _copy_validator_inputs(repo_root, copy_root)
+
+    workflow_path = copy_root / ".github" / "workflows" / "ci-workflow.yaml"
+    workflow = workflow_path.read_text()
+    action_line = next(
+        line for line in workflow.splitlines() if "uses: astral-sh/setup-uv@" in line
+    )
+    mutated_line = action_line.replace("# v", "# v99.")
+    assert mutated_line != action_line
+    assert "# v99." in mutated_line
+    workflow_path.write_text(workflow.replace(action_line, mutated_line, 1))
+
+    assert validate_tool_versions(copy_root) == []
+
+
+@pytest.mark.unit
+def test_validator_checks_uses_like_shell_lines(repo_root: Path, tmp_path: Path):
+    """Only a SHA-pinned action reference is exempt, not arbitrary run lines."""
+
+    copy_root = tmp_path / "repo"
+    _copy_validator_inputs(repo_root, copy_root)
+
+    workflow_path = copy_root / ".github" / "workflows" / "ci-workflow.yaml"
+    workflow = workflow_path.read_text()
+    marker = "          ./scripts/verify-the-source-mcp-install.sh\n"
+    assert marker in workflow
+    workflow_path.write_text(
+        workflow.replace(marker, marker + "          uses: astral-sh/uv@0.13.4\n", 1)
+    )
+
+    errors = validate_tool_versions(copy_root)
+
+    assert any("hard-coded version for 'uv'" in error for error in errors)
+
+
+@pytest.mark.unit
+def test_validator_rejects_shell_functional_uses_lines_with_a_sha(
+    repo_root: Path, tmp_path: Path
+):
+    """A valid SHA must not let a shell expression borrow the action exemption."""
+
+    copy_root = tmp_path / "repo"
+    _copy_validator_inputs(repo_root, copy_root)
+
+    workflow_path = copy_root / ".github" / "workflows" / "ci-workflow.yaml"
+    workflow = workflow_path.read_text()
+    marker = "          ./scripts/verify-the-source-mcp-install.sh\n"
+    assert marker in workflow
+    pseudo_uses = (
+        "          uses: astral-sh/uv||cmd@"
+        "0123456789012345678901234567890123456789 # v0.13.5\n"
+    )
+    workflow_path.write_text(workflow.replace(marker, marker + pseudo_uses, 1))
+
+    errors = validate_tool_versions(copy_root)
+
+    assert any("hard-coded version for 'uv'" in error for error in errors)
 
 
 @pytest.mark.unit
