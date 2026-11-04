@@ -94,6 +94,19 @@ def _probe_required_tools(repo_root: Path) -> set[str]:
     return set(required_tools.group(1).replace("\\", " ").split())
 
 
+def _isolated_toolbuilder_executables(repo_root: Path) -> set[str]:
+    """Parse the toolbuilder fail-fast command list from provision-user.sh."""
+
+    user_script = _script(repo_root, "provision-user.sh")
+    isolated_tools = re.search(
+        r"^for executable in \\\n(.*?)^do$",
+        user_script,
+        re.DOTALL | re.MULTILINE,
+    )
+    assert isolated_tools, "isolated-tool fail-fast loop is missing"
+    return set(isolated_tools.group(1).replace("\\", " ").split())
+
+
 def _base_packages(repo_root: Path) -> str:
     """Return the shared Fedora package definitions."""
     packages = (repo_root / LIMA_DIR / "fedora-packages.sh").read_text()
@@ -307,20 +320,48 @@ def test_gocyclo_provisioning_parser_preserves_version_suffix(
     assert result.stdout.strip() == version
 
 
+@pytest.mark.parametrize("tool", ["golangci-lint", "gocyclo", "actionlint", "yamllint"])
 @pytest.mark.unit
-def test_user_script_checks_go_linters_in_isolated_tool_fail_fast_list(
-    repo_root: Path,
+def test_user_script_checks_tools_in_isolated_toolbuilder_fail_fast_list(
+    repo_root: Path, tool: str
 ):
-    user_script = _script(repo_root, "provision-user.sh")
-    isolated_tools = re.search(
-        r"^for executable in \\\n(.*?)^do$",
-        user_script,
-        re.DOTALL | re.MULTILINE,
-    )
+    assert tool in _isolated_toolbuilder_executables(repo_root)
 
-    assert isolated_tools, "isolated-tool fail-fast loop is missing"
-    assert {"golangci-lint", "gocyclo"} <= set(
-        isolated_tools.group(1).replace("\\", " ").split()
+
+@pytest.mark.unit
+def test_actionlint_installs_from_the_pinned_manifest(repo_root: Path):
+    tool_script = _script(repo_root, "provision-tools.sh")
+
+    assert 'ACTIONLINT_VERSION="$(manifest_version actionlint)"' in tool_script
+    assert (
+        'ACTIONLINT_ARTIFACT_VERSION="$(manifest_artifact_version actionlint '
+        '"$checksum_arch")"' in tool_script
+    )
+    assert (
+        'ACTIONLINT_FINGERPRINT="$(manifest_integrity_fingerprint actionlint '
+        '"$checksum_arch")"' in tool_script
+    )
+    assert 'verify_download actionlint "$checksum_arch" "$tmp/$archive"' in (
+        tool_script
+    )
+    assert (
+        '"https://github.com/rhysd/actionlint/releases/download/'
+        '${ACTIONLINT_ARTIFACT_VERSION}/${archive}"' in tool_script
+    )
+    assert 'tar -xOzf "$tmp/$archive" actionlint >"$tmp/actionlint"' in tool_script
+    assert (
+        'install -m 0755 "$tmp/actionlint" "$HOME/.local/bin/actionlint"' in tool_script
+    )
+    assert '"$actionlint_stamp"' in tool_script
+
+
+@pytest.mark.unit
+def test_yamllint_installs_from_the_pinned_manifest_with_uv(repo_root: Path):
+    tool_script = _script(repo_root, "provision-tools.sh")
+
+    assert (
+        'ensure_uv_tool yamllint "yamllint==$(manifest_version yamllint)" '
+        "yamllint" in tool_script
     )
 
 
@@ -477,6 +518,57 @@ def test_vm_skill_documents_go_linter_usage_and_compatibility(repo_root: Path):
     assert "`devbox-toolchain-check`" in go_linter_guidance
     assert "`devbox --recreate`" in go_linter_guidance
     assert "existing VMs must use `devbox --recreate`" in readme
+
+
+@pytest.mark.unit
+def test_vm_skill_documents_github_actions_and_yaml_checks(repo_root: Path):
+    skill = (repo_root / LIMA_DIR / "agent-skills/devbox-tools/SKILL.md").read_text()
+    section = " ".join(
+        skill.split("### GitHub Actions and YAML checks", 1)[1]
+        .split("\n### ", 1)[0]
+        .split()
+    )
+
+    assert "actionlint" in section
+    assert "yamllint" in section
+    assert "Run `actionlint` from the repository root" in section
+    assert "`yamllint --strict -c <project-config> <files>`" in section
+    assert "with the project's config and explicit files" in section
+    assert (
+        "use the repository's configured CI or pre-commit check if present; "
+        "otherwise report the check unavailable" in section
+    )
+    assert "Do not bootstrap an unpinned binary" in section
+    assert "`devbox-toolchain-check` verifies both manifest pins" in section
+    assert "`devbox --recreate`" in section
+    assert "recreation loses VM-local state" in section
+
+
+@pytest.mark.unit
+def test_lima_readme_documents_github_actions_and_yaml_checks(repo_root: Path):
+    readme_text = (repo_root / LIMA_DIR / "README.md").read_text()
+    readme = " ".join(readme_text.split())
+    section = " ".join(
+        readme_text.split("### GitHub Actions and YAML checks", 1)[1]
+        .split("\n## ", 1)[0]
+        .split()
+    )
+
+    assert "actionlint" in section
+    assert "yamllint" in section
+    assert "manifest-pinned versions" in section
+    assert "existing VMs must use `devbox --recreate`" in readme
+    assert "to adopt the new readiness checks" in readme
+    assert "recreation loses VM-local state" in readme
+    assert "Run `actionlint` from the repository root" in section
+    assert "`yamllint --strict -c <project-config> <files>`" in section
+    assert "with the project's config and explicit files" in section
+    assert (
+        "use the repository's configured CI or pre-commit check if present; "
+        "otherwise report it unavailable" in section
+    )
+    assert "Do not bootstrap an unpinned binary" in section
+    assert "`devbox-toolchain-check` verifies both manifest-pinned versions" in section
 
 
 @pytest.mark.unit
@@ -711,6 +803,12 @@ def test_probe_requires_coderabbit_cli_on_the_guest_path(repo_root: Path):
 @pytest.mark.parametrize("tool", ["golangci-lint", "gocyclo"])
 @pytest.mark.unit
 def test_probe_requires_go_linters_on_the_guest_path(repo_root: Path, tool: str):
+    assert tool in _probe_required_tools(repo_root)
+
+
+@pytest.mark.parametrize("tool", ["actionlint", "yamllint"])
+@pytest.mark.unit
+def test_probe_requires_linters_on_the_guest_path(repo_root: Path, tool: str):
     assert tool in _probe_required_tools(repo_root)
 
 

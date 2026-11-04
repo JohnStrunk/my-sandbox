@@ -49,7 +49,7 @@ def test_provisioned_vm_toolchain_matches_manifest(repo_root: Path, devbox_vm: L
     assert "ERROR:" not in result.stdout
     manifest = json.loads((repo_root / "lima" / "tool-versions.json").read_text())
     output_lines = result.stdout.splitlines()
-    for tool in ("ruby", "gocyclo", "golangci_lint"):
+    for tool in ("ruby", "gocyclo", "golangci_lint", "actionlint", "yamllint"):
         expected_version = manifest["tools"][tool]["version"]
         assert f"OK: {tool}: {expected_version}" in output_lines
 
@@ -451,6 +451,36 @@ def test_fresh_vm_fingerprint_matches_the_current_checkout(
 
 
 @pytest.mark.vm
+def test_actionlint_and_yamllint_are_available(repo_root: Path, devbox_vm: LimaVM):
+    skip_if_guest_provisioning_is_stale(repo_root, devbox_vm)
+    manifest = json.loads((repo_root / "lima" / "tool-versions.json").read_text())
+    command = r"""
+set -euo pipefail
+actionlint_expected="$1"
+yamllint_expected="$2"
+[[ "$(actionlint -version 2>/dev/null | head -n1)" == "$actionlint_expected" ]]
+[[ "$(yamllint --version 2>/dev/null)" == "yamllint $yamllint_expected" ]]
+"""
+    result = devbox_vm.run(
+        [
+            "bash",
+            "-ceu",
+            command,
+            "yaml-workflow-linters",
+            manifest["tools"]["actionlint"]["version"],
+            manifest["tools"]["yamllint"]["version"],
+        ],
+        timeout=60,
+    )
+
+    assert result.returncode == 0, (
+        "The manifest-pinned actionlint or yamllint is unavailable in the "
+        "provisioned L1 devbox VM.\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+
+
+@pytest.mark.vm
 def test_project_utility_commands_are_discoverable(devbox_vm: LimaVM):
     command = (
         "for tool in devbox-go diff file gocyclo golangci-lint "
@@ -708,6 +738,9 @@ test -r "$active"
 cmp -s "$source" "$active"
 grep -q 'name: "devbox-tools"' "$active"
 grep -q '### Krew plugins' "$active"
+grep -q '### GitHub Actions and YAML checks' "$active"
+grep -F -q 'actionlint' "$active"
+grep -F -q 'yamllint' "$active"
 test -r {shlex.quote(ast_grep_path)}
 test -r {shlex.quote(outline_path)}
 """

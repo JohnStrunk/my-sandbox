@@ -197,6 +197,7 @@ ensure_coderabbit_cli
 
 ensure_uv_tool pre_commit "pre-commit==$(manifest_version pre_commit)" pre-commit
 ensure_uv_tool pipenv "pipenv==$(manifest_version pipenv)" pipenv
+ensure_uv_tool yamllint "yamllint==$(manifest_version yamllint)" yamllint
 semble_version="$(manifest_version semble)"
 semble_installed="$("$HOME/.local/bin/semble-bin" --version 2>/dev/null \
   | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)"
@@ -265,6 +266,30 @@ if [[ "$golangci_installed" != "$GOLANGCI_VERSION" ]] \
   install -d -m 0700 "${golangci_stamp%/*}"
   printf '%s\n' "$GOLANGCI_FINGERPRINT" >"$golangci_stamp.new"
   mv -f "$golangci_stamp.new" "$golangci_stamp"
+fi
+
+ACTIONLINT_VERSION="$(manifest_version actionlint)"
+ACTIONLINT_ARTIFACT_VERSION="$(manifest_artifact_version actionlint "$checksum_arch")"
+ACTIONLINT_FINGERPRINT="$(manifest_integrity_fingerprint actionlint "$checksum_arch")"
+actionlint_installed="$("$HOME/.local/bin/actionlint" -version 2>/dev/null \
+  | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)"
+actionlint_stamp="$HOME/.cache/tool-integrity/actionlint"
+if [[ "$actionlint_installed" != "$ACTIONLINT_VERSION" ]] \
+  || [[ ! -f "$actionlint_stamp" ]] \
+  || [[ "$(cat "$actionlint_stamp")" != "$ACTIONLINT_FINGERPRINT" ]]; then
+  archive="actionlint_${ACTIONLINT_VERSION}_linux_${checksum_arch}.tar.gz"
+  tmp="$(mktemp -d "$HOME/.cache/actionlint.XXXXXX")"
+  curl --retry 3 --retry-connrefused -fsSL \
+    "https://github.com/rhysd/actionlint/releases/download/${ACTIONLINT_ARTIFACT_VERSION}/${archive}" \
+    -o "$tmp/$archive"
+  verify_download actionlint "$checksum_arch" "$tmp/$archive"
+  tar -xOzf "$tmp/$archive" actionlint >"$tmp/actionlint"
+  test -s "$tmp/actionlint"
+  install -m 0755 "$tmp/actionlint" "$HOME/.local/bin/actionlint"
+  rm -rf -- "$tmp"
+  install -d -m 0700 "${actionlint_stamp%/*}"
+  printf '%s\n' "$ACTIONLINT_FINGERPRINT" >"$actionlint_stamp.new"
+  mv -f "$actionlint_stamp.new" "$actionlint_stamp"
 fi
 
 GOCYCLO_VERSION="$(manifest_version gocyclo)"

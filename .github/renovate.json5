@@ -32,6 +32,14 @@
       "minimumGroupSize": 3,
     },
     {
+      "description": "Group actionlint version and architecture artifact updates",
+      "matchPackageNames": [
+        "rhysd/actionlint",
+      ],
+      "groupName": "actionlint release artifacts",
+      "minimumGroupSize": 3,
+    },
+    {
       "description": "Group golangci-lint version and architecture artifact updates",
       "matchPackageNames": [
         "golangci/golangci-lint",

@@ -127,10 +127,22 @@ embedded system provisioning. Readiness checks require the installed `ruby`
 command; `devbox-toolchain-check` verifies its manifest version. Existing VMs
 must use `devbox --recreate` to pick up embedded provisioner changes;
 manifest-only Ruby pin changes apply after a VM restart.
-The Go linter pins and installer are read from the live checkout and apply on
-VM restart. For Go source linters, existing VMs must use `devbox --recreate` to
-embed the updated readiness command checks; a normal restart leaves the old
-probe in place. Recreation loses VM-local state.
+The Go-linter, `actionlint`, and `yamllint` pins and installers are read from
+the live checkout at VM start. The readiness command list is embedded in the
+Lima template;
+existing VMs must use `devbox --recreate` to adopt the new readiness checks. A
+normal restart applies pin/installer changes but leaves the embedded list
+unchanged; recreation loses VM-local state.
+
+### GitHub Actions and YAML checks
+
+Run `actionlint` from the repository root when inspecting GitHub Actions
+workflows. For YAML syntax/style checks, use
+`yamllint --strict -c <project-config> <files>` with the project's config and
+explicit files. `devbox-toolchain-check` verifies both manifest-pinned versions.
+If a command is unavailable, use the repository's configured CI or pre-commit
+check if present; otherwise report it unavailable. Do not bootstrap an
+unpinned binary.
 
 ## Using the VM
 
@@ -940,14 +952,15 @@ integration work.
   independently available with its own rootless API socket, store, and bridge
   configuration; neither runtime aliases or falls back to the other.
 - **Manifest-pinned tools**: OpenCode, CodeRabbit CLI, Go + `devbox-go`,
-  `golangci-lint`, `gocyclo`, uv, Rust, Ruby,
-  Node/npm, Playwright CLI + bundled Chromium, ast-grep + its skills, Semble +
-  prefetched model, Repomix, Hadolint, markdownlint-cli2, pre-commit, acli,
-  Google Workspace CLI, Antigravity CLI, kind, Minikube v1.39.0, kubectl,
-  Krew v0.5.0, Helm, and Pipenv. Assets declaring SHA-256 integrity are
-  verified before installation; version-only direct-download assets are
-  fetched over HTTPS at their exact pinned versions without a manifest-level
-  digest check.
+  `golangci-lint`, `gocyclo`, manifest-pinned `actionlint` and `yamllint`, uv,
+  Rust, Ruby, Node/npm, Playwright CLI + bundled Chromium, ast-grep + its
+  skills, Semble + prefetched model, Repomix, Hadolint, markdownlint-cli2,
+  pre-commit, acli, Google Workspace CLI, Antigravity CLI, kind,
+  Minikube v1.39.0, kubectl, Krew v0.5.0, Helm, and Pipenv. Assets declaring
+  SHA-256 integrity are verified before installation; version-only tools have
+  no manifest-level digest check. Direct downloads are fetched over HTTPS at
+  their exact pinned versions, and packages are installed at their pinned
+  versions.
 - **Operator profile**: GNU make, kind, Minikube v1.39.0, kubectl, Helm,
   Python/pip, and Pipenv.
 - **Additional CLIs/utilities**: `gh`, `glab`, `gcloud`, `gws`, ShellCheck,
@@ -995,9 +1008,9 @@ the pin manually only to a version Fedora has published as stable. The
 toolchain checker also verifies the pinned runtime version.
 
 Checksum-managed releases are
-**Hadolint**, **golangci-lint**, **uv**, **Antigravity CLI**, **limactl**,
-**kind**, **Minikube**, **Krew**, the **ast-grep release binaries**,
-and **acli**.
+**actionlint**, **Hadolint**, **golangci-lint**, **uv**, **Antigravity CLI**,
+**limactl**, **kind**, **Minikube**, **Krew**,
+the **ast-grep release binaries**, and **acli**.
 Each has separate amd64 and arm64 records; their exact upstream versions and
 SHA-256 values are verified before installation. `gocyclo` is built from its
 pinned Go module tag with `go install`; Go's module checksum database verifies

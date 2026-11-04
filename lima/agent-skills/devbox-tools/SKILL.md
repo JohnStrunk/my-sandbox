@@ -199,6 +199,24 @@ shared repository `AGENTS.md` or README.
   the embedded readiness probe, so existing VMs must use `devbox --recreate`
   to get its explicit command checks; recreation loses VM-local state.
 
+### GitHub Actions and YAML checks
+
+- Runtime commands: manifest-pinned `actionlint` and `yamllint`. Run
+  `actionlint` from the repository root when inspecting GitHub Actions
+  workflows.
+  For YAML syntax/style checks, use `yamllint --strict -c <project-config>
+  <files>` with the project's config and explicit files.
+- If either command is unavailable, use the repository's configured CI or
+  pre-commit check if present; otherwise report the check unavailable. Do not
+  bootstrap an unpinned binary.
+- `devbox-toolchain-check` verifies both manifest pins. Tool pins and installers
+  are read at VM start, but the readiness command list is embedded in the Lima
+  template. Existing devboxes need `devbox --recreate` to adopt the new
+  readiness checks; recreation loses VM-local state.
+- Unit install/version coverage is in `tests/unit/test_lima_template.py` and
+  `tests/unit/test_lima_toolchain.py`; `tests/vm/test_provisioned_vm.py` covers
+  runtime versions and staged agent guidance.
+
 ### Ruby
 
 - Runtime command: `ruby`, provided by Fedora's version-qualified RPM for the

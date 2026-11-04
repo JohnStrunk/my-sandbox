@@ -41,6 +41,10 @@ def _version_output(name: str, version: str, go_version: str) -> str:
         return f"gocyclo:\n\tmod\tgithub.com/fzipp/gocyclo\tv{version}\th1:sum"
     if name == "golangci_lint":
         return f"golangci-lint has version {version} built with go{go_version}"
+    if name == "actionlint":
+        return f"{version}\ninstalled by downloading from release page"
+    if name == "yamllint":
+        return f"yamllint {version}"
     if name == "rust":
         return f"rustc {version} (commit 48a229cea 2026-09-01)"
     if name == "ruby":
@@ -201,6 +205,8 @@ def test_lima_toolchain_check_reports_a_pinned_version_mismatch(
         "minikube",
         "coderabbit_cli",
         "golangci_lint",
+        "actionlint",
+        "yamllint",
         "gocyclo",
     ],
 )
@@ -219,6 +225,12 @@ def test_lima_toolchain_check_reports_manifest_version_mismatch(
         f"{tool_name}: installed version 0.0.0, expected {expected_version}" in error
         for error in errors
     )
+
+
+@pytest.mark.unit
+def test_lima_toolchain_uses_each_linter_version_flag():
+    assert _VERSION_COMMANDS["actionlint"][0] == ("actionlint", "-version")
+    assert _VERSION_COMMANDS["yamllint"][0] == ("yamllint", "--version")
 
 
 _DOCKER_RPM_TOOLS = ("docker_ce", "containerd_io", "docker_buildx_plugin")
