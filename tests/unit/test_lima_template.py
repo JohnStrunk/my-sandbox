@@ -521,6 +521,43 @@ def test_vm_skill_documents_go_linter_usage_and_compatibility(repo_root: Path):
 
 
 @pytest.mark.unit
+def test_vm_skill_documents_c_cpp_toolchain(repo_root: Path):
+    skill = (repo_root / LIMA_DIR / "agent-skills/devbox-tools/SKILL.md").read_text()
+    heading = "### Fedora-provided C/C++ toolchain"
+    assert heading in skill, f"missing skill section {heading!r}"
+    section = " ".join(skill.split(heading, 1)[1].split("\n### ", 1)[0].split())
+
+    for command in ("gcc", "g++", "make", "cmake", "gdb", "ninja", "pkg-config"):
+        assert f"`{command}`" in section
+    assert (
+        "Use them for C/C++ projects that need native compilation, a build "
+        "system, debugging, or system-library metadata." in section
+    )
+    assert "not manifest pins" in section
+    assert "`gcc-c++` provides `g++`" in section
+    assert "`ninja-build` provides `ninja`" in section
+    assert "`pkgconf-pkg-config` provides `pkg-config`" in section
+    assert "not installed by the Fedora container preflight" in section
+    assert "cmake -S . -B build/devbox-ninja -G Ninja" in section
+    assert "cmake --build build/devbox-ninja" in section
+    assert "build only trusted project sources" in section
+    assert (
+        "Use `devbox-toolchain-check` to inspect the installed versions; it "
+        "reports these Fedora tools without enforcing manifest pins." in section
+    )
+    assert (
+        "If a command is missing or a project needs another compiler version, "
+        "use its documented toolchain or CI rather than installing an unpinned "
+        "compiler." in section
+    )
+    assert (
+        "Existing VMs must use `devbox --recreate` to adopt package-set changes."
+        in section
+    )
+    assert "recreation loses VM-local state" in section
+
+
+@pytest.mark.unit
 def test_vm_skill_documents_github_actions_and_yaml_checks(repo_root: Path):
     skill = (repo_root / LIMA_DIR / "agent-skills/devbox-tools/SKILL.md").read_text()
     section = " ".join(
@@ -809,6 +846,14 @@ def test_probe_requires_go_linters_on_the_guest_path(repo_root: Path, tool: str)
 @pytest.mark.parametrize("tool", ["actionlint", "yamllint"])
 @pytest.mark.unit
 def test_probe_requires_linters_on_the_guest_path(repo_root: Path, tool: str):
+    assert tool in _probe_required_tools(repo_root)
+
+
+@pytest.mark.parametrize(
+    "tool", ["gcc", "g++", "make", "cmake", "gdb", "ninja", "pkg-config"]
+)
+@pytest.mark.unit
+def test_probe_requires_c_cpp_toolchain_on_the_guest_path(repo_root: Path, tool: str):
     assert tool in _probe_required_tools(repo_root)
 
 

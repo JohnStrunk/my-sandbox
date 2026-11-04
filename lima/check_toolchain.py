@@ -89,7 +89,13 @@ _VERSION_COMMANDS: dict[str, tuple[Command, re.Pattern[str]]] = {
 }
 
 _OPERATOR_COMMANDS: dict[str, Command] = {
+    "gcc": ("gcc", "--version"),
+    "g++": ("g++", "--version"),
     "make": ("make", "--version"),
+    "cmake": ("cmake", "--version"),
+    "gdb": ("gdb", "--version"),
+    "ninja": ("ninja", "--version"),
+    "pkg-config": ("pkg-config", "--version"),
     "python3": ("python3", "--version"),
     "pip": ("python3", "-m", "pip", "--version"),
     "shellcheck": ("shellcheck", "--version"),

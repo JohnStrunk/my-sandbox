@@ -1,14 +1,14 @@
 # devbox Lima VM
 
 This directory holds the Lima template for the **VM-only devbox**. A single
-Fedora guest runs OpenCode directly inside it with the full manifest-pinned
-toolchain. Docker CE runs as the rootful system daemon inside the guest and is
-the default Docker API runtime; Podman is a separate rootless runtime for
-explicitly selected workflows. Nested virtualization supports L2 test VMs,
-kind, and minikube. Project files are
-shared at their host paths inside the VM. Host-shared directories are protected
-from the package builder; configuration and credentials are mounted behind a
-root-owned parent and exposed only to the guest user.
+Fedora guest runs OpenCode directly inside it with manifest-pinned software
+tools and a Fedora-provided C/C++ development toolchain. Docker CE runs as the
+rootful system daemon inside the guest and is the default Docker API runtime;
+Podman is a separate rootless runtime for explicitly selected workflows.
+Nested virtualization supports L2 test VMs, kind, and minikube. Project files
+are shared at their host paths inside the VM. Host-shared directories are
+protected from the package builder; configuration and credentials are mounted
+behind a root-owned parent and exposed only to the guest user.
 
 Issue [#267](https://github.com/JohnStrunk/my-sandbox/issues/267) provides the
 minimal bootstrap environment; this full template completes the VM-native
@@ -111,16 +111,19 @@ Later changes to the embedded `lima/provision-vm-level.sh`,
 `lima/provision-system.sh`, `lima/provision-user.sh`, or `lima/devbox.yaml` do
 **not** propagate to an existing instance; recreate it to pick them up (see
 [Recreating the VM](#recreating-the-vm)). `lima/provision-system.sh` also
-embeds the SHA-256 of `lima/fedora-packages.sh`; the live helper is copied to
-root-owned storage and verified against that digest before it is sourced as
-root. Changing the shared package helper therefore also requires
-`devbox --recreate`. The embedded marker provisioner records its own digest
-for the provisioning fingerprint; restarts never read it from the
-creation-time checkout. `lima/provision-tools.sh`, the tool manifest, and the
-root-owned tool assets are read from the checkout at every start. Version-only
-changes in the live tool manifest are applied on stop/start without
-recreating the VM. VMs created before issue #455 lack the `VmLevel` marker and
-must be recreated; the template now requires an explicit `VmLevel` parameter.
+embeds the expected SHA-256 of `lima/fedora-packages.sh`. At every start,
+provisioning copies the live helper from the shared checkout to root-owned
+storage and verifies it against that creation-time digest before sourcing it as
+root. If the helper changes, including its package set, an existing VM rejects
+the live helper during provisioning on its next start and cannot complete
+provisioning until recreated with `devbox --recreate`. The embedded marker
+provisioner records its own digest for the provisioning fingerprint; restarts
+never read it from the creation-time checkout. `lima/provision-tools.sh`, the
+tool manifest, and the root-owned tool assets are read from the checkout at
+every start. Version-only changes in the live tool manifest are applied on
+stop/start without recreating the VM. VMs created before issue #455 lack the
+`VmLevel` marker and must be recreated; the template now requires an explicit
+`VmLevel` parameter.
 
 Ruby's Fedora archive setup and package-availability preflight run during
 embedded system provisioning. Readiness checks require the installed `ruby`
@@ -376,6 +379,23 @@ Files created through the mounts are owned by your host uid (guest user
 mirrors the host user), so edits made in the VM appear on the host and
 vice versa.
 
+### Fedora-provided C/C++ toolchain
+
+The VM provides GCC/G++, GNU Make, CMake, GDB, Ninja, and pkg-config. These
+tools use Fedora package versions rather than pins in
+`lima/tool-versions.json`. The Fedora RPMs are `gcc`, `gcc-c++` (provides
+`g++`), `make`, `cmake`, `gdb`, `ninja-build` (provides `ninja`), and
+`pkgconf-pkg-config` (provides `pkg-config`).
+The existing `gcc`, `make`, and `glibc-devel` packages remain in the shared
+package set; the additional development RPMs (`gcc-c++`, `cmake`, `gdb`,
+`ninja-build`, and `pkgconf-pkg-config`) are VM-only and are not installed by
+the Fedora container preflight.
+
+The readiness probe requires these commands, and `devbox-toolchain-check`
+reports their installed versions without enforcing manifest pins. Existing VMs
+need `devbox --recreate` to install these RPMs; recreation loses VM-local state.
+Stop/start applies active manifest-only tool updates.
+
 ## Stop/start
 
 ```shell
@@ -415,12 +435,12 @@ follow-on command can fail rather than restarting the VM.
 
 `devbox` compares a running VM's provisioning fingerprint with the current
 checkout and warns when they differ. Stop and start the VM to apply active
-manifest-only tool changes. Edits to `lima/devbox.yaml` or embedded
-provisioning scripts, including the Docker RPM policy, require
-`devbox --recreate`. The command uses the current checkout's template and
-provisioners rather than the old instance's embedded copy. Recreation is
-destructive to VM-local state but preserves host-mounted projects,
-configuration, and the dedicated OpenCode L1 state. Bare
+manifest-only tool changes. Fedora package-set changes and edits to
+`lima/devbox.yaml` or embedded provisioning scripts, including the Docker RPM
+policy, require `devbox --recreate`. The command uses the current checkout's
+template and provisioners rather than the old instance's embedded copy.
+Recreation is destructive to VM-local state but preserves host-mounted
+projects, configuration, and the dedicated OpenCode L1 state. Bare
 `devbox --recreate` opens the normal interactive shell after readiness; use
 `devbox --recreate -- true` for non-interactive automation. To refresh active
 tool-manifest updates and then run a scripted command, use
@@ -459,11 +479,14 @@ limactl start devbox
 
 Changes to `lima/provision-vm-level.sh`, `lima/provision-system.sh`,
 `lima/provision-user.sh`, or `lima/devbox.yaml` are embedded at VM creation and
-still require the [recreate procedure](#recreating-the-vm). The non-embedded
-`lima/provision-tools.sh` helper is refreshed on each start. The
+still require the [recreate procedure](#recreating-the-vm). Changes to
+`lima/fedora-packages.sh` also require recreation: an existing VM's embedded
+expected digest rejects a changed live helper on its next start. The
+non-embedded `lima/provision-tools.sh` helper is refreshed on each start. The
 `devbox-toolchain-check` command reports active manifest-pinned Lima tools at
-their exact versions, plus `make`, Python/pip, and ShellCheck. Docker RPM
-versions are not exact-version assertions in this check.
+their exact versions and the installed versions of operator tools, including
+the C/C++ toolchain. Docker RPM versions are not exact-version assertions in
+this check.
 
 ### Docker CE and Podman runtimes
 
@@ -706,7 +729,10 @@ readiness checks if you use that safeguard.
 
 ## Recreating the VM
 
-To pick up template or provisioning-script changes, run `devbox --recreate`.
+To pick up Fedora package-set changes in `lima/fedora-packages.sh`, template
+changes, or embedded provisioning changes, run `devbox --recreate`. An existing
+VM rejects a changed live package helper at its next provision/start because
+the embedded system provisioner expects the creation-time SHA-256 digest.
 It maps the current directory before deleting the configured instance and, if
 one exists, unprotects and deletes it with protection rollback on failure. It
 then creates a new VM from the active checkout's `lima/devbox.yaml` and waits
@@ -961,8 +987,9 @@ integration work.
   no manifest-level digest check. Direct downloads are fetched over HTTPS at
   their exact pinned versions, and packages are installed at their pinned
   versions.
-- **Operator profile**: GNU make, kind, Minikube v1.39.0, kubectl, Helm,
-  Python/pip, and Pipenv.
+- **Operator profile**: Fedora-provided C/C++ toolchain (`gcc`, `g++`, `make`,
+  `cmake`, `gdb`, `ninja`, and `pkg-config`), plus kind, Minikube v1.39.0,
+  kubectl, Helm, Python/pip, and Pipenv.
 - **Additional CLIs/utilities**: `gh`, `glab`, `gcloud`, `gws`, ShellCheck,
   `tokei`, `just`, `difft`, `hyperfine`, `fd`, `file`, `diff`, and `patch`.
 - **Red Hat internal TLS trust**: three CA roots are SHA-256 pinned in the
@@ -1113,8 +1140,41 @@ passes, verify from inside the VM (opened with
       `limactl shell <instance> -- echo hello` check above.
 - [ ] `cd ~/src/my-sandbox && git status` sees the host checkout.
 - [ ] `devbox-toolchain-check` reports active manifest pins and
-      operator tools; `make --version`, `kind version`, `kubectl version
-      --client`, `helm version`, and `pipenv --version` all succeed.
+      operator tools, including the C/C++ commands; `make --version`,
+      `kind version`, `kubectl version --client`, `helm version`, and
+      `pipenv --version` all succeed.
+- [ ] Compile and link minimal C and C++ programs with `gcc`/`g++`, then build
+      both with CMake using Unix Makefiles and Ninja. From inside the VM:
+
+  ```shell
+  (
+    set -eu
+    for tool in gcc g++ make cmake gdb ninja pkg-config; do
+      "$tool" --version >/dev/null
+    done
+    tmp="$(mktemp -d)"
+    trap 'rm -rf -- "${tmp:?}"' EXIT
+    src="$tmp/src"
+    mkdir -p "$src"
+    printf '%s\n' 'int main(void) { return 0; }' >"$src/main.c"
+    printf '%s\n' 'int main() { return 0; }' >"$src/main.cpp"
+    printf '%s\n' \
+      'cmake_minimum_required(VERSION 3.16)' \
+      'project(devbox_cpp_smoke LANGUAGES C CXX)' \
+      'add_executable(c-smoke main.c)' \
+      'add_executable(cxx-smoke main.cpp)' >"$src/CMakeLists.txt"
+    gcc -g "$src/main.c" -o "$tmp/c-smoke"
+    gdb --batch --nx --return-child-result -ex run --args "$tmp/c-smoke"
+    g++ "$src/main.cpp" -o "$tmp/cxx-smoke"
+    "$tmp/c-smoke"
+    "$tmp/cxx-smoke"
+    CC=gcc CXX=g++ cmake -S "$src" -B "$tmp/build-make" -G "Unix Makefiles"
+    cmake --build "$tmp/build-make"
+    CC=gcc CXX=g++ cmake -S "$src" -B "$tmp/build-ninja" -G Ninja
+    cmake --build "$tmp/build-ninja"
+  )
+  ```
+
 - [ ] From the provisioned VM, all five explicit backend invocations complete:
       `lima/validate-kind.sh docker 1`, `lima/validate-kind.sh podman 1`,
       `lima/validate-minikube.sh {docker,podman}`, and

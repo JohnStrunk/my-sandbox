@@ -75,12 +75,17 @@ DEVBOX_FEDORA_PACKAGES=(
   zlib-ng-compat-devel # Provides zlib-devel; rpm -q requires this concrete RPM name.
 )
 
-# Nested-VM and KVM tooling exists only in the Lima guest.
+# Nested-VM, KVM, and C/C++ development tooling exists only in the Lima guest.
 DEVBOX_FEDORA_VM_PACKAGES=(
+  cmake
   edk2-ovmf
+  gcc-c++
+  gdb
   libvirt-client
   libvirt-daemon-config-network
   libvirt-daemon-kvm
+  ninja-build
+  pkgconf-pkg-config
   qemu-img
   qemu-kvm
 )
