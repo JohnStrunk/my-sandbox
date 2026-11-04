@@ -31,6 +31,14 @@ _VERSION_COMMANDS: dict[str, tuple[Command, re.Pattern[str]]] = {
         ("golangci-lint", "--version"),
         re.compile(r"\bgolangci-lint has version v?(\d+\.\d+\.\d+)\b"),
     ),
+    "actionlint": (
+        ("actionlint", "-version"),
+        re.compile(r"\bv?(\d+\.\d+\.\d+)\b"),
+    ),
+    "yamllint": (
+        ("yamllint", "--version"),
+        re.compile(r"\bv?(\d+\.\d+\.\d+)\b"),
+    ),
     "node": (("node", "--version"), re.compile(r"\bv?(\d+\.\d+\.\d+)\b")),
     "ruby": (("ruby", "--version"), re.compile(r"\bruby\s+(\d+\.\d+\.\d+)\b")),
     "rust": (("rustc", "--version"), re.compile(r"\brustc\s+v?(\d+\.\d+\.\d+)\b")),

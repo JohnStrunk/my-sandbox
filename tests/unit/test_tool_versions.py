@@ -29,6 +29,7 @@ _VALIDATOR_INPUTS = [
 
 _CHECKSUM_MANAGED_TOOLS = {
     "acli",
+    "actionlint",
     "antigravity_cli",
     "ast_grep",
     "hadolint",
@@ -537,6 +538,7 @@ def test_manifest_declares_lima_consumers(repo_root: Path):
 
     expected = {
         "acli",
+        "actionlint",
         "antigravity_cli",
         "ast_grep",
         "coderabbit_cli",
@@ -563,6 +565,7 @@ def test_manifest_declares_lima_consumers(repo_root: Path):
         "rustup",
         "semble",
         "uv",
+        "yamllint",
     }
     for tool in expected:
         consumers = manifest["tools"][tool]["consumers"]
@@ -622,6 +625,47 @@ def test_ruby_manifest_pins_fedora_44_ruby(repo_root: Path):
     assert ruby["depName"] == "ruby"
     assert ruby["integrity"] == "version-only"
     assert ruby["consumers"]["lima"] is True
+
+
+@pytest.mark.unit
+def test_actionlint_manifest_pins_verified_architecture_artifacts(repo_root: Path):
+    manifest = json.loads((repo_root / "lima" / "tool-versions.json").read_text())
+    actionlint = manifest["tools"]["actionlint"]
+
+    version = actionlint["version"]
+    assert re.fullmatch(r"\d+\.\d+\.\d+", version)
+    assert actionlint["datasource"] == "github-releases"
+    assert actionlint["depName"] == "rhysd/actionlint"
+    assert actionlint["integrity"] == "sha256"
+    assert actionlint["consumers"]["lima"] is True
+    assert set(actionlint["artifacts"]) == {"amd64", "arm64"}
+    url_templates = actionlint["provenance"]["url_templates"]
+    for arch in ("amd64", "arm64"):
+        artifact = actionlint["artifacts"][arch]
+        # Renovate updates the manifest, so tie each release tag to the
+        # top-level pin instead of hard-coding a release version.
+        assert artifact["version"] == f"v{version}"
+        assert artifact["depName"] == f"rhysd/actionlint-{arch}"
+        assert artifact["packageName"] == "rhysd/actionlint"
+        assert artifact["datasource"] == "github-release-attachments"
+        assert re.fullmatch(r"[0-9a-f]{64}", artifact["sha256"])
+        assert url_templates[f"artifacts.{arch}.sha256"] == (
+            "https://github.com/rhysd/actionlint/releases/download/"
+            f"{{artifacts.{arch}.version}}/actionlint_{{version}}_linux_{arch}.tar.gz"
+        )
+
+
+@pytest.mark.unit
+def test_yamllint_lima_consumer_keeps_pre_commit_pin(repo_root: Path):
+    manifest = json.loads((repo_root / "lima" / "tool-versions.json").read_text())
+    yamllint = manifest["tools"]["yamllint"]
+
+    assert re.fullmatch(r"\d+\.\d+\.\d+", yamllint["version"])
+    assert yamllint["integrity"] == "version-only"
+    assert yamllint["consumers"]["lima"] is True
+    assert yamllint["consumers"]["pre-commit"] == (
+        "https://github.com/adrienverge/yamllint"
+    )
 
 
 @pytest.mark.unit
@@ -791,33 +835,33 @@ def test_validator_allows_checksums_for_non_lima_consumers(
     copy_root = tmp_path / "repo"
     _copy_validator_inputs(repo_root, copy_root)
 
-    # SHA-256 digests only need to be read by an installing consumer. yamllint
+    # SHA-256 digests only need to be read by an installing consumer. mergify
     # is consumed by pre-commit alone, so a Lima provisioning read is not
     # required for its metadata. A valid non-Lima entry with artifact records
     # and provenance still passes structural validation.
     def mutate(data):
-        tool = data["tools"]["yamllint"]
+        tool = data["tools"]["mergify"]
         tool["integrity"] = "sha256"
         tool["artifacts"] = {
             "amd64": {
                 "version": tool["version"],
                 "sha256": "ab" * 32,
-                "depName": "adrienverge/yamllint-amd64",
-                "packageName": "adrienverge/yamllint",
+                "depName": "Mergifyio/mergify-pre-commit-amd64",
+                "packageName": "Mergifyio/mergify-pre-commit",
                 "datasource": "github-release-attachments",
             },
             "arm64": {
                 "version": tool["version"],
                 "sha256": "cd" * 32,
-                "depName": "adrienverge/yamllint-arm64",
-                "packageName": "adrienverge/yamllint",
+                "depName": "Mergifyio/mergify-pre-commit-arm64",
+                "packageName": "Mergifyio/mergify-pre-commit",
                 "datasource": "github-release-attachments",
             },
         }
-        data["tools"]["yamllint"]["provenance"] = {
+        data["tools"]["mergify"]["provenance"] = {
             "url_templates": {
-                "artifacts.amd64.sha256": "https://example.test/yamllint/{artifacts.amd64.version}/amd64",
-                "artifacts.arm64.sha256": "https://example.test/yamllint/{artifacts.arm64.version}/arm64",
+                "artifacts.amd64.sha256": "https://example.test/mergify/{artifacts.amd64.version}/amd64",
+                "artifacts.arm64.sha256": "https://example.test/mergify/{artifacts.arm64.version}/arm64",
             }
         }
 
