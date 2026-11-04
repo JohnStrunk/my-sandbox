@@ -52,6 +52,8 @@ def test_provisioned_vm_toolchain_matches_manifest(repo_root: Path, devbox_vm: L
     for tool in ("ruby", "gocyclo", "golangci_lint", "actionlint", "yamllint"):
         expected_version = manifest["tools"][tool]["version"]
         assert f"OK: {tool}: {expected_version}" in output_lines
+    for tool in ("gcc", "g++", "make", "cmake", "gdb", "ninja", "pkg-config"):
+        assert any(line.startswith(f"OK: {tool}:") for line in output_lines), tool
 
     linter_version = devbox_vm.run(["golangci-lint", "--version"], timeout=60)
     assert linter_version.returncode == 0, (
@@ -73,6 +75,190 @@ def test_provisioned_vm_toolchain_matches_manifest(repo_root: Path, devbox_vm: L
         f"golangci-lint embeds Go {'.'.join(map(str, embedded_go_major_minor))}, "
         f"older than manifest Go {'.'.join(map(str, manifest_go))}"
     )
+
+
+@pytest.mark.vm
+def test_provisioned_vm_compiles_and_runs_c_and_cpp(repo_root: Path, devbox_vm: LimaVM):
+    skip_if_guest_provisioning_is_stale(repo_root, devbox_vm)
+    command = r"""
+set -euo pipefail
+task_root="$(mktemp -d /tmp/opencode/issue-469-compile.XXXXXXXX)"
+trap 'rm -rf -- "${task_root:?}"' EXIT
+
+for tool in gcc g++ make cmake gdb ninja pkg-config; do
+  command -v "$tool" >/dev/null 2>&1 \
+    || { echo "$tool is not available on PATH" >&2; exit 1; }
+  "$tool" --version >/dev/null 2>&1 \
+    || { echo "$tool --version failed" >&2; exit 1; }
+done
+
+cat >"$task_root/main.c" <<'EOF'
+#include <stdio.h>
+
+int main(void) {
+    puts("issue-469-c-ok");
+    return 0;
+}
+EOF
+cat >"$task_root/main.cpp" <<'EOF'
+#include <iostream>
+
+int main() {
+    std::cout << "issue-469-cpp-ok\n";
+    return 0;
+}
+EOF
+cat >"$task_root/exit_code.c" <<'EOF'
+#include <stdio.h>
+#include <stdlib.h>
+
+int main(int argc, char **argv) {
+    puts("issue-469-exit-code");
+    return argc > 1 ? atoi(argv[1]) : 0;
+}
+EOF
+
+gcc -Wall -Wextra -Werror -std=c17 "$task_root/main.c" -o "$task_root/c-app"
+"$task_root/c-app" | grep -qx 'issue-469-c-ok'
+g++ -Wall -Wextra -Werror -std=c++17 "$task_root/main.cpp" -o "$task_root/cpp-app"
+"$task_root/cpp-app" | grep -qx 'issue-469-cpp-ok'
+printf 'compiled and ran C and C++ programs\n'
+
+gdb_banner="$(gdb --version 2>&1)" || {
+  echo "gdb --version failed (status $?)" >&2
+  printf '%s\n' "$gdb_banner" >&2
+  exit 1
+}
+if ! grep -q '^GNU gdb ' <<<"$gdb_banner"; then
+  echo "gdb is not GNU GDB:" >&2
+  printf '%s\n' "$gdb_banner" >&2
+  exit 1
+fi
+gcc -Wall -Wextra -Werror -std=c17 "$task_root/exit_code.c" -o "$task_root/exit-code"
+
+# Batch mode suppresses GDB's own "exited" messages, so assert the program's
+# marker line and the numeric child status instead of translatable GDB text.
+# Fedora's GNU gdb supports --return-child-result, so a missing child marker or
+# a status other than the child's own is a failure rather than a skip.
+#
+# gdb emits lines after the child marker, so capture its output instead of
+# piping it into grep: an early grep exit would SIGPIPE gdb under pipefail.
+run_under_gdb() {
+  local app="$1" expected="$2" log="$3"
+  local status=0
+  gdb -batch -nx -q -ex run --args "$task_root/$app" >"$log" 2>&1 \
+    || status=$?
+  if [[ "$status" -ne 0 ]]; then
+    echo "gdb failed to run $app (status $status):" >&2
+    cat "$log" >&2
+    return 1
+  fi
+  if ! grep -qx "$expected" "$log"; then
+    echo "gdb ran $app but did not print '$expected':" >&2
+    cat "$log" >&2
+    return 1
+  fi
+}
+run_under_gdb c-app issue-469-c-ok "$task_root/gdb-c.log"
+run_under_gdb cpp-app issue-469-cpp-ok "$task_root/gdb-cpp.log"
+propagation_status=0
+propagation_output="$(gdb -batch -nx -q --return-child-result -ex run \
+  --args "$task_root/exit-code" 42 2>&1)" || propagation_status=$?
+if ! grep -qx 'issue-469-exit-code' <<<"$propagation_output"; then
+  echo "gdb did not run the child under --return-child-result" \
+    "(status $propagation_status)" >&2
+  printf '%s\n' "$propagation_output" >&2
+  exit 1
+fi
+if [[ "$propagation_status" -ne 42 ]]; then
+  echo "gdb reported status $propagation_status instead of the child's 42" >&2
+  printf '%s\n' "$propagation_output" >&2
+  exit 1
+fi
+printf 'gdb propagated the child exit status\n'
+printf 'debugged C and C++ programs under GNU gdb in batch mode\n'
+"""
+    result = devbox_vm.run(["bash", "-ceu", command], timeout=300)
+
+    assert result.returncode == 0, (
+        "The provisioned VM could not compile, link, and run minimal C and C++ "
+        "programs with gcc/g++, or could not debug them with GDB.\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert "compiled and ran C and C++ programs" in result.stdout
+    assert "gdb propagated the child exit status" in result.stdout
+    assert "debugged C and C++ programs under GNU gdb in batch mode" in result.stdout
+
+
+@pytest.mark.vm
+def test_provisioned_vm_builds_cmake_c_and_cpp_with_make_and_ninja(
+    repo_root: Path, devbox_vm: LimaVM
+):
+    skip_if_guest_provisioning_is_stale(repo_root, devbox_vm)
+    command = r"""
+set -euo pipefail
+task_root="$(mktemp -d /tmp/opencode/issue-469-cmake.XXXXXXXX)"
+trap 'rm -rf -- "${task_root:?}"' EXIT
+
+mkdir -p "$task_root/c" "$task_root/cpp"
+cat >"$task_root/c/CMakeLists.txt" <<'EOF'
+cmake_minimum_required(VERSION 3.20)
+project(issue_469_c LANGUAGES C)
+add_executable(c_app main.c)
+EOF
+cat >"$task_root/c/main.c" <<'EOF'
+#include <stdio.h>
+
+int main(void) {
+    puts("issue-469-cmake-c-ok");
+    return 0;
+}
+EOF
+cat >"$task_root/cpp/CMakeLists.txt" <<'EOF'
+cmake_minimum_required(VERSION 3.20)
+project(issue_469_cpp LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+add_executable(cpp_app main.cpp)
+EOF
+cat >"$task_root/cpp/main.cpp" <<'EOF'
+#include <iostream>
+
+int main() {
+    std::cout << "issue-469-cmake-cpp-ok\n";
+    return 0;
+}
+EOF
+
+build_with() {
+  local language="$1" generator="$2" slug="$3" app="$4" expected="$5"
+  local build_dir="$task_root/build-${language}-${slug}"
+  cmake -S "$task_root/$language" -B "$build_dir" -G "$generator"
+  cmake --build "$build_dir" --parallel
+  "$build_dir/$app" | grep -qx "$expected"
+  case "$generator" in
+    Ninja) test -f "$build_dir/build.ninja" ;;
+    "Unix Makefiles") test -f "$build_dir/Makefile" ;;
+    *) echo "unexpected generator: $generator" >&2; return 1 ;;
+  esac
+  printf 'cmake %s %s: ok\n' "$language" "$generator"
+}
+
+build_with c "Unix Makefiles" makefiles c_app issue-469-cmake-c-ok
+build_with c Ninja ninja c_app issue-469-cmake-c-ok
+build_with cpp "Unix Makefiles" makefiles cpp_app issue-469-cmake-cpp-ok
+build_with cpp Ninja ninja cpp_app issue-469-cmake-cpp-ok
+"""
+    result = devbox_vm.run(["bash", "-ceu", command], timeout=900)
+
+    assert result.returncode == 0, (
+        "The provisioned VM could not configure, build, and run minimal C and "
+        "C++ CMake projects with both Unix Makefiles and Ninja.\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    for language in ("c", "cpp"):
+        for generator in ("Unix Makefiles", "Ninja"):
+            assert f"cmake {language} {generator}: ok" in result.stdout
 
 
 @pytest.mark.vm
@@ -640,6 +826,32 @@ def test_go_linter_guidance_is_staged(devbox_vm: LimaVM):
 
     assert result.returncode == 0, (
         "The staged devbox-tools skill does not expose Go linter guidance.\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+
+
+@pytest.mark.vm
+def test_c_cpp_agent_guidance_is_staged(devbox_vm: LimaVM):
+    if devbox_vm.name is None and os.environ.get("MY_SANDBOX_VM_TEST_FRESH") != "1":
+        source = Path(devbox_vm.repo_path) / "lima/agent-skills/devbox-tools/SKILL.md"
+        active = Path(devbox_vm.guest_home) / ".agents/skills/devbox-tools/SKILL.md"
+        if not active.is_file() or active.read_bytes() != source.read_bytes():
+            pytest.skip("the existing guest has stale staged skills")
+
+    skill_path = f"{devbox_vm.guest_home}/.agents/skills/devbox-tools/SKILL.md"
+    command = r"""
+set -euo pipefail
+skill="$1"
+grep -F -q '### Fedora-provided C/C++ toolchain' "$skill"
+grep -F -q '`pkgconf-pkg-config` provides `pkg-config`' "$skill"
+grep -F -q '`devbox --recreate` to adopt package-set changes' "$skill"
+"""
+    result = devbox_vm.run(
+        ["bash", "-ceu", command, "c-cpp-guidance", skill_path], timeout=60
+    )
+
+    assert result.returncode == 0, (
+        "The staged devbox-tools skill does not expose the C/C++ toolchain entry.\n"
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
 

@@ -344,6 +344,26 @@ def test_preflight_reuses_shared_package_and_ruby_pin_logic(repo_root: Path):
 
 
 @pytest.mark.unit
+def test_c_cpp_toolchain_packages_remain_vm_only(repo_root: Path):
+    shared = (repo_root / PACKAGE_SCRIPT).read_text()
+    common = _package_array(shared, "DEVBOX_FEDORA_PACKAGES")
+    vm_only = _package_array(shared, "DEVBOX_FEDORA_VM_PACKAGES")
+
+    def exact_package(name: str) -> str:
+        return rf"^\s*{re.escape(name)}(?:\s+#.*)?\s*$"
+
+    # The container preflight keeps the existing base build packages.
+    for package in ("gcc", "make", "glibc-devel"):
+        assert re.search(exact_package(package), common, re.MULTILINE), package
+        assert not re.search(exact_package(package), vm_only, re.MULTILINE), package
+
+    # The C/C++/CMake/debugger additions stay out of the shared preflight set.
+    for package in ("gcc-c++", "cmake", "gdb", "ninja-build", "pkgconf-pkg-config"):
+        assert re.search(exact_package(package), vm_only, re.MULTILINE), package
+        assert not re.search(exact_package(package), common, re.MULTILINE), package
+
+
+@pytest.mark.unit
 def test_container_preflight_avoids_vm_only_actions(repo_root: Path):
     container = (repo_root / CONTAINER_SCRIPT).read_text()
     runtime = (repo_root / RUNTIME_SCRIPT).read_text()

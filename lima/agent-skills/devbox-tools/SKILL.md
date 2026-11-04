@@ -246,6 +246,40 @@ shared repository `AGENTS.md` or README.
   `devbox --recreate` to pick up provisioner changes; manifest-only pin changes
   need a VM restart.
 
+### Fedora-provided C/C++ toolchain
+
+- Runtime commands: `gcc`, `g++`, `make`, `cmake`, `gdb`, `ninja`, and
+  `pkg-config`. Use them for C/C++ projects that need native compilation, a
+  build system, debugging, or system-library metadata.
+- These are Fedora RPMs, not manifest pins; versions follow the Fedora release
+  in the VM. `gcc-c++` provides `g++`, `ninja-build` provides `ninja`, and
+  `pkgconf-pkg-config` provides `pkg-config`. `gcc`, `make`, and `glibc-devel`
+  are part of the shared package set; the additional `gcc-c++`, `cmake`, `gdb`,
+  `ninja-build`, and `pkgconf-pkg-config` packages are Lima-VM-only and are not
+  installed by the Fedora container preflight.
+- Configure CMake in an ignored, project-specific build directory, using a
+  separate directory for each generator. For example, from the project root:
+
+  ```shell
+  cmake -S . -B build/devbox-ninja -G Ninja
+  cmake --build build/devbox-ninja
+  ```
+
+- Treat `CMakeLists.txt`, Makefiles, and build scripts as code: review them and
+  build only trusted project sources. Build steps run as the guest user against
+  the shared project checkout.
+- Use `devbox-toolchain-check` to inspect the installed versions; it reports
+  these Fedora tools without enforcing manifest pins. If a command is missing or
+  a project needs another compiler version, use its documented toolchain or CI
+  rather than installing an unpinned compiler.
+- `tests/vm/test_provisioned_vm.py` checks command availability, C/C++ builds
+  and GDB batch runs, and CMake builds with Make and Ninja.
+- Existing VMs must use `devbox --recreate` to adopt package-set changes. The
+  embedded system provisioner checks the expected SHA-256 of
+  `lima/fedora-packages.sh`, so a changed live helper is rejected at the next
+  provision/start until the VM is recreated. Follow the recreation procedure in
+  `lima/README.md`; recreation loses VM-local state.
+
 ### Docker CE and Podman runtimes (Lima)
 
 - In the current manifest, `docker_ce`, `containerd_io`, and
@@ -335,8 +369,9 @@ shared repository `AGENTS.md` or README.
 
 ### Kubernetes operator profile (Lima)
 
-- Available in the Lima VM: GNU `make`, `kind`, `kubectl`, Helm, Python/pip,
-  and Pipenv.
+- Available in the Lima VM: `kind`, `kubectl`, Helm, Python/pip, Pipenv, and
+  the Fedora-provided C/C++ toolchain: `gcc`/`g++`, GNU `make`, `cmake`, `gdb`,
+  `ninja`, and `pkg-config`.
 - Select kind's experimental `docker` or `podman` provider explicitly. The
   Docker provider runs the Docker preflight and checks the rootful service/API
   on the explicitly selected `/var/run/docker.sock` endpoint. The Podman

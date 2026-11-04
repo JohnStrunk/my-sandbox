@@ -430,3 +430,49 @@ def test_lima_toolchain_check_reports_operator_tool_failures(
     _, errors = check_toolchain(manifest_path, runner)
 
     assert any("make: make --version exited 127" in error for error in errors)
+
+
+_C_CPP_TOOLCHAIN = ("gcc", "g++", "make", "cmake", "gdb", "ninja", "pkg-config")
+
+
+@pytest.mark.unit
+def test_lima_toolchain_check_reports_the_c_cpp_toolchain(
+    repo_root: Path, tmp_path: Path
+):
+    manifest = _manifest(repo_root)
+    manifest_path = _write_manifest(tmp_path / "manifest.json", manifest)
+    successful = _successful_runner(manifest)
+    commands: list[tuple[str, ...]] = []
+
+    def runner(command):
+        commands.append(tuple(command))
+        return successful(command)
+
+    successes, errors = check_toolchain(manifest_path, runner)
+
+    assert errors == []
+    reported = {line.split(":", 1)[0] for line in successes}
+    assert set(_C_CPP_TOOLCHAIN) <= reported
+    assert set(_C_CPP_TOOLCHAIN) <= {command[0] for command in commands}
+
+
+@pytest.mark.parametrize("tool", _C_CPP_TOOLCHAIN)
+@pytest.mark.unit
+def test_lima_toolchain_check_reports_missing_c_cpp_tool(
+    repo_root: Path, tmp_path: Path, tool: str
+):
+    manifest = _manifest(repo_root)
+    manifest_path = _write_manifest(tmp_path / "manifest.json", manifest)
+    successful = _successful_runner(manifest)
+
+    def runner(command):
+        if command[0] == tool:
+            raise FileNotFoundError(tool)
+        return successful(command)
+
+    successes, errors = check_toolchain(manifest_path, runner)
+
+    assert not any(line.startswith(f"{tool}:") for line in successes)
+    assert any(
+        error.startswith(f"{tool}:") and "could not run" in error for error in errors
+    )

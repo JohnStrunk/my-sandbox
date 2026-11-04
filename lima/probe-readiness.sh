@@ -199,11 +199,11 @@ test -r /etc/ssl/certs/ca-certificates.crt \
   || fail "the system CA bundle is missing"
 
 for tool in \
-  actionlint acli agy cargo coderabbit cr diff difft fd file ffmpeg \
-  docker gh glab gcloud gocyclo golangci-lint gws \
+  actionlint acli agy cargo cmake coderabbit cr diff difft fd file \
+  docker ffmpeg gcc g++ gdb gh glab gcloud gocyclo golangci-lint gws \
   hadolint helm hyperfine jq just kind kubectl limactl make minikube \
   markdownlint-cli2 newgidmap newuidmap \
-  node npm npx opencode patch pipenv pip3 \
+  ninja node npm npx opencode patch pipenv pip3 pkg-config \
   playwright-cli podman pre-commit python3 qemu-img repomix rg \
   ruby rustc rustup semble shellcheck tokei uv uvx \
   virsh virt-host-validate yamllint

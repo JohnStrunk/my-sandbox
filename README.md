@@ -2,8 +2,8 @@
 
 A secure, VM-native development environment for AI-assisted coding and modern
 software projects. `devbox` enters one shared Fedora Lima VM at the current
-project directory; OpenCode and the pinned development toolchain run inside that
-VM. Docker CE runs as the rootful system daemon inside the guest and the Docker
+project directory; OpenCode and the VM's development toolchain run inside it.
+Docker CE runs as the rootful system daemon inside the guest and the Docker
 CLI uses `/var/run/docker.sock` by default. Podman remains a separate rootless
 runtime for explicitly selected workflows, with its own socket and storage.
 Kind has separate Docker CE and Podman providers; the validation commands
@@ -86,14 +86,18 @@ mount. Repository-specific agent instructions are in [`AGENTS.md`](AGENTS.md).
 
 ## VM toolchain and agent integrations
 
-The full toolchain is provisioned from
-[`lima/tool-versions.json`](lima/tool-versions.json) and includes OpenCode,
-CodeRabbit CLI, Go, Rust, Ruby, Node.js, Python/uv, Playwright, ast-grep,
-Semble, Repomix, cloud and productivity CLIs, linters, and release inspection
-utilities. The VM also includes GNU make, kind, Minikube v1.39.0, kubectl,
-Krew v0.5.0 in the guest-user `~/.krew` plugin store, Helm, and Pipenv. Use
-`devbox-toolchain-check` to compare installed tool versions with the manifest
-and `devbox-go --doctor` to see a Go project's selected toolchain.
+The manifest in [`lima/tool-versions.json`](lima/tool-versions.json) pins
+OpenCode, CodeRabbit CLI, Go, Rust, Ruby, Node.js, Python/uv, Playwright,
+ast-grep, Semble, Repomix, cloud and productivity CLIs, linters, and release
+inspection utilities. Separately, the VM includes Fedora's distro-provided
+C/C++ toolchain: GCC/G++, GNU Make, CMake, GDB, Ninja, and pkg-config. These
+package versions follow Fedora rather than the manifest. The additional C/C++
+development packages are VM-only; see the [Lima guide](lima/README.md) for the
+Fedora package names and recreation requirements. The VM also includes kind,
+Minikube v1.39.0, kubectl, Krew v0.5.0 in the guest-user `~/.krew` plugin
+store, Helm, and Pipenv. `devbox-toolchain-check` verifies manifest-pinned
+versions and reports the installed C/C++ tools; `devbox-go --doctor` shows a Go
+project's selected toolchain.
 
 The VM-owned agent capability catalog is staged at
 `~/.agents/skills/devbox-tools/SKILL.md` inside the guest. The VM generates an
@@ -315,8 +319,9 @@ artifact version/digest records, not their provenance templates.
 Active tool-manifest updates are applied when the VM next starts (for example,
 run `devbox --stop` and then `devbox`). For scripted manifest refresh followed
 by a command, use `devbox --stop && devbox -- <command>` (for example,
-`devbox --stop && devbox -- git status`); edits to embedded Lima provisioning
-or template files, including Docker RPM selection, require `devbox --recreate`.
+`devbox --stop && devbox -- git status`). Changes to Fedora package sets or to
+embedded Lima provisioning/template files, including Docker RPM selection,
+require `devbox --recreate`.
 
 ## Repository map
 
