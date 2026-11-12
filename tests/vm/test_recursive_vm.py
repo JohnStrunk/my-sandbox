@@ -13,6 +13,16 @@ from tests.conftest import (
     vm_start_timeout,
 )
 
+# The x86_64 Fedora 44 cloud image shared by every nested-L2 template here.
+# Keep it in sync with the digest-pinned image in lima/devbox.yaml.
+FEDORA_44_X86_64_IMAGE_LOCATION = (
+    "https://download.fedoraproject.org/pub/fedora/linux/releases/44/Cloud/"
+    "x86_64/images/Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2"
+)
+FEDORA_44_X86_64_IMAGE_DIGEST = (
+    "sha256:28680fe5b371a5a82ebf43a31926e086a168e59949d03969c5093e7071f90b7f"
+)
+
 
 @pytest.mark.recursive
 def test_lima_can_start_an_l2_without_stacked_project_mounts(devbox_vm: LimaVM):
@@ -66,9 +76,9 @@ cpus: 2
 memory: "4GiB"
 disk: "24GiB"
 images:
-  - location: "https://download.fedoraproject.org/pub/fedora/linux/releases/44/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2"
+  - location: "{FEDORA_44_X86_64_IMAGE_LOCATION}"
     arch: "x86_64"
-    digest: "sha256:28680fe5b371a5a82ebf43a31926e086a168e59949d03969c5093e7071f90b7f"
+    digest: "{FEDORA_44_X86_64_IMAGE_DIGEST}"
 mounts:
   - location: "{repo_copy}"
     mountPoint: "/workspace/repo"
@@ -117,6 +127,140 @@ limactl shell "$name" -- bash -ceu '
 
 
 @pytest.mark.recursive
+def test_virtiofs_shared_dir_requires_a_resolved_location(devbox_vm: LimaVM):
+    """A nested virtiofs VM rejects a symlinked location; a resolved one works.
+
+    Rust virtiofsd rejects a shared directory whose final path component is
+    a symlink (#486). The check starts an L2 whose mount location is a
+    symlink and asserts the failure, then starts the same L2 shape with the
+    resolved directory and asserts the virtiofs mount plus guest create/write
+    and host-side visibility.
+    """
+    instance = f"recursive-virtiofs-{uuid.uuid4().hex[:10]}"
+    guest_repo = shlex.quote(devbox_vm.repo_path)
+    command = rf"""
+set -euo pipefail
+name={instance}
+task_root="$(mktemp -d /var/tmp/my-sandbox-virtiofs.XXXXXXXX)"
+chmod 700 "$task_root"
+shared="$task_root/shared"
+mkdir -m 700 -p "$shared"
+shared_link="$task_root/shared-link"
+ln -s "$shared" "$shared_link"
+printf 'host-to-guest\n' >"$shared/from-host.txt"
+template_dir="$task_root"
+template="$template_dir/virtiofs-l2.yaml"
+lima_home="${{LIMA_HOME:-$HOME/.lima}}"
+cleanup() {{
+  status=$?
+  trap - EXIT INT TERM HUP QUIT
+  set +e
+  limactl stop "$name" >/dev/null 2>&1
+  delete_output="$(limactl delete --force "$name" 2>&1)"
+  delete_status=$?
+  if [[ "$delete_status" -ne 0 ]] \
+    && ! grep -Eqi \
+      'no instance found|not found|does not exist' <<<"$delete_output"; then
+    printf 'recursive test: failed to delete L2 %s: %s\n' "$name" "$delete_output" >&2
+    if [[ "$status" -eq 0 ]]; then status=1; fi
+  else
+    rm -rf -- "$task_root"
+  fi
+  exit "$status"
+}}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+trap 'exit 131' QUIT
+install -m 0644 {guest_repo}/lima/provision-vm-level.sh \
+  "$template_dir/provision-vm-level.sh"
+write_template() {{
+  local location="$1"
+  cat >"$template" <<YAML
+minimumLimaVersion: "2.1.3"
+vmType: qemu
+nestedVirtualization: true
+cpus: 2
+memory: "4GiB"
+disk: "24GiB"
+images:
+  - location: "{FEDORA_44_X86_64_IMAGE_LOCATION}"
+    arch: "x86_64"
+    digest: "{FEDORA_44_X86_64_IMAGE_DIGEST}"
+mountType: virtiofs
+mounts:
+  - location: "$location"
+    mountPoint: /workspace/shared
+    writable: true
+containerd:
+  system: false
+  user: false
+param:
+  VmLevel: ""
+provision:
+  - mode: system
+    file: provision-vm-level.sh
+YAML
+}}
+
+# A symlinked location must fail before QEMU starts: Rust virtiofsd rejects
+# a shared directory whose final path component is a symlink.
+write_template "$shared_link"
+if limactl start --yes --name "$name" --timeout {vm_start_timeout():g}s \
+  --param VmLevel=L2 "$template" >"$task_root/symlink-start.log" 2>&1; then
+  echo 'the symlinked virtiofs location unexpectedly started' >&2
+  exit 1
+fi
+if ! grep -q 'BindMountSharedDir' "$lima_home/$name/ha.stderr.log"; then
+  echo 'the symlinked-location start failed without the virtiofsd' >&2
+  echo 'BindMountSharedDir error; the Rust virtiofsd package must be' >&2
+  echo 'installed (recreate the VM from the current template)' >&2
+  cat "$task_root/symlink-start.log" >&2 || true
+  cat "$lima_home/$name/ha.stderr.log" >&2 || true
+  exit 1
+fi
+if ! delete_output="$(limactl delete --force "$name" 2>&1)"; then
+  if ! grep -Eqi \
+    'no instance found|not found|does not exist' <<<"$delete_output"; then
+    printf 'recursive test: failed to delete L2 %s: %s\n' \
+      "$name" "$delete_output" >&2
+    exit 1
+  fi
+fi
+
+# The resolved location must start, mount virtiofs, and pass guest writes.
+write_template "$shared"
+limactl start --yes --name "$name" --timeout {vm_start_timeout():g}s \
+  --param VmLevel=L2 "$template"
+fstype="$(limactl shell "$name" -- findmnt -rn -T /workspace/shared -o FSTYPE)"
+if [[ "$fstype" != virtiofs ]]; then
+  echo "expected the shared mount to be virtiofs, got '$fstype'" >&2
+  exit 1
+fi
+limactl shell "$name" -- bash -ceu '
+  [[ "$(cat /etc/devbox/vm-level)" == L2 ]]
+  [[ "$(cat /workspace/shared/from-host.txt)" == host-to-guest ]]
+  printf "guest-to-host\n" > /workspace/shared/from-guest.txt
+  [[ "$(cat /workspace/shared/from-guest.txt)" == guest-to-host ]]
+'
+grep -qx 'guest-to-host' "$shared/from-guest.txt"
+"""
+    result = devbox_vm.run(
+        ["bash", "-ceu", command],
+        timeout=2 * vm_start_timeout() + 300,
+    )
+
+    assert result.returncode == 0, (
+        "The nested virtiofs check failed: the symlinked location must fail "
+        "with the virtiofsd BindMountSharedDir error, and the resolved "
+        "location must mount virtiofs, write the L2 marker, and pass guest "
+        "create/write with host-side visibility.\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+
+
+@pytest.mark.recursive
 def test_concurrent_l2_opencode_services_have_private_state(
     devbox_vm: LimaVM, tmp_path: Path
 ):
@@ -147,14 +291,9 @@ def test_concurrent_l2_opencode_services_have_private_state(
                 "disk": "24GiB",
                 "images": [
                     {
-                        "location": (
-                            "https://download.fedoraproject.org/pub/fedora/linux/releases/44/Cloud/"
-                            "x86_64/images/Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2"
-                        ),
+                        "location": FEDORA_44_X86_64_IMAGE_LOCATION,
                         "arch": "x86_64",
-                        "digest": (
-                            "sha256:28680fe5b371a5a82ebf43a31926e086a168e59949d03969c5093e7071f90b7f"
-                        ),
+                        "digest": FEDORA_44_X86_64_IMAGE_DIGEST,
                     }
                 ],
                 "mounts": [

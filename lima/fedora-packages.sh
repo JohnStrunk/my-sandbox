@@ -88,6 +88,11 @@ DEVBOX_FEDORA_VM_PACKAGES=(
   pkgconf-pkg-config
   qemu-img
   qemu-kvm
+  # Rust virtiofsd for nested virtiofs mounts (#486): Lima's Linux/QEMU
+  # virtiofs requires it, and it rejects a shared directory whose final
+  # path component is a symlink. The QEMU-packaged qemu-virtiofsd is not
+  # sufficient.
+  virtiofsd
 )
 
 devbox_install_dnf_packages() {

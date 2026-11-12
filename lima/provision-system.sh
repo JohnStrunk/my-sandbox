@@ -497,7 +497,7 @@ fi
 # fedora-packages.sh so the container preflight checks the same definitions.
 # This digest is embedded at VM create time; changing the shared helper
 # requires recreating the VM rather than sourcing an untrusted live-mount file.
-FEDORA_PACKAGES_SHA256=efc76b9c3c436d2ab45b48ef89cca0b097ad1f68bbcd95ef8886f98e58c97474
+FEDORA_PACKAGES_SHA256=e0699d969565f1571257a0a86d80dea28d9d395322b43196dc7f0ce52d91c0ad
 fedora_packages_snapshot="$PROVISION_TMP/fedora-packages.sh"
 copy_repo_file lima/fedora-packages.sh "$fedora_packages_snapshot"
 fedora_packages_actual_sha256="$(

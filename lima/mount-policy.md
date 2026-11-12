@@ -82,6 +82,57 @@ directory remains the shared location for OpenCode sessions. The dedicated
 `devbox --delete`, and manual Lima recreation; remove that exact directory only
 when intentionally clearing the L1's persisted OpenCode preferences/history.
 
+## Virtiofs mount locations must not be symlinks
+
+The Rust `virtiofsd` rejects a shared directory whose final path component
+is a symlink. The failure happens before QEMU starts, and the error never
+mentions symlinks:
+
+```text
+virtiofsd ... ERROR virtiofsd] Error entering sandbox: BindMountSharedDir(Os { code: 22, kind: InvalidInput, message: "Invalid argument" })
+```
+
+Observed 2026-11-10 inside the devbox L1 (limactl 2.2.1, virtiofsd 1.14.0 at
+`/usr/libexec/virtiofsd`; issue #486): direct `virtiofsd --shared-dir` tests
+showed that a symlink as the final component always fails, while the resolved
+path, a directory inside it, and a local directory all pass. A symlink to a
+local btrfs directory also fails. The trigger is the symlink, not the backing
+filesystem.
+
+This constraint is the root cause of the recorded "virtiofsd could not start
+in this environment" startup failure. In the L1 guest, `~/src`, `~/kb`, and
+the linked config paths are symlinks by design, so a nested VM created inside
+the L1 with `mountType: virtiofs` and a `~/...` mount location fails at
+virtiofsd startup. 9p is not affected, so the default template's `~/...`
+locations work.
+
+### Resolution pattern
+
+Lima expands a `~/...` mount location against the host `HOME`, passes it to
+virtiofsd unresolved, and re-resolves it against the current `HOME` on every
+start. When creating a virtiofs VM, do one of these:
+
+- Resolve every host mount location (`readlink -f`) before
+  `limactl create`/`start`, and pass each resolved absolute path as the
+  template's mount `location` (for example as a template parameter).
+- Keep every host mount location a real directory.
+
+The devbox template keeps `~/...` locations because its default mount type is
+9p, which tolerates symlinks. A future virtiofs default (#317) must resolve
+the locations first. The provisioned VM installs the Rust `virtiofsd` package
+so nested virtiofs evaluation is possible; the QEMU-packaged `qemu-virtiofsd`
+is not sufficient.
+
+The recursive-tier check `test_virtiofs_shared_dir_requires_a_resolved_location`
+in `tests/vm/test_recursive_vm.py` makes this repeatable: it starts a nested
+virtiofs VM whose mount location is a symlink and asserts the failure, then
+starts the same VM shape with the resolved directory and asserts the virtiofs
+mount plus guest create/write and host-side visibility.
+
+This does not resolve #317's separate physical-host failure, where virtiofs
+mounts and host-to-guest reads work but guest file creates/writes return
+EINVAL after startup.
+
 ## Validation notes
 
 - Template tests compare the configured mount set with provisioning links and
