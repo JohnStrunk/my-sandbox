@@ -483,10 +483,25 @@ still require the [recreate procedure](#recreating-the-vm). Changes to
 `lima/fedora-packages.sh` also require recreation: an existing VM's embedded
 expected digest rejects a changed live helper on its next start. The
 non-embedded `lima/provision-tools.sh` helper is refreshed on each start. The
-`devbox-toolchain-check` command reports active manifest-pinned Lima tools at
-their exact versions and the installed versions of operator tools, including
-the C/C++ toolchain. Docker RPM versions are not exact-version assertions in
-this check.
+`devbox-toolchain-check` command reports active manifest-pinned Lima
+tools at their exact versions and the installed versions of operator
+tools, including the C/C++ toolchain. Docker RPM versions are not
+exact-version assertions in this check. `--tool <name>` checks a single
+entry. The checker accepts the manifest name and its hyphenated form
+(`golangci_lint` or `golangci-lint`) plus operator command names such as
+`gcc`. If the checker rejects a name, run `command -v <tool>` instead.
+`--json` prints one machine-readable object with the canonical search
+path, the inherited `PATH`, and one record per checked entry. The checker
+resolves commands through the canonical devbox directories (including
+`/var/lib/devbox-toolbuilder/.local/bin`) rather than trusting the
+inherited `PATH`, so a minimal shell environment cannot cause a false
+missing result.
+
+System provisioning writes a root-owned wrapper at
+`/usr/local/bin/devbox-toolchain-check`; that directory is on the minimal
+`PATH`, so the check works without a login shell. The provisioner is embedded
+at VM creation, so a VM created before this change needs
+`devbox --recreate` to get the wrapper.
 
 ### Docker CE and Podman runtimes
 
@@ -611,6 +626,7 @@ Verify both runtimes and their separation with:
 
 ```shell
 devbox-toolchain-check            # active pins, not Docker RPM versions
+devbox-toolchain-check --tool kind --json   # one entry, machine-readable
 docker version                    # reports both client and Docker CE server
 docker buildx version             # reports the installed Buildx plugin version
 rpm -qf /usr/bin/docker /usr/bin/dockerd
@@ -1151,6 +1167,10 @@ passes, verify from inside the VM (opened with
       operator tools, including the C/C++ commands; `make --version`,
       `kind version`, `kubectl version --client`, `helm version`, and
       `pipenv --version` all succeed.
+- [ ] `devbox-toolchain-check --tool <name>` checks one entry and accepts
+      the manifest and command names; `--json` prints one machine-readable
+      object; `env -i PATH=/usr/local/bin:/usr/bin
+      devbox-toolchain-check --tool golangci-lint` succeeds.
 - [ ] Compile and link minimal C and C++ programs with `gcc`/`g++`, then build
       both with CMake using Unix Makefiles and Ninja. From inside the VM:
 

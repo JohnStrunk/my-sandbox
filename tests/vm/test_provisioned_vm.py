@@ -81,6 +81,50 @@ def test_provisioned_vm_toolchain_matches_manifest(repo_root: Path, devbox_vm: L
 
 
 @pytest.mark.vm
+def test_toolchain_check_is_path_independent(repo_root: Path, devbox_vm: LimaVM):
+    skip_if_guest_provisioning_is_stale(repo_root, devbox_vm)
+    expected_version = json.loads(
+        (repo_root / "lima" / "tool-versions.json").read_text()
+    )["tools"]["golangci_lint"]["version"]
+    minimal_path_command = [
+        "env",
+        "-i",
+        "PATH=/usr/local/bin:/usr/bin",
+        "devbox-toolchain-check",
+    ]
+
+    result = devbox_vm.run(
+        [*minimal_path_command, "--tool", "golangci-lint"], timeout=120
+    )
+
+    assert result.returncode == 0, (
+        "The toolchain check is not usable on a minimal PATH (#494).\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert f"OK: golangci_lint: {expected_version}" in result.stdout.splitlines()
+
+    json_result = devbox_vm.run(
+        [*minimal_path_command, "--tool", "golangci-lint", "--json"], timeout=120
+    )
+
+    assert json_result.returncode == 0, (
+        "The toolchain check's JSON form is not usable on a minimal PATH.\n"
+        f"stdout: {json_result.stdout}\nstderr: {json_result.stderr}"
+    )
+    payload = json.loads(json_result.stdout)
+    (record,) = payload["tools"]
+    assert record["name"] == "golangci_lint"
+    assert record["status"] == "ok"
+    assert record["pinned"] == expected_version
+    assert record["installed"] == expected_version
+    assert record["path"] == "/var/lib/devbox-toolbuilder/.local/bin/golangci-lint"
+    assert (
+        "/var/lib/devbox-toolbuilder/.local/bin"
+        in (payload["missing_from_inherited_path"])
+    )
+
+
+@pytest.mark.vm
 def test_provisioned_vm_compiles_and_runs_c_and_cpp(repo_root: Path, devbox_vm: LimaVM):
     skip_if_guest_provisioning_is_stale(repo_root, devbox_vm)
     command = r"""

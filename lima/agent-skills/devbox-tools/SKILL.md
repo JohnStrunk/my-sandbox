@@ -2,7 +2,9 @@
 name: "devbox-tools"
 description: >
   Use this skill when choosing, adding, or integrating a command or
-  agent-facing capability provisioned in the Lima devbox VM.
+  agent-facing capability provisioned in the Lima devbox VM. Also use it
+  when asked whether a tool is installed or available, or which version it
+  has, or before you report that a tool is missing.
 ---
 
 # VM Devbox Capability Contract
@@ -16,6 +18,31 @@ The devbox VM has two separate contracts for every agent-facing capability:
 
 Installing a binary proves runtime availability only. Do not assume that an
 agent knows about a command because it is on `PATH`.
+
+## Proving availability
+
+- Never claim a tool is unavailable without proof. A failed lookup proves
+  only that the current shell cannot find the command.
+- For a devbox tool, run `devbox-toolchain-check --tool <tool>`. The
+  checker accepts the manifest name and its hyphenated form, for example
+  `golangci_lint` or `golangci-lint`. If the checker rejects the name, run
+  `command -v <tool>` instead.
+- For any other command, run `command -v <tool>`.
+- If a lookup fails, run `source /etc/profile.d/devbox-toolchain.sh`, then
+  repeat the lookup.
+- The toolchain `PATH` is defined by that profile file. Login shells read
+  it. Non-login shells and service processes do not.
+- `/usr/local/bin/devbox-toolchain-check` is the system-wide entry point.
+  It needs only a minimal `PATH`.
+- Do not infer availability from `ls ~/.local/bin`. Several tools,
+  including `golangci-lint`, live in
+  `/var/lib/devbox-toolbuilder/.local/bin`.
+- Quote the command and its output. Put a tool you did not run under
+  "not checked" and give the reason.
+- A VM created before this change has no system-wide
+  `/usr/local/bin/devbox-toolchain-check` until `devbox --recreate`. Until
+  then, the user-level `~/.local/bin/devbox-toolchain-check` works after
+  the profile is sourced.
 
 ## Temporary task scratch
 

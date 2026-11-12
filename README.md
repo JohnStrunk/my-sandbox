@@ -96,8 +96,9 @@ development packages are VM-only; see the [Lima guide](lima/README.md) for the
 Fedora package names and recreation requirements. The VM also includes kind,
 Minikube v1.39.0, kubectl, Krew v0.5.0 in the guest-user `~/.krew` plugin
 store, Helm, and Pipenv. `devbox-toolchain-check` verifies manifest-pinned
-versions and reports the installed C/C++ tools; `devbox-go --doctor` shows a Go
-project's selected toolchain.
+versions and reports the installed C/C++ tools; `--tool <name>` checks one
+tool by manifest or hyphenated name, and `--json` prints machine-readable
+records. `devbox-go --doctor` shows a Go project's selected toolchain.
 
 The VM-owned agent capability catalog is staged at
 `~/.agents/skills/devbox-tools/SKILL.md` inside the guest. The VM generates an

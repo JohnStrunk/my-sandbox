@@ -12,6 +12,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from lima.check_toolchain import canonical_search_path
+
 LIMA_DIR = "lima"
 
 # Public Docker Release key ID (fingerprint suffix), not a secret.
@@ -258,6 +260,80 @@ def test_readiness_uses_builder_check_stamp_not_guest_tool_execution(
 
 
 @pytest.mark.unit
+def test_system_script_installs_the_system_wide_toolchain_check(repo_root: Path):
+    system_script = _script(repo_root, "provision-system.sh")
+
+    # /usr/local/bin is on the minimal PATH, so the wrapper (issue #494) stays
+    # reachable without the login-shell toolchain profile.
+    assert (
+        "toolchain_check_wrapper=/usr/local/bin/devbox-toolchain-check" in system_script
+    )
+    assert (
+        "exec /usr/bin/python3 -I -S /var/lib/devbox-vm/tool-assets/check_toolchain.py"
+        in system_script
+    )
+    # The wrapper must read the root-owned snapshot, not the guest-writable
+    # /etc/devbox symlink.
+    assert '  --manifest /var/lib/devbox-vm/tool-versions.json "$@"' in system_script
+    assert 'if ! cmp -s "$toolchain_check_tmp" "$toolchain_check_wrapper"; then' in (
+        system_script
+    )
+    assert (
+        'install -m 0755 "$toolchain_check_tmp" "$toolchain_check_wrapper"'
+        in system_script
+    )
+    # A symlinked tool-assets directory must be refused before install -d,
+    # the same way a symlinked /var/lib/devbox-vm is refused.
+    refusal = re.search(
+        r'if \[\[ -L "\$tool_assets_dir" \]\]; then\n'
+        r"(.*?)\nfi\ninstall -d -m 0755 -o root -g root \"\$tool_assets_dir\"",
+        system_script,
+        re.DOTALL,
+    )
+    assert refusal, "the symlinked tool-assets refusal is missing"
+    assert "devbox: refusing symlinked tool-assets directory" in refusal.group(1)
+    assert "exit 1" in refusal.group(1)
+
+
+@pytest.mark.unit
+def test_probe_requires_the_system_toolchain_check_wrapper(repo_root: Path):
+    probe = _script(repo_root, "probe-readiness.sh")
+    inline_probe = _template(repo_root)["probes"][0]["script"]
+
+    # command -v would also match the user-level copy in ~/.local/bin, so the
+    # probe must prove the system-wide wrapper itself (issue #494).
+    wrapper_check = (
+        "test -x /usr/local/bin/devbox-toolchain-check \\\n"
+        '  || fail "system toolchain check wrapper is not installed"'
+    )
+    assert wrapper_check in probe
+    assert wrapper_check in inline_probe
+    assert "devbox-toolchain-check" not in _probe_required_tools(repo_root)
+
+
+@pytest.mark.unit
+def test_canonical_search_path_matches_the_profile_toolchain_path(repo_root: Path):
+    """The checker's search path must not drift from the profile PATH (#494)."""
+    system_script = _script(repo_root, "provision-system.sh")
+    profile_exports = re.findall(r'^export PATH="(.*)"$', system_script, re.MULTILINE)
+    assert len(profile_exports) == 1, "expected one toolchain profile PATH export"
+    # Compare only the entries that do not depend on variable expansion
+    # ($HOME, $KREW_ROOT, $CARGO_HOME, $GOPATH, $PATH).
+    profile_entries = profile_exports[0].split(":")
+    literal_entries = [entry for entry in profile_entries if "$" not in entry]
+    assert literal_entries, "the toolchain profile PATH has no literal entries"
+
+    canonical_entries = canonical_search_path().split(os.pathsep)
+
+    for entry in literal_entries:
+        assert entry in canonical_entries, entry
+    positions = [canonical_entries.index(entry) for entry in literal_entries]
+    assert positions == sorted(positions), (
+        "the canonical search path reordered the profile toolchain directories"
+    )
+
+
+@pytest.mark.unit
 def test_go_linters_install_from_the_pinned_manifest(repo_root: Path):
     tool_script = _script(repo_root, "provision-tools.sh")
 
@@ -461,6 +537,43 @@ def test_vm_skill_documents_private_ephemeral_task_scratch(repo_root: Path):
     assert 'task_dir="$(mktemp -d /tmp/opencode/task.XXXXXXXX)"' in skill
     assert 'chmod 0700 "$task_dir"' in skill
     assert "not host-mounted or persistent" in skill
+
+
+@pytest.mark.unit
+def test_vm_skill_description_triggers_on_availability_questions(repo_root: Path):
+    """The skill must load for "is tool X installed?" questions (#494)."""
+    skill = (repo_root / LIMA_DIR / "agent-skills/devbox-tools/SKILL.md").read_text()
+    parts = skill.split("---\n", 2)
+    assert len(parts) == 3, "the skill frontmatter is missing or unterminated"
+    description = yaml.safe_load(parts[1])["description"]
+
+    assert "whether a tool is installed or available" in description
+    assert "which version it has" in description
+    assert "before you report that a tool is missing" in description
+
+
+@pytest.mark.unit
+def test_vm_skill_documents_how_to_prove_availability(repo_root: Path):
+    skill = (repo_root / LIMA_DIR / "agent-skills/devbox-tools/SKILL.md").read_text()
+    heading = "## Proving availability"
+    assert heading in skill, f"missing skill section {heading!r}"
+    section = " ".join(skill.split(heading, 1)[1].split("\n## ", 1)[0].split())
+
+    assert "Never claim a tool is unavailable without proof" in section
+    assert "`devbox-toolchain-check --tool <tool>`" in section
+    assert "`golangci_lint` or `golangci-lint`" in section
+    assert "If the checker rejects the name" in section
+    assert "`command -v <tool>`" in section
+    assert "`source /etc/profile.d/devbox-toolchain.sh`" in section
+    assert "Login shells read it" in section
+    assert (
+        "`/usr/local/bin/devbox-toolchain-check` is the system-wide entry point"
+        in section
+    )
+    assert "`/var/lib/devbox-toolbuilder/.local/bin`" in section
+    assert "the user-level `~/.local/bin/devbox-toolchain-check` works after" in (
+        section
+    )
 
 
 @pytest.mark.unit

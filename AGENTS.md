@@ -134,6 +134,27 @@
   environment variables. Never relax credential or untrusted-source
   precautions based on the marker.
 
+## Tool availability claims
+
+- Never state that a tool is unavailable without proof. A failed lookup
+  proves only that the current shell cannot find the command.
+- For a devbox tool, run `devbox-toolchain-check --tool <tool>`. The
+  checker accepts the manifest name and its hyphenated form, for example
+  `golangci_lint` or `golangci-lint`. If the checker rejects the name, run
+  `command -v <tool>` instead.
+- For any other command, run `command -v <tool>`.
+- If a lookup fails, run `source /etc/profile.d/devbox-toolchain.sh`, then
+  repeat the lookup.
+- Do not infer availability from `ls ~/.local/bin`. Several tools,
+  including `golangci-lint`, live in
+  `/var/lib/devbox-toolbuilder/.local/bin`.
+- Quote the command and its output. Put a tool that you did not run under
+  "not checked" and give the reason.
+- A VM created before this change has no
+  `/usr/local/bin/devbox-toolchain-check` until `devbox --recreate`. Until
+  then, the user-level `~/.local/bin/devbox-toolchain-check` works after
+  the profile is sourced.
+
 ## How PRs land
 
 - `CI Workflow - Success` is the authoritative CI prerequisite for merging. It
