@@ -82,6 +82,33 @@ def test_agents_md_documents_devbox_vm_identity(repo_root: Path, needle: str):
 @pytest.mark.unit
 @pytest.mark.parametrize(
     "needle",
+    (
+        "tool availability claims",
+        "never state that a tool is unavailable without proof",
+        "a failed lookup proves only that the current shell cannot find",
+        "devbox-toolchain-check --tool",
+        "hyphenated form",
+        "golangci_lint or golangci-lint",
+        "if the checker rejects the name",
+        "command -v",
+        "source /etc/profile.d/devbox-toolchain.sh",
+        "do not infer availability from",
+        "/var/lib/devbox-toolbuilder/.local/bin",
+        "not checked",
+        "the user-level ~/.local/bin/devbox-toolchain-check works after",
+        "until devbox --recreate",
+    ),
+)
+def test_agents_md_documents_tool_availability_claims(repo_root: Path, needle: str):
+    normalized = _normalized_agents_md(repo_root)
+    assert needle.lower() in normalized, (
+        f"AGENTS.md is missing a tool availability instruction: {needle!r}"
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "needle",
     [
         # PR-landing policy section.
         "how prs land",

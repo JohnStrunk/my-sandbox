@@ -227,6 +227,8 @@ builder_manifest_sha256="$(
 
 test -x "$HOME/.local/bin/devbox-go" \
   || fail "devbox-go wrapper is not installed"
+test -x /usr/local/bin/devbox-toolchain-check \
+  || fail "system toolchain check wrapper is not installed"
 test -x /usr/local/bin/sg \
   || fail "ast-grep compatibility command sg is not installed"
 test -x "$HOME/.local/bin/semble" \

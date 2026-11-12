@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from lima.check_toolchain import _VERSION_COMMANDS, check_toolchain
+from lima.check_toolchain import _VERSION_COMMANDS, check_toolchain, main
 
 
 def _manifest(repo_root: Path) -> dict:
@@ -18,16 +18,32 @@ def _write_manifest(path: Path, manifest: dict) -> Path:
 
 
 @pytest.fixture(autouse=True)
-def _gocyclo_is_on_path(monkeypatch: pytest.MonkeyPatch):
+def _commands_resolve_without_host_tools(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Keep command resolution hermetic for every checked entry.
+
+    Unit tests run on plain CI runners without the VM toolchain, so any
+    command that the host cannot resolve falls back to a stub executable
+    instead of reporting a false missing result.
+    """
+    stub_dir = tmp_path / "resolved-commands"
+    stub_dir.mkdir()
     real_which = shutil.which
-    monkeypatch.setattr(
-        "lima.check_toolchain.shutil.which",
-        lambda name: (
-            "/var/lib/devbox-toolbuilder/.local/bin/gocyclo"
-            if name == "gocyclo"
-            else real_which(name)
-        ),
-    )
+
+    def fake_which(name, path=None):
+        if name == "gocyclo":
+            return "/var/lib/devbox-toolbuilder/.local/bin/gocyclo"
+        resolved = real_which(name, path=path)
+        if resolved is not None:
+            return resolved
+        stub = stub_dir / name
+        if not stub.exists():
+            stub.write_text("#!/bin/sh\nexit 0\n")
+            stub.chmod(0o755)
+        return str(stub)
+
+    monkeypatch.setattr("lima.check_toolchain.shutil.which", fake_which)
 
 
 def _version_output(name: str, version: str, go_version: str) -> str:
@@ -324,7 +340,9 @@ def test_lima_toolchain_check_reports_missing_gocyclo(
 ):
     manifest = _manifest(repo_root)
     manifest_path = _write_manifest(tmp_path / "manifest.json", manifest)
-    monkeypatch.setattr("lima.check_toolchain.shutil.which", lambda _name: None)
+    monkeypatch.setattr(
+        "lima.check_toolchain.shutil.which", lambda _name, path=None: None
+    )
 
     _, errors = check_toolchain(manifest_path, _successful_runner(manifest))
 
@@ -461,10 +479,12 @@ def test_lima_toolchain_check_requires_a_version_command_for_each_consumer(
 
     _, errors = check_toolchain(manifest_path, _successful_runner(manifest))
 
-    assert any(
-        "no version check is defined for Lima tool 'unmapped_lima_tool'" in error
-        for error in errors
+    assert "unmapped_lima_tool: no version check is defined for this Lima tool" in (
+        errors
     )
+    # The record name already carries the tool name; the detail must not
+    # repeat it.
+    assert all(error.count("unmapped_lima_tool") == 1 for error in errors)
 
 
 @pytest.mark.unit
@@ -531,3 +551,272 @@ def test_lima_toolchain_check_reports_missing_c_cpp_tool(
     assert any(
         error.startswith(f"{tool}:") and "could not run" in error for error in errors
     )
+
+
+@pytest.mark.unit
+def test_lima_toolchain_check_finds_tools_outside_the_inherited_path(
+    repo_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A minimal inherited PATH must not cause a false missing result (#494)."""
+    manifest = _manifest(repo_root)
+    manifest_path = _write_manifest(tmp_path / "manifest.json", manifest)
+    tool_dir = tmp_path / "canonical-bin"
+    tool_dir.mkdir()
+    stub = tool_dir / "golangci-lint"
+    stub.write_text("#!/bin/sh\nexit 0\n")
+    stub.chmod(0o755)
+    monkeypatch.setenv("PATH", "/usr/bin")
+    # Use the real resolver: only the injected search path may find the stub.
+    monkeypatch.setattr("lima.check_toolchain.shutil.which", shutil.which)
+
+    successes, errors = check_toolchain(
+        manifest_path,
+        _successful_runner(manifest),
+        only_tools=frozenset({"golangci_lint"}),
+        search_path=str(tool_dir),
+    )
+
+    assert errors == []
+    version = manifest["tools"]["golangci_lint"]["version"].removeprefix("v")
+    assert f"golangci_lint: {version}" in successes
+
+
+@pytest.mark.unit
+def test_lima_toolchain_check_only_tools_accepts_command_names(
+    repo_root: Path, tmp_path: Path
+):
+    manifest = _manifest(repo_root)
+    manifest_path = _write_manifest(tmp_path / "manifest.json", manifest)
+    successful = _successful_runner(manifest)
+    commands = []
+
+    def runner(command):
+        commands.append(tuple(command))
+        return successful(command)
+
+    successes, errors = check_toolchain(
+        manifest_path, runner, only_tools=frozenset({"golangci-lint"})
+    )
+
+    assert errors == []
+    assert commands == [("golangci-lint", "--version")]
+    assert {line.split(":", 1)[0] for line in successes} == {"golangci_lint"}
+
+
+@pytest.mark.unit
+def test_lima_toolchain_check_only_tools_accepts_operator_commands(
+    repo_root: Path, tmp_path: Path
+):
+    manifest = _manifest(repo_root)
+    manifest_path = _write_manifest(tmp_path / "manifest.json", manifest)
+    successful = _successful_runner(manifest)
+    commands = []
+
+    def runner(command):
+        commands.append(tuple(command))
+        return successful(command)
+
+    successes, errors = check_toolchain(
+        manifest_path, runner, only_tools=frozenset({"gcc"})
+    )
+
+    assert errors == []
+    assert commands == [("gcc", "--version")]
+    assert {line.split(":", 1)[0] for line in successes} == {"gcc"}
+
+
+@pytest.mark.unit
+def test_cli_rejects_unknown_tool_names(
+    repo_root: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    manifest = _manifest(repo_root)
+    manifest_path = _write_manifest(tmp_path / "manifest.json", manifest)
+
+    with pytest.raises(SystemExit) as excinfo:
+        main(["--manifest", str(manifest_path), "--tool", "not-a-tool"])
+
+    assert excinfo.value.code != 0
+    stderr = capsys.readouterr().err
+    assert "not-a-tool" in stderr
+    assert "golangci-lint" in stderr
+    assert "golangci_lint" in stderr
+    assert "gcc" in stderr
+
+
+@pytest.mark.unit
+def test_cli_json_output_reports_records_and_paths(
+    repo_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    manifest = _manifest(repo_root)
+    manifest_path = _write_manifest(tmp_path / "manifest.json", manifest)
+    monkeypatch.setenv("PATH", "/usr/bin")
+
+    exit_code = main(
+        ["--manifest", str(manifest_path), "--tool", "golangci-lint", "--json"],
+        runner=_successful_runner(manifest),
+    )
+
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    payload = json.loads(captured.out)
+    assert set(payload) == {
+        "search_path",
+        "inherited_path",
+        "missing_from_inherited_path",
+        "tools",
+    }
+    assert payload["inherited_path"] == "/usr/bin"
+    assert (
+        "/var/lib/devbox-toolbuilder/.local/bin"
+        in (payload["missing_from_inherited_path"])
+    )
+    (record,) = payload["tools"]
+    version = manifest["tools"]["golangci_lint"]["version"].removeprefix("v")
+    assert set(record) == {
+        "name",
+        "command",
+        "pinned",
+        "installed",
+        "path",
+        "status",
+        "detail",
+    }
+    assert record["name"] == "golangci_lint"
+    assert record["command"] == ["golangci-lint", "--version"]
+    assert record["pinned"] == version
+    assert record["installed"] == version
+    assert record["status"] == "ok"
+    assert record["detail"] == version
+    assert record["path"]
+
+    # A record that is not ok must exit 1 even in JSON mode.
+    exit_code = main(
+        ["--manifest", str(manifest_path), "--tool", "golangci-lint", "--json"],
+        runner=_successful_runner(manifest, {"golangci_lint": "0.0.0"}),
+    )
+    assert exit_code == 1
+    payload = json.loads(capsys.readouterr().out)
+    (record,) = payload["tools"]
+    assert record["status"] == "mismatch"
+    assert record["installed"] == "0.0.0"
+    assert record["pinned"] == version
+
+
+@pytest.mark.unit
+def test_cli_tool_flag_checks_gocyclo(
+    repo_root: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+):
+    manifest = _manifest(repo_root)
+    manifest_path = _write_manifest(tmp_path / "manifest.json", manifest)
+
+    exit_code = main(
+        ["--manifest", str(manifest_path), "--tool", "gocyclo"],
+        runner=_successful_runner(manifest),
+    )
+
+    assert exit_code == 0
+    version = manifest["tools"]["gocyclo"]["version"].removeprefix("v")
+    stdout = capsys.readouterr().out.splitlines()
+    assert f"OK: gocyclo: {version}" in stdout
+
+
+@pytest.mark.unit
+def test_lima_toolchain_check_errors_when_only_tools_matches_no_entry(
+    repo_root: Path, tmp_path: Path
+):
+    """A requested name with no record must not exit 0 (#494 review)."""
+    manifest = _manifest(repo_root)
+    manifest["tools"]["kind"]["consumers"]["lima"] = False
+    manifest_path = _write_manifest(tmp_path / "manifest.json", manifest)
+
+    successes, errors = check_toolchain(
+        manifest_path,
+        _successful_runner(manifest),
+        only_tools=frozenset({"kind"}),
+    )
+
+    assert successes == []
+    assert errors == ["kind: no checked entry matches this tool name"]
+
+
+@pytest.mark.unit
+def test_cli_json_keeps_the_full_command_for_a_missing_tool(
+    repo_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    manifest = _manifest(repo_root)
+    manifest_path = _write_manifest(tmp_path / "manifest.json", manifest)
+    monkeypatch.setattr(
+        "lima.check_toolchain.shutil.which", lambda _name, path=None: None
+    )
+
+    exit_code = main(
+        ["--manifest", str(manifest_path), "--tool", "golangci-lint", "--json"],
+        runner=_successful_runner(manifest),
+    )
+
+    assert exit_code == 1
+    payload = json.loads(capsys.readouterr().out)
+    (record,) = payload["tools"]
+    assert record["status"] == "missing"
+    assert record["command"] == ["golangci-lint", "--version"]
+
+
+@pytest.mark.unit
+def test_lima_toolchain_check_executes_through_the_injected_search_path(
+    repo_root: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Resolution and execution must use the same injected path (#494)."""
+    manifest = _manifest(repo_root)
+    manifest_path = _write_manifest(tmp_path / "manifest.json", manifest)
+    version = manifest["tools"]["golangci_lint"]["version"].removeprefix("v")
+    tool_dir = tmp_path / "canonical-bin"
+    tool_dir.mkdir()
+    stub_ran = tmp_path / "stub-ran"
+    stub = tool_dir / "golangci-lint"
+    stub.write_text(
+        f"#!/bin/sh\necho 'golangci-lint has version v{version}'\n: > '{stub_ran}'\n"
+    )
+    stub.chmod(0o755)
+    monkeypatch.setenv("PATH", "/usr/bin")
+
+    # No runner is injected: the default runner must execute the stub through
+    # the injected search path, not through the canonical directories.
+    successes, errors = check_toolchain(
+        manifest_path,
+        only_tools=frozenset({"golangci_lint"}),
+        search_path=str(tool_dir),
+    )
+
+    assert errors == []
+    assert stub_ran.exists(), "the checker did not execute the stub executable"
+    assert f"golangci_lint: {version}" in successes
+
+
+@pytest.mark.unit
+def test_lima_toolchain_check_strips_control_characters_from_details(
+    repo_root: Path, tmp_path: Path
+):
+    manifest = _manifest(repo_root)
+    manifest_path = _write_manifest(tmp_path / "manifest.json", manifest)
+    successful = _successful_runner(manifest)
+
+    def runner(command):
+        if command[0] == "ruby":
+            return subprocess.CompletedProcess(
+                command, 1, stdout="", stderr="\x1b[31mruby failed\x07"
+            )
+        return successful(command)
+
+    _, errors = check_toolchain(manifest_path, runner)
+
+    ruby_error = next(error for error in errors if error.startswith("ruby:"))
+    assert "\x1b" not in ruby_error
+    assert "\x07" not in ruby_error
+    assert "ruby failed" in ruby_error

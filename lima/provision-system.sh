@@ -923,6 +923,10 @@ fi
 # Snapshot the live provisioner and wrapper code without following symlinks in
 # the writable host checkout. Root executes only the copied script as builder.
 copy_repo_file lima/provision-tools.sh "$tool_script_snapshot"
+if [[ -L "$tool_assets_dir" ]]; then
+  echo "devbox: refusing symlinked tool-assets directory" >&2
+  exit 1
+fi
 install -d -m 0755 -o root -g root "$tool_assets_dir"
 copy_repo_file lima/devbox-go "$tool_assets_dir/devbox-go"
 copy_repo_file lima/check_toolchain.py "$tool_assets_dir/check_toolchain.py"
@@ -939,6 +943,23 @@ printf '%s\n' "$tool_assets_sha256" \
   >/var/lib/devbox-vm/tool-assets.sha256.new
 mv -f /var/lib/devbox-vm/tool-assets.sha256.new \
   /var/lib/devbox-vm/tool-assets.sha256
+
+# Agents must prove tool availability without a login shell (issue #494).
+# /usr/local/bin is on the minimal PATH, so the wrapper stays reachable when
+# /etc/profile.d/devbox-toolchain.sh has not been sourced; the copied checker
+# resolves tools through the canonical devbox search path itself.
+toolchain_check_wrapper=/usr/local/bin/devbox-toolchain-check
+toolchain_check_tmp="$(new_temp_dir)/devbox-toolchain-check"
+cat >"$toolchain_check_tmp" <<'EOF'
+#!/bin/sh
+# PATH-independent availability check for agents (issue #494).
+# Read the root-owned manifest snapshot, not the guest-writable symlink.
+exec /usr/bin/python3 -I -S /var/lib/devbox-vm/tool-assets/check_toolchain.py \
+  --manifest /var/lib/devbox-vm/tool-versions.json "$@"
+EOF
+if ! cmp -s "$toolchain_check_tmp" "$toolchain_check_wrapper"; then
+  install -m 0755 "$toolchain_check_tmp" "$toolchain_check_wrapper"
+fi
 
 # Give only the guest UID access through the parent of every host-config
 # mount, including CodeRabbit user/auth config. The package builder is a
