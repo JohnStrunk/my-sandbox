@@ -78,6 +78,10 @@ _VERSION_COMMANDS: dict[str, tuple[Command, re.Pattern[str]]] = {
         ("gws", "--version"),
         re.compile(r"\bv?(\d+\.\d+\.\d+)\b"),
     ),
+    "mermaid_cli": (
+        ("mmdc", "--version"),
+        re.compile(r"\bv?(\d+\.\d+\.\d+)\b"),
+    ),
     "coderabbit_cli": (
         ("coderabbit", "--version"),
         re.compile(r"\bv?(\d+\.\d+\.\d+(?:[+-][A-Za-z0-9.]+)?)\b"),

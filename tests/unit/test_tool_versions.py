@@ -553,6 +553,7 @@ def test_manifest_declares_lima_consumers(repo_root: Path):
         "kubectl",
         "limactl",
         "markdownlint_cli2",
+        "mermaid_cli",
         "minikube",
         "node",
         "opencode",

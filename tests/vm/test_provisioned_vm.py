@@ -52,6 +52,9 @@ def test_provisioned_vm_toolchain_matches_manifest(repo_root: Path, devbox_vm: L
     for tool in ("ruby", "gocyclo", "golangci_lint", "actionlint", "yamllint"):
         expected_version = manifest["tools"][tool]["version"]
         assert f"OK: {tool}: {expected_version}" in output_lines
+    for tool in ("mermaid_cli", "playwright_cli", "opencode"):
+        expected_version = manifest["tools"][tool]["version"]
+        assert f"OK: {tool}: {expected_version}" in output_lines
     for tool in ("gcc", "g++", "make", "cmake", "gdb", "ninja", "pkg-config"):
         assert any(line.startswith(f"OK: {tool}:") for line in output_lines), tool
 
@@ -634,6 +637,61 @@ def test_fresh_vm_fingerprint_matches_the_current_checkout(
         pytest.fail(
             "fresh VM provisioning fingerprint differs from the current checkout"
         )
+
+
+@pytest.mark.vm
+def test_provisioned_vm_renders_mermaid_diagrams(repo_root: Path, devbox_vm: LimaVM):
+    skip_if_guest_provisioning_is_stale(repo_root, devbox_vm)
+    expected_version = json.loads(
+        (repo_root / "lima" / "tool-versions.json").read_text()
+    )["tools"]["mermaid_cli"]["version"]
+    command = r"""
+set -euo pipefail
+expected_version="$1"
+task_root="$(mktemp -d /tmp/opencode/issue-487-mermaid.XXXXXXXX)"
+trap 'rm -rf -- "${task_root:?}"' EXIT
+
+installed_version="$(mmdc --version)"
+# Match check_toolchain's normalization: an optional v prefix is legitimate.
+installed_version="${installed_version#v}"
+[[ "$installed_version" == "$expected_version" ]]
+
+cat >"$task_root/diagram.mmd" <<'EOF'
+flowchart LR
+    A[Input] --> B{Decision}
+    B -- yes --> C[Output]
+    B -- no --> A
+EOF
+
+mmdc --input "$task_root/diagram.mmd" --output "$task_root/diagram.svg"
+grep -q '<svg' "$task_root/diagram.svg"
+test -s "$task_root/diagram.svg"
+
+mmdc --input "$task_root/diagram.mmd" --output "$task_root/diagram.png"
+png_description="$(file -b "$task_root/diagram.png")"
+grep -qi '^png image data' <<<"$png_description"
+test -s "$task_root/diagram.png"
+
+# Puppeteer must reuse the shared Playwright browser, not download its own.
+test ! -e /var/lib/devbox-toolbuilder/.cache/puppeteer
+"""
+    result = devbox_vm.run(
+        [
+            "bash",
+            "-ceu",
+            command,
+            "mermaid-render",
+            expected_version,
+        ],
+        timeout=300,
+    )
+
+    assert result.returncode == 0, (
+        "The provisioned VM could not render a Mermaid diagram to SVG and PNG "
+        "with the manifest-pinned mmdc and the shared chrome-for-testing "
+        "binary.\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
 
 
 @pytest.mark.vm
