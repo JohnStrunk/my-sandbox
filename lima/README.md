@@ -839,10 +839,17 @@ changes the Lima instance name but does not namespace the persistent state
 directory; do not run multiple L1 instances concurrently from the same host
 home.
 
-The production/default template remains on 9p because Lima's Rust `virtiofsd`
-exited before guest startup during the direct host-to-VM attempt in this
-environment. The #268 benchmark recommends virtiofs for the full Linux/QEMU
-template after a direct host-to-VM mixed-write check passes. The command below
+The production/default template remains on 9p until a supported physical host
+passes the direct host-to-VM mixed-write check (#317). The #268 benchmark
+recommends virtiofs for the full Linux/QEMU template after that check passes.
+The recorded "virtiofsd could not start" startup failure has a narrower root
+cause: the Rust `virtiofsd` rejects a shared directory whose final path
+component is a symlink (`BindMountSharedDir` EINVAL before QEMU starts), and
+the L1's `~/src` and other linked shared paths are symlinks. Resolve each
+host mount location (`readlink -f`) before `limactl create`/`start`, or keep
+mount locations as real directories, when creating a virtiofs VM; 9p
+tolerates symlinked locations. [`mount-policy.md`](mount-policy.md) records
+the full constraint and the repeatable nested-L1 check. The command below
 runs the #287 disposable SQLite probe with an opt-in mount type; it is not
 the full mixed-write benchmark from #268.
 
@@ -996,8 +1003,8 @@ integration work.
 - **Red Hat internal TLS trust**: three CA roots are SHA-256 pinned in the
   manifest and embedded provisioner, then installed into the VM trust store
   for system tools, Node.js, and The Source.
-- **Nested VMs**: pinned `limactl` plus `qemu-kvm`, `qemu-img`, and
-  `edk2-ovmf` inside the guest.
+- **Nested VMs**: pinned `limactl` plus `qemu-kvm`, `qemu-img`,
+  `edk2-ovmf`, and the Rust `virtiofsd` inside the guest.
 - Git configured for GitHub over HTTPS (SSH remotes rewritten, `gh` as
   the credential helper), identity seeded once from the host.
 

@@ -564,7 +564,7 @@ def test_recursive_templates_stage_and_embed_the_l2_provisioner(repo_root: Path)
 
     assert "file: provision-vm-level.sh" in source
     assert '"file": "provision-vm-level.sh"' in source
-    assert source.count("--param VmLevel=L2") == 2
+    assert source.count("--param VmLevel=L2") == 4
     assert 'install -m 0644 "$repo_copy/lima/provision-vm-level.sh"' in source
     assert 'mountPoint": "/opt/devbox-lima"' not in source
     assert '[[ "$(cat "$marker")" == L2 ]]' in source

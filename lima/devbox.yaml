@@ -53,12 +53,25 @@ images:
     arch: "aarch64"
     digest: "sha256:55c60a3b80d3616a08705afd0459e75fe9f03c54aba7a46e4002a41a72fa0d5b"
 
-# #268 favors virtiofs for the full VM, but requires a direct host-to-VM
-# write check first. virtiofsd could not start in this environment, so use
-# 9p until a supported host passes that check.
+# #268 favors virtiofs for the full VM, but it requires a direct host-to-VM
+# mixed-write check first (#317); keep 9p until a supported host passes it.
+# The earlier "virtiofsd could not start in this environment" record has a
+# narrower cause: the Rust virtiofsd rejects a shared directory whose final
+# path component is a symlink ("Error entering sandbox: BindMountSharedDir"
+# with EINVAL, before QEMU starts). The backing filesystem does not matter.
+# In the L1 guest, ~/src, ~/kb, and the linked config paths are symlinks by
+# design, so a nested virtiofs VM whose template passes such a location
+# fails at virtiofsd startup. Lima expands a "~/..." mount location against
+# the host HOME without resolving symlinks: resolve every host mount
+# location (readlink -f) before limactl create/start, or keep mount
+# locations as real directories. 9p tolerates symlinked locations, so the
+# "~/..." locations below are safe with this default. lima/mount-policy.md
+# records the constraint and the repeatable nested-L1 check.
 mountType: "9p"
 
 # Never mount all of $HOME: only the paths the devbox shares with the host.
+# Lima expands each "~/..." location against the host HOME and does not
+# resolve symlinks; see the mountType note above and lima/mount-policy.md.
 # Host mounts are protected from the isolated package builder by a
 # guest-root-owned parent ACL. Agent files and the one-time OpenCode state
 # seed are read-only; project, config, data, credentials, and persistent L1

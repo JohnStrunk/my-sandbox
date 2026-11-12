@@ -728,7 +728,38 @@ def test_full_template_keeps_9p_until_direct_virtiofs_validation(
 
     assert config["mountType"] == "9p"
     template = (repo_root / LIMA_DIR / "devbox.yaml").read_text()
-    assert "virtiofsd could not start" in template
+    # The corrected record names the symlink constraint and the resolution
+    # pattern (#486); it must not claim a blanket startup failure.
+    assert '"virtiofsd could not start in this environment" record' in template
+    assert "path component is a symlink" in template
+    assert "BindMountSharedDir" in template
+    assert "readlink -f" in template
+    assert "mount-policy.md" in template
+
+
+@pytest.mark.unit
+def test_mount_policy_documents_the_virtiofs_symlink_constraint(
+    repo_root: Path,
+):
+    policy = (repo_root / "lima" / "mount-policy.md").read_text()
+
+    # #486: the policy records the constraint, the resolution pattern, and
+    # the repeatable nested-L1 check.
+    assert "## Virtiofs mount locations must not be symlinks" in policy
+    assert "BindMountSharedDir" in policy
+    assert "readlink -f" in policy
+    assert "test_virtiofs_shared_dir_requires_a_resolved_location" in policy
+    # The physical-host write failure is a separate, still-open problem.
+    assert "#317's separate physical-host failure" in policy
+
+
+@pytest.mark.unit
+def test_lima_readme_names_the_virtiofs_symlink_root_cause(repo_root: Path):
+    readme = (repo_root / LIMA_DIR / "README.md").read_text()
+
+    assert '"virtiofsd could not start" startup failure' in readme
+    assert "component is a symlink" in readme
+    assert "readlink -f" in readme
 
 
 @pytest.mark.unit
@@ -872,6 +903,19 @@ def test_system_script_installs_qemu_img_for_nested_lima(repo_root: Path):
     packages = _base_packages(repo_root)
 
     assert re.search(r"^\s*qemu-img\s*$", packages, re.MULTILINE)
+
+
+@pytest.mark.unit
+def test_system_script_installs_rust_virtiofsd_for_nested_virtiofs(
+    repo_root: Path,
+):
+    packages = _base_packages(repo_root)
+
+    # #486: nested virtiofs evaluation and the recursive-tier check need the
+    # Rust virtiofsd; Lima's Linux/QEMU virtiofs cannot use the
+    # QEMU-packaged qemu-virtiofsd.
+    assert re.search(r"^\s*virtiofsd\s*$", packages, re.MULTILINE)
+    assert not re.search(r"^\s*qemu-virtiofsd\s*$", packages, re.MULTILINE)
 
 
 @pytest.mark.unit
