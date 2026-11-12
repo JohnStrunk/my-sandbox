@@ -188,12 +188,51 @@ ensure_coderabbit_cli() {
   fi
 }
 
+# mermaid-cli's puppeteer dependency must not download a duplicate Chromium
+# at install time: the mmdc wrapper installed below points puppeteer at the
+# shared chrome-for-testing binary that Playwright provisioning manages.
+export PUPPETEER_SKIP_DOWNLOAD=1
+
 ensure_npm_package opencode @opencode/cli
 ensure_npm_package markdownlint_cli2 markdownlint-cli2
 ensure_npm_package playwright_cli @playwright/cli
 ensure_npm_package repomix repomix
 ensure_npm_package google_workspace_cli @googleworkspace/cli
+ensure_npm_package mermaid_cli @mermaid-js/mermaid-cli
 ensure_coderabbit_cli
+
+# npm recreates its `mmdc` bin link on every install. Keep the real binary as
+# `mmdc-bin` (the `semble`/`semble-bin` pattern) and install a wrapper that
+# points puppeteer at the shared chrome-for-testing binary, so plain `mmdc`
+# works for the guest user without environment plumbing. `ensure_npm_package`
+# skips a matching reinstall, so force one when the real binary is missing.
+if [[ ! -x "$HOME/.local/bin/mmdc-bin" ]]; then
+  npm install --global --prefix "$HOME/.local" --no-fund \
+    "@mermaid-js/mermaid-cli@$(manifest_version mermaid_cli)"
+fi
+if [[ -L "$HOME/.local/bin/mmdc" ]]; then
+  mv -f "$HOME/.local/bin/mmdc" "$HOME/.local/bin/mmdc-bin"
+fi
+cat >"$HOME/.local/bin/mmdc.wrapper-new" <<'WRAPPER'
+#!/bin/bash
+# mmdc wrapper: run the manifest-pinned mermaid-cli with the shared
+# chrome-for-testing binary that Playwright provisioning installs.
+set -euo pipefail
+mmdc_bin="${MMDC_BIN:-/var/lib/devbox-toolbuilder/.local/bin/mmdc-bin}"
+playwright_cache=/var/lib/devbox-toolbuilder/.cache/ms-playwright
+chrome=""
+while IFS= read -r candidate; do
+  [[ -x "$candidate" ]] && chrome="$candidate"
+done < <(printf '%s\n' "$playwright_cache"/chromium-*/chrome-linux*/chrome | sort -V)
+if [[ -z "$chrome" ]]; then
+  echo "mmdc: no shared chrome-for-testing binary under $playwright_cache" >&2
+  exit 1
+fi
+export PUPPETEER_EXECUTABLE_PATH="$chrome"
+exec "$mmdc_bin" "$@"
+WRAPPER
+chmod 0755 "$HOME/.local/bin/mmdc.wrapper-new"
+mv -f "$HOME/.local/bin/mmdc.wrapper-new" "$HOME/.local/bin/mmdc"
 
 ensure_uv_tool pre_commit "pre-commit==$(manifest_version pre_commit)" pre-commit
 ensure_uv_tool pipenv "pipenv==$(manifest_version pipenv)" pipenv

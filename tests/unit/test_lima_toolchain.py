@@ -59,6 +59,8 @@ def _version_output(name: str, version: str, go_version: str) -> str:
         return f"pre-commit {version}"
     if name in {"markdownlint_cli2", "opencode"}:
         return f"{name} v{version}"
+    if name == "mermaid_cli":
+        return version
     if name == "coderabbit_cli":
         return f"CodeRabbit CLI v{version}"
     return f"{name} {version}"
@@ -208,6 +210,7 @@ def test_lima_toolchain_check_reports_a_pinned_version_mismatch(
         "actionlint",
         "yamllint",
         "gocyclo",
+        "mermaid_cli",
     ],
 )
 @pytest.mark.unit

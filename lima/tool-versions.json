@@ -514,6 +514,15 @@
         "lima": true
       }
     },
+    "mermaid_cli": {
+      "version": "12.2.0",
+      "datasource": "npm",
+      "depName": "@mermaid-js/mermaid-cli",
+      "integrity": "version-only",
+      "consumers": {
+        "lima": true
+      }
+    },
     "coderabbit_cli": {
       "version": "0.9.3",
       "datasource": "custom.coderabbit-cli",

@@ -95,6 +95,28 @@ shared repository `AGENTS.md` or README.
 - The provisioned-VM test checks that this skill is active in the guest;
   toolchain pins are checked by `devbox-toolchain-check`.
 
+### Mermaid CLI
+
+- Runtime command: `mmdc` (the manifest-pinned `@mermaid-js/mermaid-cli`).
+- Use it to render Mermaid diagram sources (`.mmd` files or fenced Mermaid
+  blocks) into SVG or PNG images for documentation, design notes, or review
+  artifacts without leaving the VM.
+- Safe invocation: `mmdc --input diagram.mmd --output diagram.svg` (or a `.png`
+  output path; the format follows the output extension). Run it on diagram
+  sources you have reviewed, and write outputs into the task scratch directory
+  or the project tree rather than the shared config mounts.
+- The command runs puppeteer against the shared chrome-for-testing binary that
+  Playwright provisioning installs. A small wrapper resolves that binary and
+  sets `PUPPETEER_EXECUTABLE_PATH`, so no browser download or environment
+  setup is needed. Rendering works offline after provisioning.
+- If `mmdc` is unavailable or the diagram source uses Mermaid syntax the
+  installed version rejects, report the failure and keep the `.mmd` source as
+  the artifact of record instead of installing an unpinned renderer.
+- `devbox-toolchain-check` verifies the manifest pin;
+  `tests/vm/test_provisioned_vm.py` covers the version and an SVG/PNG
+  rendering smoke test. Manifest, installer, and wrapper changes apply on VM
+  restart.
+
 ### Semble
 
 - Runtime command: `semble` (including `semble search` and its local MCP
