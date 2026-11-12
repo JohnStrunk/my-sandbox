@@ -204,14 +204,21 @@ ensure_coderabbit_cli
 # npm recreates its `mmdc` bin link on every install. Keep the real binary as
 # `mmdc-bin` (the `semble`/`semble-bin` pattern) and install a wrapper that
 # points puppeteer at the shared chrome-for-testing binary, so plain `mmdc`
-# works for the guest user without environment plumbing. `ensure_npm_package`
-# skips a matching reinstall, so force one when the real binary is missing.
-if [[ ! -x "$HOME/.local/bin/mmdc-bin" ]]; then
-  npm install --global --prefix "$HOME/.local" --no-fund \
-    "@mermaid-js/mermaid-cli@$(manifest_version mermaid_cli)"
-fi
+# works for the guest user without environment plumbing.
 if [[ -L "$HOME/.local/bin/mmdc" ]]; then
   mv -f "$HOME/.local/bin/mmdc" "$HOME/.local/bin/mmdc-bin"
+fi
+if [[ ! -x "$HOME/.local/bin/mmdc-bin" ]]; then
+  # Repair a missing real binary (for example after manual deletion) by
+  # reinstalling and retrying the rename. Remove a non-symlink `mmdc` first:
+  # npm's bin linking must not collide with the wrapper file, and how npm
+  # treats an existing regular file is not a stable contract.
+  [[ -L "$HOME/.local/bin/mmdc" ]] || rm -f "$HOME/.local/bin/mmdc"
+  npm install --global --prefix "$HOME/.local" --no-fund \
+    "@mermaid-js/mermaid-cli@$(manifest_version mermaid_cli)"
+  if [[ -L "$HOME/.local/bin/mmdc" ]]; then
+    mv -f "$HOME/.local/bin/mmdc" "$HOME/.local/bin/mmdc-bin"
+  fi
 fi
 cat >"$HOME/.local/bin/mmdc.wrapper-new" <<'WRAPPER'
 #!/bin/bash
@@ -219,6 +226,10 @@ cat >"$HOME/.local/bin/mmdc.wrapper-new" <<'WRAPPER'
 # chrome-for-testing binary that Playwright provisioning installs.
 set -euo pipefail
 mmdc_bin="${MMDC_BIN:-/var/lib/devbox-toolbuilder/.local/bin/mmdc-bin}"
+if [[ -n "${PUPPETEER_EXECUTABLE_PATH:-}" ]]; then
+  # A caller-supplied browser path wins; do not override it.
+  exec "$mmdc_bin" "$@"
+fi
 playwright_cache=/var/lib/devbox-toolbuilder/.cache/ms-playwright
 chrome=""
 while IFS= read -r candidate; do

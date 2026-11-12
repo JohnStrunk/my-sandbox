@@ -115,7 +115,9 @@ shared repository `AGENTS.md` or README.
 - `devbox-toolchain-check` verifies the manifest pin;
   `tests/vm/test_provisioned_vm.py` covers the version and an SVG/PNG
   rendering smoke test. Manifest, installer, and wrapper changes apply on VM
-  restart.
+  restart. The embedded readiness probe deliberately does not list `mmdc`:
+  adding a probe command requires VM recreation, and provisioning itself
+  verifies the pin through `check_toolchain.py` on every start.
 
 ### Semble
 

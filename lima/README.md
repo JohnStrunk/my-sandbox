@@ -981,7 +981,8 @@ integration work.
   `golangci-lint`, `gocyclo`, manifest-pinned `actionlint` and `yamllint`, uv,
   Rust, Ruby, Node/npm, Playwright CLI + bundled Chromium, ast-grep + its
   skills, Semble + prefetched model, Repomix, Hadolint, markdownlint-cli2,
-  pre-commit, acli, Google Workspace CLI, Antigravity CLI, kind,
+  pre-commit, acli, Google Workspace CLI, Antigravity CLI, Mermaid CLI
+  (`mmdc`, reusing the Playwright Chromium for rendering), kind,
   Minikube v1.39.0, kubectl, Krew v0.5.0, Helm, and Pipenv. Assets declaring
   SHA-256 integrity are verified before installation; version-only tools have
   no manifest-level digest check. Direct downloads are fetched over HTTPS at

@@ -372,6 +372,58 @@ def test_isolated_toolbuilder_defers_krew_until_user_provisioning(repo_root: Pat
 
 
 @pytest.mark.unit
+def test_mermaid_cli_install_skips_the_puppeteer_browser_download(
+    repo_root: Path,
+):
+    """The npm install must not fetch a duplicate Chromium."""
+    script = (repo_root / "lima/provision-tools.sh").read_text()
+
+    skip_export = "export PUPPETEER_SKIP_DOWNLOAD=1"
+    ensure_call = "ensure_npm_package mermaid_cli @mermaid-js/mermaid-cli"
+
+    assert skip_export in script
+    assert ensure_call in script
+    assert script.index(skip_export) < script.index(ensure_call)
+
+
+@pytest.mark.unit
+def test_mermaid_cli_repair_reinstalls_without_bin_conflicts(repo_root: Path):
+    """The mmdc wrapper repair must not depend on npm bin-conflict behavior.
+
+    The rename before the repair keeps a fresh install from running twice.
+    The conflict guard removes a non-symlink wrapper before the repair
+    install, so npm's bin linking never sees a colliding regular file.
+    """
+
+    script = (repo_root / "lima/provision-tools.sh").read_text()
+
+    ensure_call = "ensure_npm_package mermaid_cli @mermaid-js/mermaid-cli"
+    rename = 'mv -f "$HOME/.local/bin/mmdc" "$HOME/.local/bin/mmdc-bin"'
+    repair_install = '"@mermaid-js/mermaid-cli@$(manifest_version mermaid_cli)"'
+    conflict_guard = '[[ -L "$HOME/.local/bin/mmdc" ]] || rm -f "$HOME/.local/bin/mmdc"'
+
+    assert script.count(rename) == 2
+    assert conflict_guard in script
+    assert script.index(ensure_call) < script.index(rename)
+    assert script.index(rename) < script.index(repair_install)
+    assert script.index(conflict_guard) < script.index(repair_install)
+    # The repair must retry the rename after its reinstall.
+    assert script.index(repair_install) < script.rindex(rename)
+
+
+@pytest.mark.unit
+def test_mermaid_wrapper_respects_a_caller_supplied_browser(repo_root: Path):
+    script = (repo_root / "lima/provision-tools.sh").read_text()
+
+    caller_check = 'if [[ -n "${PUPPETEER_EXECUTABLE_PATH:-}" ]]; then'
+    wrapper_export = 'export PUPPETEER_EXECUTABLE_PATH="$chrome"'
+
+    assert caller_check in script
+    assert wrapper_export in script
+    assert script.index(caller_check) < script.index(wrapper_export)
+
+
+@pytest.mark.unit
 def test_toolbuilder_pins_rustup_auto_self_update(repo_root: Path):
     tool_script = (repo_root / "lima/provision-tools.sh").read_text()
     system_script = (repo_root / "lima/provision-system.sh").read_text()

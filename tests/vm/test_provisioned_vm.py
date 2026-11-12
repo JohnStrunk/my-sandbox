@@ -652,6 +652,8 @@ task_root="$(mktemp -d /tmp/opencode/issue-487-mermaid.XXXXXXXX)"
 trap 'rm -rf -- "${task_root:?}"' EXIT
 
 installed_version="$(mmdc --version)"
+# Match check_toolchain's normalization: an optional v prefix is legitimate.
+installed_version="${installed_version#v}"
 [[ "$installed_version" == "$expected_version" ]]
 
 cat >"$task_root/diagram.mmd" <<'EOF'
@@ -669,6 +671,9 @@ mmdc --input "$task_root/diagram.mmd" --output "$task_root/diagram.png"
 png_description="$(file -b "$task_root/diagram.png")"
 grep -qi '^png image data' <<<"$png_description"
 test -s "$task_root/diagram.png"
+
+# Puppeteer must reuse the shared Playwright browser, not download its own.
+test ! -e /var/lib/devbox-toolbuilder/.cache/puppeteer
 """
     result = devbox_vm.run(
         [
