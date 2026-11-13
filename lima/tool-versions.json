@@ -465,7 +465,7 @@
       }
     },
     "semble": {
-      "version": "0.7.1",
+      "version": "0.7.2",
       "datasource": "pypi",
       "depName": "semble",
       "integrity": "version-only",
