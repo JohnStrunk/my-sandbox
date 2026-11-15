@@ -140,7 +140,7 @@
       }
     },
     "rustup": {
-      "version": "1.29.2",
+      "version": "1.29.3",
       "datasource": "github-tags",
       "depName": "rust-lang/rustup",
       "integrity": "version-only",
@@ -410,7 +410,7 @@
       }
     },
     "pipenv": {
-      "version": "2026.10.5",
+      "version": "2026.10.6",
       "datasource": "pypi",
       "depName": "pipenv",
       "integrity": "version-only",
@@ -591,7 +591,7 @@
       }
     },
     "renovatebot_hooks": {
-      "version": "44.202.1",
+      "version": "44.220.0",
       "datasource": "github-tags",
       "depName": "renovatebot/pre-commit-hooks",
       "integrity": "version-only",
@@ -628,7 +628,7 @@
       }
     },
     "zizmor": {
-      "version": "1.31.1",
+      "version": "1.32.0",
       "datasource": "github-tags",
       "depName": "zizmorcore/zizmor-pre-commit",
       "integrity": "version-only",
