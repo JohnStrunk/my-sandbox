@@ -67,6 +67,11 @@ images:
 # locations as real directories. 9p tolerates symlinked locations, so the
 # "~/..." locations below are safe with this default. lima/mount-policy.md
 # records the constraint and the repeatable nested-L1 check.
+#
+# The #317 physical-host guest write failure is a virtiofsd gid-mapping limit.
+# virtiofsd's namespace sandbox maps only the host user identity, while Lima
+# sets only the guest uid and cannot set the guest gid. lima/mount-policy.md
+# records the evidence, tested workarounds, and nested reproduction.
 mountType: "9p"
 
 # Never mount all of $HOME: only the paths the devbox shares with the host.

@@ -848,10 +848,11 @@ def test_full_template_keeps_9p_until_direct_virtiofs_validation(
     assert "BindMountSharedDir" in template
     assert "readlink -f" in template
     assert "mount-policy.md" in template
+    assert "gid-mapping limit" in template
 
 
 @pytest.mark.unit
-def test_mount_policy_documents_the_virtiofs_symlink_constraint(
+def test_mount_policy_documents_virtiofs_symlink_and_gid_mapping_constraints(
     repo_root: Path,
 ):
     policy = (repo_root / "lima" / "mount-policy.md").read_text()
@@ -862,17 +863,33 @@ def test_mount_policy_documents_the_virtiofs_symlink_constraint(
     assert "BindMountSharedDir" in policy
     assert "readlink -f" in policy
     assert "test_virtiofs_shared_dir_requires_a_resolved_location" in policy
-    # The physical-host write failure is a separate, still-open problem.
-    assert "#317's separate physical-host failure" in policy
+    # #317: the policy records the guest gid mapping blocker, the repeatable
+    # nested-L1 check, and the tested workarounds.
+    assert "\n## Guest gid must match the host gid (#317)\n" in policy
+    assert "gid_map" in policy
+    assert "test_virtiofs_guest_gid_must_match_host_gid" in policy
+    assert "translate-gid" in policy
 
 
 @pytest.mark.unit
-def test_lima_readme_names_the_virtiofs_symlink_root_cause(repo_root: Path):
+def test_lima_readme_names_virtiofs_symlink_and_gid_mapping_root_causes(
+    repo_root: Path,
+):
     readme = (repo_root / LIMA_DIR / "README.md").read_text()
 
     assert '"virtiofsd could not start" startup failure' in readme
     assert "component is a symlink" in readme
     assert "readlink -f" in readme
+    assert "gid-mapping limit" in readme
+    assert "decision is to keep 9p" in readme
+
+
+@pytest.mark.unit
+def test_lima_readme_records_virtiofs_blocked_by_gid_mapping(repo_root: Path):
+    readme = (repo_root / LIMA_DIR / "README.md").read_text()
+
+    assert "virtiofs after host validation" not in readme
+    assert "9p, RW (virtiofs blocked: #317 gid mapping)" in readme
 
 
 @pytest.mark.unit
