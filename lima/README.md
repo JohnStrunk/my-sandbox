@@ -794,18 +794,18 @@ checkout-relative `knowledge-base/` symlink.
 
 | Path | Shared? | Notes |
 | --- | --- | --- |
-| `~/src` | 9p, RW (virtiofs after host validation) | Same-path projects root and worktrees; its guest-side parent is accessible only to the guest UID |
-| `<repo>/.venv` | 9p, RW (virtiofs after host validation) | Under `~/src`; venv caveat below |
-| `~/kb` | 9p, RW (virtiofs after host validation) | Mounted at `~/.host-config/kb`; a same-path alias preserves absolute worktree pointers |
+| `~/src` | 9p, RW (virtiofs blocked: #317 gid mapping) | Same-path projects root and worktrees; its guest-side parent is accessible only to the guest UID |
+| `<repo>/.venv` | 9p, RW (virtiofs blocked: #317 gid mapping) | Under `~/src`; venv caveat below |
+| `~/kb` | 9p, RW (virtiofs blocked: #317 gid mapping) | Mounted at `~/.host-config/kb`; a same-path alias preserves absolute worktree pointers |
 | Host `~/.agents` → guest `~/.host-config/agents` | 9p, RO | Root-owned parent grants traversal only to guest UID; VM-owned skills win in guest-local `~/.agents` |
-| `~/.config/opencode` | 9p, RW (virtiofs after host validation) | Mounted under `~/.host-config/config/opencode`, linked into guest config |
-| `~/.local/share/opencode` | 9p, RW (virtiofs after host validation) | Mounted under `~/.host-config/local/share/opencode` |
+| `~/.config/opencode` | 9p, RW (virtiofs blocked: #317 gid mapping) | Mounted under `~/.host-config/config/opencode`, linked into guest config |
+| `~/.local/share/opencode` | 9p, RW (virtiofs blocked: #317 gid mapping) | Mounted under `~/.host-config/local/share/opencode` |
 | Host `~/.local/state/opencode` | 9p, RO | Trusted L1 can read the source; only allowlisted preferences/history are copied. Registrations, locks, temp files, symlinks, and unknown files are not imported |
 | Host `~/.local/state/devbox-opencode` → guest `~/.local/state/opencode` | 9p, RW | Dedicated L1 state, mode `0700`; preserves model favorites, TUI settings/history, and the L1 service registration across recreation without sharing the host's active registration |
-| `~/.config/gh` | 9p, RW (virtiofs after host validation) | Host credentials, protected from package builder |
-| `~/.config/gcloud` | 9p, RW (virtiofs after host validation) | gcloud ADC/config, protected from package builder |
-| `~/.config/acli` | 9p, RW (virtiofs after host validation) | Atlassian CLI config, protected from package builder |
-| `~/.config/gws` | 9p, RW (virtiofs after host validation) | Google Workspace CLI config, protected from package builder |
+| `~/.config/gh` | 9p, RW (virtiofs blocked: #317 gid mapping) | Host credentials, protected from package builder |
+| `~/.config/gcloud` | 9p, RW (virtiofs blocked: #317 gid mapping) | gcloud ADC/config, protected from package builder |
+| `~/.config/acli` | 9p, RW (virtiofs blocked: #317 gid mapping) | Atlassian CLI config, protected from package builder |
+| `~/.config/gws` | 9p, RW (virtiofs blocked: #317 gid mapping) | Google Workspace CLI config, protected from package builder |
 | Host `~/.coderabbit` → guest `~/.coderabbit` | 9p, RW | Mounted at `~/.host-config/coderabbit`; CodeRabbit user config/auth is protected from the package builder and is not mounted in nested L2s |
 | `/var/lib/devbox-toolbuilder` | VM-local | npm/uv/Rust installs, Playwright browser, Semble model; guest can use installed binaries but cannot modify packages |
 | `~/.cache/{go,uv,semble/index}` | VM-local | Guest-writable Go, uv, and Semble index caches |
@@ -864,14 +864,23 @@ component is a symlink (`BindMountSharedDir` EINVAL before QEMU starts), and
 the L1's `~/src` and other linked shared paths are symlinks. Resolve each
 host mount location (`readlink -f`) before `limactl create`/`start`, or keep
 mount locations as real directories, when creating a virtiofs VM; 9p
-tolerates symlinked locations. [`mount-policy.md`](mount-policy.md) records
-the full constraint and the repeatable nested-L1 check. The command below
-runs the #287 disposable SQLite probe with an opt-in mount type; it is not
-the full mixed-write benchmark from #268.
+tolerates symlinked locations. The guest write failure on the physical host is
+attributed to a virtiofsd gid-mapping limit: virtiofsd uses its default
+namespace sandbox, which maps only the host user identity, while Lima sets only
+the guest uid and has no gid field. The physical boundary was not re-run in
+this validation. The decision is to keep 9p until Lima supports gid mapping or
+passes the translate flags. [`mount-policy.md`](mount-policy.md) records the
+full constraint, the evidence, and the tested workarounds. The command below
+runs the #287 disposable SQLite probe with an opt-in mount type; it is not the
+full #268 mixed-write benchmark.
 
 Run it on the physical/outer Linux host with Lima/QEMU. Do not run it inside
 the devbox L1, where it starts a nested L2 and tests a nested boundary instead
-of the physical-host-to-L1 filesystem boundary. Use either invocation:
+of the physical-host-to-L1 filesystem boundary. The recorded physical-host
+attempt failed with `EINVAL` on guest creates before the SQLite probe, because
+the host user's gid differed from the guest image default gid. The probe is not
+expected to pass until Lima supports gid mapping or passes the translate flags.
+Use either invocation:
 
 ```shell
 DEVBOX_VM_TEST_MOUNT_TYPE=virtiofs scripts/run-vm-ci.sh vm

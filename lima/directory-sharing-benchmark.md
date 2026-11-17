@@ -12,6 +12,10 @@
   lima-vm/lima#2152. Keep 9p as a fallback until the same write check passes
   against a direct host-to-L1 virtiofs mount; this experiment used an L1 whose
   `~/src` was already a 9p mount.
+
+  _Status note (2026-11-17):_ The direct host-to-L1 write check fails for the
+  gid-mapping reason recorded in `mount-policy.md` (#317), so the performance
+  result stays conditional and 9p stays the default.
 - **For nested test VMs:** use a minimal mount set and copy the repository to
   the L2's VM-local disk for ordinary tests. Do not mount all of `~/src` over
   another 9p mount: the large-repository `git status` did not finish within 20
@@ -177,6 +181,47 @@ write error, WAL mode stayed enabled, and the competing writer waited for the
 held lock. The virtiofs instance's Lima host-agent/serial logs also contained
 no `EINVAL` or `Invalid argument` text. This rules out the reported failure for
 this workload and stack, but does not close or invalidate Lima issue #2152.
+
+## Follow-up: direct host-to-L1 9p baseline (2026-11-17)
+
+On 2026-11-17, baseline measurements were recorded inside the production L1
+devbox VM. The `~/src` path was the physical host's 9p mount
+(`findmnt -T ~/src`:
+`9p rw,relatime,cache=0x5,access=client,msize=131072,trans=virtio`). The VM ran
+kernel `6.19.10-300.fc44.x86_64`.
+
+The harness `lima/benchmark_sessiondb.py` ran with default settings (1,500
+files, 200 transactions, and a 250 ms lock hold). It ran across three fresh
+output directories on the 9p mount: `~/src/.issue-317-bench/run-1`,
+`run-2`, and `run-3`. All runs used WAL journal mode and reported no errors.
+
+Across the three harness runs, file workload times were 5.616 s, 5.683 s, and
+5.668 s. Database end-to-end times were 0.660 s, 0.636 s, and 0.640 s. The
+200-transaction loop times were 0.251 s, 0.248 s, and 0.245 s. Lock wait times
+were 0.336 s, 0.336 s, and 0.337 s.
+
+In the issue-317 worktree, `git status` ran three times with a warm cache. The
+median elapsed time was 0.151 s (range 0.149–0.154 s, with runs of 0.151 s,
+0.154 s, and 0.149 s).
+
+| Workload | Direct host-to-L1 9p | Prior nested 9p | Prior nested virtiofs |
+| --- | ---: | ---: | ---: |
+| File workload (seconds) | median 5.668 (range 5.616–5.683, 3 runs) | median 217.382 (range 185.620–221.786, 4 runs) | median 4.834 (range 4.414–5.914, 13 runs) |
+| 200-transaction loop (seconds) | median 0.248 (range 0.245–0.251, 3 runs) | 0.651 | 0.229 |
+| Database end-to-end (seconds) | median 0.640 (range 0.636–0.660, 3 runs) | median 1.347 (range 1.239–1.406) | median 0.600 (range 0.590–0.625) |
+| Observed writer lock wait (seconds) | median 0.336 (range 0.336–0.337) | 0.268–0.277 | 0.331–0.332 |
+| `git status` (warm cache, seconds) | median 0.151 (range 0.149–0.154, 3 runs) | 2.438 | 0.078 |
+
+The direct host-to-L1 9p path performs in the same range as the nested virtiofs
+measurements from the 2026-09-29 benchmark. The large performance gap in that
+earlier benchmark resulted from stacking 9p on 9p in a nested L2 VM. That
+configuration is not the production path. The performance argument for
+switching the production L1 devbox to virtiofs is therefore not supported by
+these measurements.
+
+These measurements are indicative, not a controlled comparison. They were
+recorded on different virtual machines and dates, and the `git status` runs
+used a warm cache.
 
 ## Inotify and iteration loop
 

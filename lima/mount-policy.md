@@ -129,9 +129,91 @@ virtiofs VM whose mount location is a symlink and asserts the failure, then
 starts the same VM shape with the resolved directory and asserts the virtiofs
 mount plus guest create/write and host-side visibility.
 
-This does not resolve #317's separate physical-host failure, where virtiofs
-mounts and host-to-guest reads work but guest file creates/writes return
-EINVAL after startup.
+## Guest gid must match the host gid (#317)
+
+On the physical host, the failure of guest create/write operations under
+virtiofs is attributed to a virtiofsd gid-mapping limit. Virtiofs mounts and
+host-to-guest reads succeed, but guest create/write operations fail with
+`EINVAL` (`Invalid argument`). The physical boundary was not re-run in this
+validation, but virtiofs mounts started reliably in the nested runs, and the
+recorded physical-host attempt served reads before its creates failed. The
+failure has a three-part cause:
+
+1. Lima v2.2.1 `VirtiofsdCmdline` (`pkg/driver/qemu/qemu.go`) passes only
+   `--socket-path` and `--shared-dir` to virtiofsd.
+2. virtiofsd 1.14.0 (`/usr/libexec/virtiofsd`, RPM
+   `virtiofsd-1.14.0-1.fc44.x86_64`) uses its default `--sandbox=namespace`.
+   That user namespace maps exactly one uid and one gid: the identity of the
+   user that started `limactl`.
+3. Lima sets the guest user's uid from the host, but `limatype.User` has no gid
+   field. The guest keeps the image default gid, and Lima cannot set the guest
+   primary gid from a template.
+
+Upstream issue lima-vm/lima#2152 records this failure and remains open.
+
+The #317 triage update on 2026-11-12 recorded physical-host values: host user
+uid 101587 and primary gid 101587, but L1 guest user uid 101587 and primary gid
+1000. Testing inside the L1 on 2026-11-17 with limactl 2.2.1, QEMU 10.2.2, and
+virtiofsd 1.14.0 reproduced this behavior. In this nested check, "host" means
+the L1. A nested L2 virtiofsd process reported that `/proc/<pid>/uid_map`
+contained `101587 101587 1` and `/proc/<pid>/gid_map` contained `1000 1000 1`:
+
+```text
+101587 101587 1
+1000 1000 1
+```
+
+When the primary gid of the L2 guest user was 4242, guest creates in the
+virtiofs mount failed with `Invalid argument` and created no host file. When the
+guest primary gid matched the L1 host's gid (1000), guest creates succeeded,
+and the host observed the file with gid 1000.
+
+The new recursive-tier test `test_virtiofs_guest_gid_must_match_host_gid` in
+`tests/vm/test_recursive_vm.py` records `/proc/<pid>/uid_map` and `gid_map`. It
+reproduces the `EINVAL` failure and proves the guest-gid alignment workaround.
+The test passed in the L1 on 2026-11-17 (`1 passed`, 35.69 s).
+
+Two workarounds were tested on 2026-11-17 in a nested L2:
+
+- **Guest gid alignment at provision time:** A system provision script can
+  create a group with the host gid and run `usermod -g` with that group. In
+  tests, a user-mode provision script was measured to run with the new gid in
+  the same boot. An aligned primary gid then uses the mapped gid, and the nested
+  check proves that an aligned gid makes a guest create succeed. However, Lima
+  SSH session machinery resolves credentials before boot scripts run.
+  Interactive `limactl shell` sessions keep the gid that the persistent SSH
+  session resolved at boot, and a VM restart refreshes it. Refreshing a primary
+  gid by terminating the guest user session was not tested. Because Lima cannot
+  set the primary gid from the template, this approach requires plumbing in the
+  host gid and restarting the VM after first boot.
+- **Virtiofsd translate flags:** `--translate-uid` and `--translate-gid` work
+  while `--sandbox=namespace` remains active. Lima v2.2.1 reads only `type` and
+  `binary` from the vhost-user JSON description in
+  `~/.local/share/qemu/vhost-user/*.json` (which Lima searches before
+  `/usr/share/qemu/vhost-user`). The tested override pointed `binary` at a
+  wrapper script that execs `/usr/libexec/virtiofsd` with
+  `--translate-uid squash-guest:0:<host uid>:4294967295` and
+  `--translate-gid squash-guest:0:<host gid>:4294967295`. A guest create with
+  gid 4242 succeeded without virtiofsd warnings, and both sides saw
+  `<host uid>:<host gid>`. Lima does not pass these flags, and the override
+  affects every Lima VM that the host user starts. The repository does not
+  adopt this override.
+
+The decision is to keep 9p. No supported template or launcher change fixes the
+physical-host failure. Revisit virtiofs when Lima supports gid mapping or passes
+the translate flags. A direct host-to-L1 performance comparison is not relevant
+to the decision until guest create/write operations succeed on that boundary.
+Validating that boundary still requires a run on a supported physical host.
+
+Direct host-to-L1 9p baseline measurements recorded on 2026-11-17 show that the
+direct 9p baseline is adequate for the measured workloads. For the 1,500-file
+workload, direct 9p achieved a median of 5.668 s compared to 4.834 s for nested
+virtiofs. For the 200-transaction loop, direct 9p achieved a median of 0.248 s
+compared to 0.229 s for nested virtiofs. The large gap in the 2026-09-29
+benchmark came from stacking 9p on 9p in a nested L2 VM. A direct virtiofs
+comparison stays blocked until guest writes succeed. See
+[`directory-sharing-benchmark.md`](directory-sharing-benchmark.md) for details
+and comparison data.
 
 ## Validation notes
 
