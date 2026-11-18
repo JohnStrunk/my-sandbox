@@ -96,11 +96,15 @@ mounts:
     mountPoint: "{{.Home}}/.host-config/agents"
     writable: false
   # Keep OpenCode config and session data host-visible for host settings,
-  # session resume, and CodeBurn. The separate read-only state mount seeds
-  # durable preferences into an L1-only persistent state directory below.
+  # read-only session history, and CodeBurn. The separate read-only state
+  # mount seeds durable preferences into an L1-only persistent state
+  # directory below.
   - location: "~/.config/opencode"
     mountPoint: "{{.Home}}/.host-config/config/opencode"
     writable: true
+  # #287 single-writer rule: the L1 devbox opencode service is the only writer
+  # of the shared session data; the host is read-only at all times
+  # (convention, not enforced by the mount). See lima/mount-policy.md.
   - location: "~/.local/share/opencode"
     mountPoint: "{{.Home}}/.host-config/local/share/opencode"
     writable: true

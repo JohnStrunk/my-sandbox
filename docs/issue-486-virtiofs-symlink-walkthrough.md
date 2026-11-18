@@ -23,13 +23,18 @@ virtiofs mounts, and a recursive-tier check encodes the whole behavior.
 ## Source map
 
 - Corrected template record: `lima/devbox.yaml:56-82`.
-- Mount policy constraint and resolution pattern:
-  `lima/mount-policy.md:85-134`.
-- README rationale and package bullet: `lima/README.md:841-856,1006-1007`.
+- Mount policy constraint and resolution pattern: `lima/mount-policy.md`,
+  section `## Virtiofs mount locations must not be symlinks`.
+- README rationale and package bullet: `lima/README.md`, sections
+  `## Shared vs VM-local state` and `## What is inside`.
 - Package set and embedded digest: `lima/fedora-packages.sh:91-96`,
   `lima/provision-system.sh:500`.
 - Recursive check: `tests/vm/test_recursive_vm.py:129-253`.
-- Unit pins: `tests/unit/test_lima_template.py:724-762,909-920`,
+- Unit pins: `test_full_template_keeps_9p_until_direct_virtiofs_validation`,
+  `test_mount_policy_documents_virtiofs_symlink_and_gid_mapping_constraints`,
+  `test_lima_readme_names_virtiofs_symlink_and_gid_mapping_root_causes`, and
+  `test_system_script_installs_rust_virtiofsd_for_nested_virtiofs` in
+  `tests/unit/test_lima_template.py`;
   `tests/unit/test_vm_level_marker.py:567`.
 
 ## The constraint trigger: the L1's shared paths are symlinks

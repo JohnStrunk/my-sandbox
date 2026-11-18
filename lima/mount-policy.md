@@ -15,7 +15,7 @@ state. **Neither policy mounts all of `$HOME`.**
 | `~/kb` | `~/.host-config/kb`, RW; `~/kb` and the `KbPath` absolute alias point to it | Keep. `kbase.py` and notes are updated from the VM, and KB worktree `.git` pointers use the host absolute path. The canonical shell/file-search path is `~/kb`; the repository does not provide a `knowledge-base/` symlink. Readiness checks the alias and a readable `kbase.py`. | The real L1 KB is not mounted; full-provisioning smokes may mount only the task-local sentinel described below. |
 | `~/.agents` | `~/.host-config/agents`, RO | Keep. Host skills are inputs to the guest-local skill overlay. The package-builder account cannot traverse `.host-config`. | Not mounted; L2 tests use only explicitly staged test inputs. |
 | `~/.config/opencode` | `~/.host-config/config/opencode`, RW | Keep. Contains shared OpenCode configuration, provider authentication, agents, commands, plugins, and settings. | Not mounted. No host provider/config secrets in test VMs. |
-| `~/.local/share/opencode` | `~/.host-config/local/share/opencode`, RW | Keep. Contains the session database and snapshots used for host-visible session history and CodeBurn usage metrics. Host/VM SQLite coherency remains subject to the validation caveat below. | Real L1 data is not mounted. Ordinary L2 tests keep data on the VM-local disk; full-provisioning smokes use a disposable temporary source. |
+| `~/.local/share/opencode` | `~/.host-config/local/share/opencode`, RW | Keep. Contains the session database and snapshots used for host-visible session history and CodeBurn usage metrics. The L1 service is the single writer; the host is read-only at all times (convention, not enforced by the mount). See "Session-data sharing policy (#287)" below. | Real L1 data is not mounted. Ordinary L2 tests keep data on the VM-local disk; full-provisioning smokes use a disposable temporary source. |
 | `~/.local/state/opencode` | `~/.host-config/local/state/opencode-seed`, RO | Keep only as a one-time import source for existing host preferences/history. The trusted L1 user can read the source, including its service registration; only the explicit preference/history allowlist is copied, so registrations, locks, temp files, symlinks, and unrecognized future files are not imported. | Real L1 state is not mounted; a full-provisioning smoke uses only a disposable temporary seed source. |
 | `~/.local/state/devbox-opencode` | `~/.host-config/local/state/devbox-opencode`, RW, mode `0700` | Keep. This dedicated host-backed directory is the L1's persistent `~/.local/state/opencode` target. It preserves L1 model favorites, TUI settings, prompt history, and its own service registration across VM recreation without sharing the host's default registration. The one-time host seed does not continuously sync back to the host default state directory. | Real L1 state is not mounted. Ordinary L2s keep independent VM-local state; a full-provisioning smoke uses disposable temporary state. The recursive test starts two actual OpenCode services concurrently and checks that both registrations remain stable. |
 | `~/.config/gh` | `~/.host-config/config/gh`, RW | Keep. Authenticated `gh` is the canonical GitHub interface inside the VM. | Not mounted. |
@@ -74,13 +74,68 @@ reseeding. The state directory is mode
 `0700`; the persistent state mount is behind the protected `.host-config`
 parent and is not available to the package builder.
 
-The seed is intentionally one-way: edits made later by the host's regular
-OpenCode process do not overwrite the L1's preferences, and L1 service
-registrations are not shared with that process. The separately mounted data
+The seed is intentionally one-way. When the host's regular OpenCode process
+runs while the L1 service is stopped, edits made later by that process do
+not overwrite the L1's preferences. L1 service registrations are not shared
+with that process. The separately mounted data
 directory remains the shared location for OpenCode sessions. The dedicated
 `~/.local/state/devbox-opencode` directory persists across `devbox --recreate`,
 `devbox --delete`, and manual Lima recreation; remove that exact directory only
 when intentionally clearing the L1's persisted OpenCode preferences/history.
+
+## Session-data sharing policy (#287)
+
+`~/.local/share/opencode` holds the session database, snapshots, and logs.
+The host needs read visibility into it for session history and CodeBurn.
+Issue #287 asked how the host and the L1 may share it. The decision: keep
+the writable host-to-L1 mount at `~/.host-config/local/share/opencode`, and
+add one rule for the host.
+
+**Single-writer rule.** Only one OpenCode writer exists: the L1 `devbox
+opencode` service. The host treats `~/.local/share/opencode` as read-only
+at all times: session inspection, logs, and CodeBurn only. Do not run a
+host-side OpenCode writer against the shared database. Run only the managed
+`devbox opencode` service in the L1. Do not start a second OpenCode service
+in the guest or on the host against the shared database. The host may
+remove old log files manually; that is the only host-side write. The mount
+stays writable because the L1 is the writer and the host reads. The mount
+does not enforce the host's read-only side; the rule is a convention.
+
+The evidence behind the rule:
+
+- The 9p SQLite contention probe failed on 2026-10-02: the host held
+  `BEGIN IMMEDIATE` while the L1's competing `BEGIN IMMEDIATE` succeeded.
+  Concurrent host/L1 WAL writers are not validated on 9p.
+- Virtiofs is not an option for this mount today. The #317 gid-mapping
+  blocker, recorded by PR #512, keeps the template on 9p. The one
+  physical-host virtiofs attempt failed with `EINVAL` on guest creates
+  before the SQLite probe ran, so there is no virtiofs SQLite result.
+
+The evidence does not establish that production session data stays intact
+under concurrent writers. It does not establish that host reads during L1
+writes are safe. It does not automate CodeBurn session parsing. No test
+proves these.
+
+The rule restrains the host, but the risk runs in both directions. The L1
+holds the mount writable, so it can read, write, and delete the host
+session data at all times, even when no host process runs. Back up the
+host directory if the session history matters.
+
+A host writer plus the running L1 service is an unsupported combination.
+A violation can corrupt or lose session data. The user accepted this risk
+for read-only host use.
+
+Consequences: the L1 workflow keeps using `devbox opencode`; host session
+history and CodeBurn stay available through the mount.
+
+The readiness probe covers the mount's presence, the guest symlink shape,
+and the guest-only parent ACL. It does not validate the host source path,
+writability, or concurrency. The probe checks the guest link, not the host
+source path. A symlinked host location is followed on 9p (see #486).
+
+Revisit this policy when Lima supports gid mapping or passes the virtiofsd
+translate flags, a physical-host virtiofs SQLite probe succeeds (#317), and
+the host mount location resolves to a non-symlink path (#486).
 
 ## Virtiofs mount locations must not be symlinks
 
@@ -273,8 +328,9 @@ and comparison data.
   creation, then records requested and effective `findmnt` FSTYPE for L1's
   `~/.local/share/opencode` after first start and stop/restart; any mismatch
   fails the run. This does not change the template, normal `devbox` launcher,
-  or CI workflow default. Issue #287 remains open/blocked until a successful
-  virtiofs run or a policy decision resolves this question.
+  or CI workflow default. Issue #287 is decided by the "Session-data sharing
+  policy (#287)" section above: the shared mount stays RW, the L1 service
+  stays the only writer, and the host stays read-only at all times.
 - The recursive tests mount only explicitly staged test inputs: a read-only
   staged checkout snapshot for the repository checks and a read-only OpenCode
   executable for the concurrent-service soak. The marker provisioner is staged
