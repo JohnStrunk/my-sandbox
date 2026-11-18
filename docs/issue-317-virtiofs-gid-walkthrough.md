@@ -20,11 +20,16 @@ on 9p.
 ## Source map
 
 - Template record: `lima/devbox.yaml:71-75`
-- Mount policy: `lima/mount-policy.md:132-217`
+- Mount policy: `lima/mount-policy.md`, section
+  `## Guest gid must match the host gid (#317)`
 - Benchmark follow-up: `lima/directory-sharing-benchmark.md:15-18,185-225`
-- README rationale: `lima/README.md:797-809,867-883`
+- README rationale: `lima/README.md`, section `## Shared vs VM-local state`
 - Recursive test: `tests/vm/test_recursive_vm.py:264-547`
-- Unit tests: `tests/unit/test_lima_template.py:851,855-893`,
+- Unit tests: `test_full_template_keeps_9p_until_direct_virtiofs_validation`,
+  `test_mount_policy_documents_virtiofs_symlink_and_gid_mapping_constraints`,
+  `test_lima_readme_names_virtiofs_symlink_and_gid_mapping_root_causes`, and
+  `test_lima_readme_records_virtiofs_blocked_by_gid_mapping` in
+  `tests/unit/test_lima_template.py`;
   `tests/unit/test_vm_level_marker.py:567`
 
 ## Host environment and daemon versions

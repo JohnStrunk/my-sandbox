@@ -16,6 +16,10 @@ from lima.check_toolchain import canonical_search_path
 
 LIMA_DIR = "lima"
 
+# Section heading of the #287 session-data policy in lima/mount-policy.md;
+# lima/README.md cites it by name.
+SESSION_DATA_POLICY_HEADING = "Session-data sharing policy (#287)"
+
 # Public Docker Release key ID (fingerprint suffix), not a secret.
 DOCKER_RPM_KEY_ID = "c52feb6b621e9f35"  # pragma: allowlist secret
 
@@ -869,6 +873,73 @@ def test_mount_policy_documents_virtiofs_symlink_and_gid_mapping_constraints(
     assert "gid_map" in policy
     assert "test_virtiofs_guest_gid_must_match_host_gid" in policy
     assert "translate-gid" in policy
+
+
+@pytest.mark.unit
+def test_mount_policy_decides_shared_session_data_policy(repo_root: Path):
+    policy = (repo_root / "lima" / "mount-policy.md").read_text()
+    heading = f"## {SESSION_DATA_POLICY_HEADING}"
+    assert heading in policy, f"missing policy section {heading!r}"
+    section = " ".join(policy.split(heading, 1)[1].split("\n## ", 1)[0].split())
+
+    # The decision keeps the shared writable mount with a single writer.
+    assert "`~/.local/share/opencode`" in section
+    assert "`~/.host-config/local/share/opencode`" in section
+    assert "writable host-to-L1 mount" in section
+    # The single-writer rule is unconditional and names the only host write.
+    assert (
+        "Only one OpenCode writer exists: the L1 `devbox opencode` service" in section
+    )
+    assert "read-only at all times" in section
+    assert "Do not run a host-side OpenCode writer" in section
+    assert "Do not start a second OpenCode service" in section
+    assert "remove old log files manually" in section
+    assert "only host-side write" in section
+    # The evidence and its limits stay recorded.
+    assert "`BEGIN IMMEDIATE`" in section
+    assert "gid-mapping" in section
+    assert "PR #512" in section
+    assert "no virtiofs SQLite result" in section
+    assert "No test proves these" in section
+    # The risk runs in both directions, even with no host process.
+    assert "even when no host process runs" in section
+    assert "corrupt or lose session data" in section
+    # Readiness covers presence, symlink shape, and the parent ACL only.
+    assert "guest-only parent ACL" in section
+    assert (
+        "does not validate the host source path, writability, or concurrency" in section
+    )
+    # The revisit condition names the upstream fix, the probe, and #486.
+    assert "gid mapping or passes the virtiofsd" in section
+    assert "(#317)" in section
+    assert "non-symlink path (#486)" in section
+    # The old open/blocked record is gone.
+    assert "remains open/blocked" not in policy
+
+
+@pytest.mark.unit
+def test_lima_readme_and_template_state_the_session_data_single_writer_rule(
+    repo_root: Path,
+):
+    readme = " ".join((repo_root / LIMA_DIR / "README.md").read_text().split())
+    template = " ".join((repo_root / LIMA_DIR / "devbox.yaml").read_text().split())
+
+    # The README names the rule, its conventional nature, and the policy
+    # section; the old open/blocked record is gone.
+    assert "the L1 `devbox opencode` service is the single writer" in readme
+    assert "the host must not write" in readme
+    assert "not enforced by the mount" in readme
+    assert "read-only at all times" in readme
+    assert f'"{SESSION_DATA_POLICY_HEADING}"' in readme
+    assert "`mount-policy.md`" in readme
+    assert "remains open/blocked" not in readme
+    # The template states the unconditional rule at the mount it governs.
+    assert "#287 single-writer rule" in template
+    assert "the L1 devbox opencode service is the only writer" in template
+    assert "the host is read-only at all times" in template
+    assert "read-only session history" in template
+    assert "session resume" not in template
+    assert "lima/mount-policy.md" in template
 
 
 @pytest.mark.unit

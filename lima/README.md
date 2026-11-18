@@ -799,7 +799,7 @@ checkout-relative `knowledge-base/` symlink.
 | `~/kb` | 9p, RW (virtiofs blocked: #317 gid mapping) | Mounted at `~/.host-config/kb`; a same-path alias preserves absolute worktree pointers |
 | Host `~/.agents` → guest `~/.host-config/agents` | 9p, RO | Root-owned parent grants traversal only to guest UID; VM-owned skills win in guest-local `~/.agents` |
 | `~/.config/opencode` | 9p, RW (virtiofs blocked: #317 gid mapping) | Mounted under `~/.host-config/config/opencode`, linked into guest config |
-| `~/.local/share/opencode` | 9p, RW (virtiofs blocked: #317 gid mapping) | Mounted under `~/.host-config/local/share/opencode` |
+| `~/.local/share/opencode` | 9p, RW (virtiofs blocked: #317 gid mapping) | Mounted under `~/.host-config/local/share/opencode`; the L1 service is the single writer, and the host must not write it (convention, not enforced by the mount; manual log removal is the only host write). See "Session-data sharing policy (#287)" in `mount-policy.md` |
 | Host `~/.local/state/opencode` | 9p, RO | Trusted L1 can read the source; only allowlisted preferences/history are copied. Registrations, locks, temp files, symlinks, and unknown files are not imported |
 | Host `~/.local/state/devbox-opencode` → guest `~/.local/state/opencode` | 9p, RW | Dedicated L1 state, mode `0700`; preserves model favorites, TUI settings/history, and the L1 service registration across recreation without sharing the host's active registration |
 | `~/.config/gh` | 9p, RW (virtiofs blocked: #317 gid mapping) | Host credentials, protected from package builder |
@@ -984,9 +984,12 @@ John's manual CodeBurn observation was that a completed L1 session appeared in
 CodeBurn on the physical host. That confirms basic completed-session
 visibility only; it was not concurrent-read testing, does not automate
 CodeBurn's session parsing, and does not prove production SQLite integrity.
-Issue #287 remains open/blocked until a successful opt-in virtiofs run or an
-explicit policy decision resolves the mount question. Keep the session-data
-mount unchanged and do not generalize these disposable checks to production
+Issue #287 is decided: the session-data mount stays shared and writable,
+the L1 `devbox opencode` service is the single writer, and the host treats
+the directory as read-only at all times. The rule, its evidence, and its
+limits are recorded in the "Session-data sharing policy (#287)" section
+of [`mount-policy.md`](mount-policy.md). Keep the session-data mount
+unchanged and do not generalize these disposable checks to production
 sessions or other filesystems/mount configurations. The full template now
 provisions Semble and its VM-local model cache. TUI session-switching UX and
 model-backed conversation resume remain to be validated in the later
