@@ -130,7 +130,7 @@
       }
     },
     "rust": {
-      "version": "1.99.1",
+      "version": "1.100.0",
       "datasource": "rust-version",
       "depName": "rust",
       "versioning": "semver",
@@ -181,7 +181,7 @@
       }
     },
     "markdownlint_cli2": {
-      "version": "0.24.0",
+      "version": "0.24.1",
       "datasource": "npm",
       "depName": "markdownlint-cli2",
       "integrity": "version-only",
@@ -591,7 +591,7 @@
       }
     },
     "renovatebot_hooks": {
-      "version": "44.226.3",
+      "version": "44.235.1",
       "datasource": "github-tags",
       "depName": "renovatebot/pre-commit-hooks",
       "integrity": "version-only",
