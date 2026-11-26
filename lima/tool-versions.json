@@ -192,7 +192,7 @@
       }
     },
     "playwright_cli": {
-      "version": "0.1.22",
+      "version": "0.1.24",
       "datasource": "npm",
       "depName": "@playwright/cli",
       "integrity": "version-only",
